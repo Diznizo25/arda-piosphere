@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db import get_pg_connection
 from app.routers import advisory, ground_truth, whatsapp
+from app.services.storage import get_s3_client
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
@@ -55,5 +56,18 @@ def health_db():
             "piosphere_zones": piosphere_zones,
             "pastoralists": pastoralists,
         }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+@app.get("/health/r2")
+def health_r2():
+    """Diagnostic only — confirms R2 credentials/bucket are wired by doing a
+    real head_bucket call against Cloudflare R2."""
+    settings = get_settings()
+    try:
+        client = get_s3_client()
+        client.head_bucket(Bucket=settings.r2_bucket_name)
+        return {"status": "ok", "bucket": settings.r2_bucket_name}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
