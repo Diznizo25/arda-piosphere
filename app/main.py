@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.db import get_pg_connection
 from app.routers import advisory, ground_truth, whatsapp
 from app.services.storage import get_s3_client
+from app.services.gee_auth import init_earth_engine
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
@@ -56,6 +57,19 @@ def health_db():
             "piosphere_zones": piosphere_zones,
             "pastoralists": pastoralists,
         }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+@app.get("/health/gee")
+def health_gee():
+    """Diagnostic only — confirms the Earth Engine service account actually
+    authenticates and can run a trivial server-side computation."""
+    try:
+        init_earth_engine()
+        import ee
+        result = ee.Number(1).add(1).getInfo()
+        return {"status": "ok", "test_computation_1_plus_1": result}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
 
