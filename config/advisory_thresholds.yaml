@@ -1,0 +1,24 @@
+# Thresholds for turning raw zonal-mean index values into a forage condition
+# label. Starting defaults, not validated against ground truth yet — tune from
+# ground_truth_reports feedback once real data comes in. Never hardcode these
+# in advisory_logic.py.
+#
+# Read app/services/advisory_logic.py alongside this file: the core rule is
+# that NDVI is never used alone. SATVI (backed by BSI) is the primary
+# dry-forage signal; VCI reframes "low" as normal-for-season or not.
+
+vegetation:
+  ndvi_green_threshold: 0.35       # at/above this, genuinely green/growing vegetation
+  satvi_dry_forage_threshold: 0.15 # at/above this (with low NDVI), standing dry forage present
+  satvi_bare_threshold: 0.05       # below this, genuinely bare/degraded ground
+  bsi_low_threshold: 0.10          # at/below this, supports "not bare" alongside high SATVI
+  bsi_high_threshold: 0.25         # at/above this, supports "bare" alongside low SATVI
+  ndmi_curing_threshold: 0.0       # above this, grass likely still curing/greening rather than fully cured
+
+seasonal:
+  vci_abnormally_poor_threshold: 35   # below this, conditions are poor even for the season
+  vci_normal_low_threshold: 55        # between poor and this, "low but normal for time of year"
+
+water:
+  gsw_reliable_threshold: 70   # JRC monthly recurrence %, at/above = historically reliable this month
+  gsw_seasonal_threshold: 30   # at/above = seasonal/intermittent; below = unreliable/rare

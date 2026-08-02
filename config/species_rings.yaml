@@ -1,0 +1,17 @@
+# Species-differentiated piosphere ring radii (km).
+# These are starting defaults per the Phase 1 spec — tune later from ground-truth
+# feedback and herder-reported walking ranges. Do NOT hardcode these in application
+# code; always load through app.config.
+
+species_rings:
+  cattle:
+    radius_km: 7        # spec range: 5-10 km
+  shoat:                 # sheep & goats
+    radius_km: 11        # spec range: 8-15 km
+  camel:
+    radius_km: 25        # spec range: 20-30+ km
+
+# The camel radius is treated as the outer/compute ring: GEE compute runs once per
+# water point across this outer buffer, and cattle/shoat results are tagged from it
+# at read time rather than computed separately three times.
+compute_ring_species: camel
