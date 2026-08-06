@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.db import get_pg_connection
-from app.routers import advisory, ground_truth, whatsapp
+from app.routers import advisory, ground_truth, run, whatsapp
 from app.services.storage import get_s3_client
 from app.services.gee_auth import init_earth_engine
 
@@ -31,6 +31,7 @@ app = FastAPI(
 app.include_router(advisory.router)
 app.include_router(whatsapp.router)
 app.include_router(ground_truth.router)
+app.include_router(run.router)
 
 
 @app.get("/health")
