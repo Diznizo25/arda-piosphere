@@ -7,11 +7,19 @@ For each water point in scope (ward or county), scoped to its outer (camel)
 piosphere ring — never a whole ward's extent:
   1. build the Sentinel-2 composite + index stack (NDVI/NDRE/SATVI/BSI/NDMI/
      NDWI/VCI/JRC GSW) via app.services.gee_indices
-  2. export as a Cloud-Optimized GeoTIFF to a GCS staging bucket (GEE can't
-     export directly to R2)
-  3. once each export task finishes, download from GCS and re-upload to R2
-     at the canonical key from app.services.storage.cog_key
+  2. export as a Cloud-Optimized GeoTIFF to a staging destination (GEE can't
+     export directly to R2). Two supported staging destinations:
+       - Google Cloud Storage (GEE_EXPORT_GCS_BUCKET) — requires a billing
+         account
+       - Google Drive (GEE_EXPORT_DRIVE_FOLDER) — free, no billing needed.
+         The Drive folder must be shared with the GEE service account email.
+  3. once each export task finishes, download from the staging destination and
+     re-upload to R2 at the canonical key from app.services.storage.cog_key
   4. mark piosphere_zones.last_computed for that water point's camel row
+
+When using the Drive staging path, each COG is DELETED from Drive immediately
+after it is successfully uploaded to R2, so Drive only ever holds the current
+batch (never the whole county) and does not accumulate.
 
 Usage:
   python scripts/gee_compute_export.py --ward "Oldonyiro"
@@ -66,24 +74,31 @@ def fetch_scope(ward: str | None, county: str | None) -> list[dict]:
             return cur.fetchall()
 
 
-def submit_export_task(water_source_id: str, geom_geojson: str, as_of_date: str,
-                        composite_window_days: int, vci_years_back: int, gcs_bucket: str):
+def _export_task(image, water_source_id: str, region, gcs_bucket: str | None,
+                 drive_folder: str | None):
+    """Submit a GEE batch export to either GCS or Drive, whichever is configured."""
     import ee
-    import json
 
-    region = ee.Geometry(json.loads(geom_geojson))
-    month = datetime.fromisoformat(as_of_date).month
-    image = gee_indices.build_stacked_image_for_month(
-        region, as_of_date, month,
-        composite_window_days=composite_window_days,
-        vci_years_back=vci_years_back,
-    )
-
-    task = ee.batch.Export.image.toCloudStorage(
+    if gcs_bucket:
+        return ee.batch.Export.image.toCloudStorage(
+            image=image,
+            description=f"piosphere_{water_source_id}"[:100],
+            bucket=gcs_bucket,
+            fileNamePrefix=f"cogs/{water_source_id}/indices",
+            region=region,
+            scale=10,
+            crs="EPSG:4326",
+            maxPixels=1e10,
+            fileFormat="GeoTIFF",
+            formatOptions={"cloudOptimized": True},
+        )
+    # Drive path (free, no billing). fileNamePrefix is the file name inside the
+    # shared Drive folder.
+    return ee.batch.Export.image.toDrive(
         image=image,
         description=f"piosphere_{water_source_id}"[:100],
-        bucket=gcs_bucket,
-        fileNamePrefix=f"cogs/{water_source_id}/indices",
+        folder=drive_folder,
+        fileNamePrefix=f"cogs_{water_source_id}_indices",
         region=region,
         scale=10,
         crs="EPSG:4326",
@@ -91,17 +106,121 @@ def submit_export_task(water_source_id: str, geom_geojson: str, as_of_date: str,
         fileFormat="GeoTIFF",
         formatOptions={"cloudOptimized": True},
     )
+
+
+def submit_export_task(water_source_id: str, geom_geojson: str, as_of_date: str,
+                       composite_window_days: int, vci_years_back: int,
+                       gcs_bucket: str | None, drive_folder: str | None):
+    import json
+
+    region = __import__("ee").Geometry(json.loads(geom_geojson))
+    month = datetime.fromisoformat(as_of_date).month
+    image = gee_indices.build_stacked_image_for_month(
+        region, as_of_date, month,
+        composite_window_days=composite_window_days,
+        vci_years_back=vci_years_back,
+    )
+
+    task = _export_task(image, water_source_id, region, gcs_bucket, drive_folder)
     task.start()
     return task
 
 
-def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str,
-                       poll_interval_s: int = 20, timeout_s: int = 3600):
-    from google.cloud import storage as gcs_storage
+def _drive_service():
+    """Build a Google Drive API client authenticated with the same service
+    account credentials used for Earth Engine."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
 
-    gcs_client = gcs_storage.Client()
-    bucket = gcs_client.bucket(gcs_bucket)
+    settings = get_settings()
+    creds = service_account.Credentials.from_service_account_file(
+        settings.gee_service_account_key_path,
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+    return build("drive", "v3", credentials=creds)
 
+
+def _find_drive_file(service, folder_name: str, file_name: str) -> str | None:
+    """Locate the exported file inside the shared Drive folder by name.
+    Returns the Drive file id, or None if not found yet."""
+    # The folder may be shared with the service account; search by name.
+    q = (
+        f"name = '{file_name}' and "
+        f"mimeType = 'image/tiff' and trashed = false"
+    )
+    results = service.files().list(q=q, fields="files(id, name)").execute()
+    files = results.get("files", [])
+    if files:
+        return files[0]["id"]
+    return None
+
+
+def _download_and_transfer_drive(service, folder_name: str, file_name: str,
+                                 water_source_id: str) -> bool:
+    """Download a finished COG from Drive, upload to R2, then DELETE the Drive
+    copy so Drive never accumulates. Returns True on success."""
+    from googleapiclient.http import MediaIoBaseDownload
+
+    file_id = _find_drive_file(service, folder_name, file_name)
+    if not file_id:
+        log.error(f"Drive file {file_name} not found for {water_source_id}")
+        return False
+
+    with tempfile.NamedTemporaryFile(suffix=".tif") as tmp:
+        request = service.files().get_media(fileId=file_id)
+        downloader = MediaIoBaseDownload(tmp, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        tmp.flush()
+        upload_file(Path(tmp.name), water_source_id)
+
+    # Auto-delete the Drive copy now that it's safely in R2.
+    try:
+        service.files().delete(fileId=file_id).execute()
+        log.info(f"Deleted Drive staging copy for {water_source_id}")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"Could not delete Drive copy for {water_source_id}: {e}")
+
+    return True
+
+
+def _transfer_one(water_source_id: str, gcs_bucket: str | None,
+                  drive_folder: str | None, drive_service=None) -> None:
+    """Download the finished COG from the configured staging destination and
+    re-upload to R2 at the canonical per-water-point key, then mark
+    last_computed."""
+    if gcs_bucket:
+        from google.cloud import storage as gcs_storage
+
+        gcs_client = gcs_storage.Client()
+        bucket = gcs_client.bucket(gcs_bucket)
+        blob_name = f"cogs/{water_source_id}/indices.tif"
+        blob = bucket.blob(blob_name)
+        if not blob.exists():
+            log.error(f"Expected GCS blob {blob_name} not found after task completion")
+            return
+        with tempfile.NamedTemporaryFile(suffix=".tif") as tmp:
+            blob.download_to_filename(tmp.name)
+            upload_file(Path(tmp.name), water_source_id)
+    else:
+        file_name = f"cogs_{water_source_id}_indices.tif"
+        ok = _download_and_transfer_drive(
+            drive_service, drive_folder, file_name, water_source_id
+        )
+        if not ok:
+            return
+
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(MARK_COMPUTED_SQL, {"water_source_id": water_source_id})
+        conn.commit()
+    log.info(f"Transferred + marked computed: {water_source_id}")
+
+
+def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str | None,
+                      drive_folder: str | None, drive_service=None,
+                      poll_interval_s: int = 20, timeout_s: int = 3600):
     pending = dict(tasks)
     done_ok: list[str] = []
     done_failed: list[str] = []
@@ -112,7 +231,7 @@ def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str,
             status = task.status()
             state = status.get("state")
             if state in ("COMPLETED",):
-                _transfer_one(water_source_id, bucket)
+                _transfer_one(water_source_id, gcs_bucket, drive_folder, drive_service)
                 done_ok.append(water_source_id)
                 pending.pop(water_source_id)
             elif state in ("FAILED", "CANCELLED"):
@@ -131,34 +250,27 @@ def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str,
     return done_ok, done_failed
 
 
-def _transfer_one(water_source_id: str, gcs_bucket) -> None:
-    """Download the finished COG from GCS and re-upload to R2 at the
-    canonical per-water-point key, then mark last_computed."""
-    blob_name = f"cogs/{water_source_id}/indices.tif"
-    blob = gcs_bucket.blob(blob_name)
-    if not blob.exists():
-        log.error(f"Expected GCS blob {blob_name} not found after task completion")
-        return
-
-    with tempfile.NamedTemporaryFile(suffix=".tif") as tmp:
-        blob.download_to_filename(tmp.name)
-        upload_file(Path(tmp.name), water_source_id)
-
-    with get_pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(MARK_COMPUTED_SQL, {"water_source_id": water_source_id})
-        conn.commit()
-    log.info(f"Transferred + marked computed: {water_source_id}")
-
-
 def run(ward: str | None, county: str | None, as_of_date: str,
         composite_window_days: int, vci_years_back: int, batch_size: int):
     settings = get_settings()
-    if not settings.gee_export_gcs_bucket:
-        raise RuntimeError("GEE_EXPORT_GCS_BUCKET is not set in .env — needed as a staging "
-                            "area since GEE can't export directly to R2.")
+    gcs_bucket = settings.gee_export_gcs_bucket
+    drive_folder = settings.gee_export_drive_folder
+
+    if not gcs_bucket and not drive_folder:
+        raise RuntimeError(
+            "Neither GEE_EXPORT_GCS_BUCKET nor GEE_EXPORT_DRIVE_FOLDER is set in .env. "
+            "Set one of them as the GEE staging destination (Drive is free and needs "
+            "no billing account)."
+        )
+    if gcs_bucket and drive_folder:
+        log.warning("Both GCS and Drive staging are set — using GCS (GEE_EXPORT_GCS_BUCKET).")
 
     init_earth_engine()
+
+    # Build the Drive API client once if we're using the Drive staging path.
+    drive_service = None
+    if not gcs_bucket:
+        drive_service = _drive_service()
 
     rows = fetch_scope(ward, county)
     log.info(f"Scope ward={ward!r} county={county!r}: {len(rows)} water points to compute")
@@ -174,11 +286,11 @@ def run(ward: str | None, county: str | None, as_of_date: str,
         for row in batch:
             task = submit_export_task(
                 str(row["water_source_id"]), row["geom_geojson"], as_of_date,
-                composite_window_days, vci_years_back, settings.gee_export_gcs_bucket,
+                composite_window_days, vci_years_back, gcs_bucket, drive_folder,
             )
             tasks[str(row["water_source_id"])] = task
 
-        ok, failed = poll_and_transfer(tasks, settings.gee_export_gcs_bucket)
+        ok, failed = poll_and_transfer(tasks, gcs_bucket, drive_folder, drive_service)
         total_ok += len(ok)
         total_failed += len(failed)
 

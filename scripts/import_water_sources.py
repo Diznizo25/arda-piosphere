@@ -45,7 +45,10 @@ from app.db import get_supabase_client  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("import_water_sources")
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# overpass-api.de is frequently overloaded (504/406). Use the private.coffee
+# mirror as the primary endpoint — it is more reliable for batch imports.
+OVERPASS_URL = "https://overpass.private.coffee/api/interpreter"
+OVERPASS_FALLBACK_URL = "https://overpass-api.de/api/interpreter"
 WPDX_API_URL = "https://data.waterpointdata.org/resource/eqje-vguj.json"  # WPDx-Core Socrata endpoint
 
 SourceType = Literal["osm", "wpdx"]
@@ -97,7 +100,13 @@ def fetch_osm_water_points(geom: Polygon | MultiPolygon) -> list[WaterPointRecor
     out center;
     """
     log.info("Querying Overpass API for OSM water features...")
-    resp = httpx.post(OVERPASS_URL, data={"data": query}, timeout=180)
+    # Overpass rejects requests without a proper User-Agent (406 Not Acceptable).
+    resp = httpx.post(
+        OVERPASS_URL,
+        data={"data": query},
+        timeout=180,
+        headers={"User-Agent": "arda-piosphere/1.0 (water-point import; contact: arda@example.com)"},
+    )
     resp.raise_for_status()
     elements = resp.json().get("elements", [])
 

@@ -43,12 +43,18 @@ class Settings(BaseSettings):
     gee_service_account_email: str = ""
     gee_service_account_key_path: str = "./secrets/gee-service-account.json"
     gee_project_id: str = ""
+    # GEE can export to GCS (requires a billing account) OR to Google Drive
+    # (free). We support both: set GEE_EXPORT_GCS_BUCKET for the GCS path, or
+    # GEE_EXPORT_DRIVE_FOLDER for the free Drive path. The Drive folder must be
+    # shared with the GEE service account email.
     gee_export_gcs_bucket: str = ""
+    gee_export_drive_folder: str = ""
 
     # WhatsApp
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
     whatsapp_business_account_id: str = ""
+
     whatsapp_verify_token: str = "change-me-webhook-verify-token"
     whatsapp_app_secret: str = ""
 

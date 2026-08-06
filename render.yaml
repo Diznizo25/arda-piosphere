@@ -35,6 +35,8 @@ services:
         sync: false
       - key: GEE_EXPORT_GCS_BUCKET
         sync: false
+      - key: GEE_EXPORT_DRIVE_FOLDER
+        sync: false
       - key: WHATSAPP_ACCESS_TOKEN
         sync: false
       - key: WHATSAPP_PHONE_NUMBER_ID
@@ -51,3 +53,64 @@ services:
     # file (./secrets/gee-service-account.json) that isn't in git. On Render,
     # add the key's JSON contents as a "Secret File" in the dashboard instead
     # (Environment -> Secret Files), mounted at that same path.
+
+# Scheduled jobs for the precompute pipeline. These share the same env vars as
+# the web service (DATABASE_URL for PostGIS, GEE creds, R2 storage). They are
+# triggered manually via the Render API (or on a schedule) — the web service
+# never calls GEE live.
+jobs:
+  - type: cron
+    name: arda-piosphere-generate-zones
+    runtime: python
+    plan: free
+    schedule: "0 0 1 1 *"   # placeholder; triggered manually via API
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/generate_piosphere_zones.py --ward Oldonyiro"
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+  - type: cron
+    name: arda-piosphere-gee-export
+    runtime: python
+    plan: free
+    schedule: "0 0 1 1 *"   # placeholder; triggered manually via API
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python scripts/gee_compute_export.py --ward Oldonyiro"
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: COG_PUBLIC_BASE_URL
+        sync: false
+      - key: GEE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GEE_PROJECT_ID
+        sync: false
+      - key: GEE_EXPORT_GCS_BUCKET
+        sync: false
+      - key: GEE_EXPORT_DRIVE_FOLDER
+        sync: false
+
+
