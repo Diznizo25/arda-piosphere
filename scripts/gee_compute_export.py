@@ -220,7 +220,8 @@ def _transfer_one(water_source_id: str, gcs_bucket: str | None,
 
 def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str | None,
                       drive_folder: str | None, drive_service=None,
-                      poll_interval_s: int = 20, timeout_s: int = 3600):
+                      poll_interval_s: int = 20, timeout_s: int = 10800):
+
     pending = dict(tasks)
     done_ok: list[str] = []
     done_failed: list[str] = []
@@ -251,7 +252,9 @@ def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str | None,
 
 
 def run(ward: str | None, county: str | None, as_of_date: str,
-        composite_window_days: int, vci_years_back: int, batch_size: int):
+        composite_window_days: int, vci_years_back: int, batch_size: int,
+        timeout_s: int = 10800):
+
     settings = get_settings()
     gcs_bucket = settings.gee_export_gcs_bucket
     drive_folder = settings.gee_export_drive_folder
@@ -290,9 +293,12 @@ def run(ward: str | None, county: str | None, as_of_date: str,
             )
             tasks[str(row["water_source_id"])] = task
 
-        ok, failed = poll_and_transfer(tasks, gcs_bucket, drive_folder, drive_service)
+        ok, failed = poll_and_transfer(
+            tasks, gcs_bucket, drive_folder, drive_service, timeout_s=timeout_s
+        )
         total_ok += len(ok)
         total_failed += len(failed)
+
 
     log.info(f"Done. {total_ok} COGs computed + transferred, {total_failed} failed.")
 
@@ -308,9 +314,14 @@ def main():
     parser.add_argument("--batch-size", type=int, default=25,
                          help="GEE export tasks submitted+polled together, to avoid "
                               "hammering the batch quota on a county-wide run")
+    parser.add_argument("--timeout-s", type=int, default=10800,
+                         help="How long to poll each batch before giving up and "
+                              "moving on (seconds). Default 10800 = 3 hours, since "
+                              "heavy 10m COG exports can take >1 hour each.")
     args = parser.parse_args()
     run(args.ward, args.county, args.as_of_date, args.composite_window_days,
-        args.vci_years_back, args.batch_size)
+        args.vci_years_back, args.batch_size, args.timeout_s)
+
 
 
 if __name__ == "__main__":

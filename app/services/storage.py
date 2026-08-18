@@ -53,9 +53,14 @@ def get_s3_client():
     )
 
 
-def upload_file(local_path: Path, water_source_id: str) -> str:
+def upload_file(local_path: Path, water_source_id: str, transfer_config=None) -> str:
     """Upload a local COG file to the water point's canonical key. Returns the
-    object key. Sets Content-Type so downstream HTTP/CDN reads behave."""
+    object key. Sets Content-Type so downstream HTTP/CDN reads behave.
+
+    `transfer_config` (boto3.s3.transfer.TransferConfig) lets callers tune the
+    multipart upload for flaky links (larger parts / more attempts / lower
+    concurrency). Defaults to the boto3 defaults when omitted.
+    """
     settings = get_settings()
     client = get_s3_client()
     key = cog_key(water_source_id)
@@ -64,6 +69,7 @@ def upload_file(local_path: Path, water_source_id: str) -> str:
         settings.r2_bucket_name,
         key,
         ExtraArgs={"ContentType": "image/tiff"},
+        Config=transfer_config,
     )
     return key
 

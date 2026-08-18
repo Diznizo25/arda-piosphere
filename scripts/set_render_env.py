@@ -22,7 +22,7 @@ def main():
         print("Usage: python scripts/set_render_env.py KEY VALUE")
         sys.exit(1)
     env_key, env_value = sys.argv[1], sys.argv[2]
-    payload = {"envVars": [{"key": env_key, "value": env_value}]}
+    payload = [{"key": env_key, "value": env_value}]
     url = f"https://api.render.com/v1/services/{SERVICE_ID}/env-vars"
     headers = {
         "Authorization": f"Bearer {key}",

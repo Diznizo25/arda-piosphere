@@ -6,3 +6,11 @@ __pycache__/
 venv/
 *.egg-info/
 .DS_Store
+
+# Local data / transfer artifacts (never commit)
+data/
+*.log
+tile_test.tif
+render_check_output.txt
+render_env_set_output.txt
+CLAUDE_CODE_PROMPT (1).md
