@@ -39,6 +39,7 @@ WATER_TEXT_SW = {
     WaterReliability.RELIABLE: "maji ya kutegemewa kipindi hiki",
     WaterReliability.SEASONAL: "maji ya msimu, huenda yasitosheleze mwaka mzima",
     WaterReliability.UNRELIABLE: "maji hayategemeki kipindi hiki — thibitisha kabla ya kwenda",
+    WaterReliability.UNKNOWN: "uhakika wa maji haujulikani kwa sasa — thibitisha kabla ya kwenda",
 }
 
 # DRAFT — needs native Borana speaker review before production use.
@@ -46,6 +47,7 @@ WATER_TEXT_BO = {
     WaterReliability.RELIABLE: "bishaan yeroo kana amanamaa dha",
     WaterReliability.SEASONAL: "bishaan waqtii, guutuu waggaa hin ga'u ta'a",
     WaterReliability.UNRELIABLE: "bishaan yeroo kana amanamaa miti — dursanii mirkaneessaa",
+    WaterReliability.UNKNOWN: "amanummaan bishaanii yeroo ammaa hin beekamne — dursanii mirkaneessaa",
 }
 
 

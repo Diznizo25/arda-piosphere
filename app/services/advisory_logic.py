@@ -29,6 +29,7 @@ class WaterReliability(str, Enum):
     RELIABLE = "reliable"
     SEASONAL = "seasonal"
     UNRELIABLE = "unreliable"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -78,8 +79,16 @@ def classify_forage_condition(band_means: dict[str, float]) -> ForageAssessment:
     )
 
 
-def classify_water_reliability(gsw_monthly_recurrence: float) -> WaterReliability:
+def classify_water_reliability(gsw_monthly_recurrence: float | None) -> WaterReliability:
+    """JRC surface-water monthly recurrence -> reliability, with an explicit
+    UNKNOWN state when the COG has no valid GSW data for the zone (NaN/None).
+    Never report "unreliable" just because the data is missing — that would tell
+    a herder a water point is bad when we simply don't know."""
+    import math
+
     t = get_advisory_thresholds()
+    if gsw_monthly_recurrence is None or math.isnan(gsw_monthly_recurrence):
+        return WaterReliability.UNKNOWN
     if gsw_monthly_recurrence >= t.water["gsw_reliable_threshold"]:
         return WaterReliability.RELIABLE
     if gsw_monthly_recurrence >= t.water["gsw_seasonal_threshold"]:
