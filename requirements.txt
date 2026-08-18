@@ -24,4 +24,3 @@ overpy==0.7
 Pillow==10.4.0
 staticmap==0.5.7
 python-multipart==0.0.12
-tifffile==2026.8.16
