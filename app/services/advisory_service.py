@@ -39,7 +39,7 @@ def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
 
     try:
         stats = raster_read.read_zone_stats(nearest.water_source_id, nearest.species_zone_geojson)
-    except Exception:
+    except Exception as e:  # noqa: BLE001
         log.exception(f"Failed to read COG for water_source_id={nearest.water_source_id}")
         return AdvisoryResult(
             found=True,
@@ -48,9 +48,15 @@ def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
             source_type=nearest.source_type,
             water_confidence=nearest.confidence,
             last_confirmed=nearest.last_confirmed,
-            message="Tunajua eneo la maji lakini data ya malisho haipatikani kwa sasa."
-            if req.language == "swahili"
-            else "Bakka bishaanii beekna, garuu odeeffannoon margaa yeroo ammaa hin argamne.",
+            message=(
+                f"Tunajua eneo la maji lakini data ya malisho haipatikani kwa sasa. "
+                f"(COG_READ_ERROR: {type(e).__name__}: {e})"
+                if req.language == "swahili"
+                else (
+                    f"Bakka bishaanii beekna, garuu odeeffannoon margaa yeroo ammaa hin argamne. "
+                    f"(COG_READ_ERROR: {type(e).__name__}: {e})"
+                )
+            ),
         )
 
     forage = classify_forage_condition(stats.means)
