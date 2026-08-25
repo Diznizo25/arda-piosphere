@@ -60,7 +60,7 @@ def _read_band_means(out: np.ndarray, transform, geom) -> ZoneStats:
     for i in range(out.shape[0]):
         band_name = BAND_NAMES[i] if i < len(BAND_NAMES) else f"band_{i + 1}"
         data = out[i][mask]
-        data = np.asarray(data).compressed() if hasattr(data, "compressed") else np.asarray(data).flatten()
+        data = data.compressed() if hasattr(data, "compressed") else np.asarray(data).flatten()
         data = data[np.isfinite(data)]
         means[band_name] = float(np.mean(data)) if data.size else float("nan")
 
