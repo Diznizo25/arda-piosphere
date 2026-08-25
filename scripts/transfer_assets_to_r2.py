@@ -24,7 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import get_settings  # noqa: E402
 from app.db import get_pg_connection  # noqa: E402
 from app.services.gee_auth import init_earth_engine  # noqa: E402
-from app.services.storage import cog_key, get_s3_client, upload_file  # noqa: E402
+from app.services.storage import cog_key, cog_overview_key, get_s3_client, upload_file, upload_file_to_key  # noqa: E402
+
+# The advisory read path serves zone means from a tiny 8x overview COG
+# (cogs/<id>/indices_ov8.tif); the full-res COG is the archival source.
+# Build both during the transfer so new water sources are immediately readable
+# on small instances.
+from scripts.build_overview_cogs import build_overview  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -348,6 +354,19 @@ def download_asset_to_r2(asset_id: str) -> bool:
             log.info(f"  merged {len(tile_paths)} tiles -> {merged_path.stat().st_size / 1e6:.1f} MB")
 
             _upload_with_heartbeat(merged_path, water_source_id)
+
+            # Build + upload the 8x overview so the advisory read path can serve
+            # zone means quickly on small instances. Failure here must not fail
+            # the whole asset (the full-res COG is already safe in R2).
+            try:
+                ov_path = tile_dir / "overview_8x.tif"
+                build_overview(merged_path, ov_path)
+                log.info(f"  overview {ov_path.stat().st_size / 1e6:.1f} MB")
+                upload_file_to_key(ov_path, cog_overview_key(water_source_id))
+                log.info(f"  uploaded {cog_overview_key(water_source_id)}")
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"  overview build/upload failed (non-fatal): {e}")
+
             return True
         except Exception as e:  # noqa: BLE001
             if asset_attempt == ASSET_ATTEMPTS:

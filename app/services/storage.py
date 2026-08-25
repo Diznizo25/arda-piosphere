@@ -24,12 +24,31 @@ def cog_key(water_source_id: str) -> str:
     return f"cogs/{water_source_id}/indices.tif"
 
 
+def cog_overview_key(water_source_id: str) -> str:
+    """Object key for the 8x-decimated overview COG.
+
+    Zone means are statistically unchanged by 8x block-averaging, and this tiny
+    (~12MB vs ~500MB) object lets the advisory read path serve answers quickly
+    on small instances (Render's free tier) instead of decoding the whole COG.
+    """
+    return f"cogs/{water_source_id}/indices_ov8.tif"
+
+
 def cog_uri(water_source_id: str) -> str:
     """rasterio-readable URI. Prefers a public/CDN base URL if configured
     (rasterio can stream-read over HTTP via /vsicurl/); falls back to the
     S3-compatible endpoint via GDAL's /vsis3/ virtual filesystem."""
     settings = get_settings()
     key = cog_key(water_source_id)
+    if settings.cog_public_base_url:
+        return f"/vsicurl/{settings.cog_public_base_url.rstrip('/')}/{key}"
+    return f"/vsis3/{settings.r2_bucket_name}/{key}"
+
+
+def cog_overview_uri(water_source_id: str) -> str:
+    """rasterio-readable URI for the 8x overview COG (same scheme as cog_uri)."""
+    settings = get_settings()
+    key = cog_overview_key(water_source_id)
     if settings.cog_public_base_url:
         return f"/vsicurl/{settings.cog_public_base_url.rstrip('/')}/{key}"
     return f"/vsis3/{settings.r2_bucket_name}/{key}"
@@ -64,6 +83,20 @@ def upload_file(local_path: Path, water_source_id: str, transfer_config=None) ->
     settings = get_settings()
     client = get_s3_client()
     key = cog_key(water_source_id)
+    client.upload_file(
+        str(local_path),
+        settings.r2_bucket_name,
+        key,
+        ExtraArgs={"ContentType": "image/tiff"},
+        Config=transfer_config,
+    )
+    return key
+
+
+def upload_file_to_key(local_path: Path, key: str, transfer_config=None) -> str:
+    """Upload a local file to an arbitrary R2 key (e.g. the 8x overview COG)."""
+    settings = get_settings()
+    client = get_s3_client()
     client.upload_file(
         str(local_path),
         settings.r2_bucket_name,
