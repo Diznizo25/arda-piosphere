@@ -65,13 +65,28 @@ def health_db():
 @app.get("/health/gee")
 def health_gee():
     """Diagnostic only — confirms the Earth Engine service account actually
-    authenticates and can run a trivial server-side computation."""
+    authenticates and can run a trivial server-side computation.
+
+    GEE is only needed for BATCH compute (scripts/gee_compute_export.py), which
+    runs from the export machine — never from this web instance at request time.
+    So when the service-account key file is not present here, report that
+    honestly as 'unavailable' rather than 500-ing: the advisory path does not
+    depend on server-side GEE.
+    """
     try:
         init_earth_engine()
         import ee
+
         result = ee.Number(1).add(1).getInfo()
-        return {"status": "ok", "test_computation_1_plus_1": result}
-    except Exception as e:
+        return {"status": "ok", "gee_available": True, "test_computation_1_plus_1": result}
+    except FileNotFoundError:
+        return {
+            "status": "degraded",
+            "gee_available": False,
+            "detail": "GEE service-account key not present on this instance "
+            "(not required for the advisory path; batch compute runs from the export machine).",
+        }
+    except Exception as e:  # noqa: BLE001
         return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
 
 
