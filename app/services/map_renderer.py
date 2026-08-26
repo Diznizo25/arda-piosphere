@@ -56,7 +56,7 @@ def _fetch_tile(z: int, x: int, y: int) -> Image.Image | None:
     url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             data = resp.read()
         return Image.open(io.BytesIO(data)).convert("RGB")
     except Exception:  # noqa: BLE001  (tile server unreachable — caller falls back)
@@ -92,16 +92,45 @@ def render_rings_png(water_source_id: str) -> bytes:
     west, north = center_x - half, center_y + half
 
     img = _build_base_map(zoom, west, north, mpp)
-    draw = ImageDraw.Draw(img)
+    # Draw the rings/legend/marker on a transparent overlay so translucent fills
+    # composite properly over the base map (ImageDraw ignores alpha on RGB images).
+    overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
 
     # Draw rings outer -> inner so the smallest stays on top.
     for zone in sorted(zones, key=lambda z: -z["radius_km"]):
         geom = shape(json.loads(zone["geojson"]))
         geom = geom.simplify(tolerance=0.0004, preserve_topology=True)  # ~45m, plenty for a map
+        style = RING_STYLE[zone["species"]]
+        if geom.geom_type == "Polygon":
+            rings = [geom.exterior.coords]
+        elif geom.geom_type == "MultiPolygon":
+            rings = [p.exterior.coords for p in geom.geoms]
+        else:
+            continue
+        for ring in rings:
+            pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
+            draw.polygon(pts, fill=style[0], outline=style[1], width=3)
+
+    _draw_legend(draw, zones)
+    _draw_marker(draw, west, north, mpp, lon, lat)
+
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _build_base_map(zoom: int, west: float, north: float, mpp: float) -> Image.Image:
-    """Assemble the OSM tile mosaic for the viewport; blank fallback on failure."""
+    """Assemble the OSM tile mosaic for the viewport; blank fallback on failure.
+
+    Tiles are fetched concurrently with a short timeout so the map always
+    renders in a few seconds even when the tile server is slow/unreachable
+    (a blank beige background still gets drawn — WhatsApp users always get a map).
+    """
+    import concurrent.futures
+
     img = Image.new("RGB", (IMG_SIZE, IMG_SIZE), (228, 224, 216))
     # World in mercator at this zoom: 40075016.686 m over 256*2^z px.
     world_px = TILE * (2 ** zoom)
@@ -115,15 +144,22 @@ def _build_base_map(zoom: int, west: float, north: float, mpp: float) -> Image.I
     tile_x0 = int(math.floor(left_px / TILE))
     tile_y0 = int(math.floor(top_px / TILE))
     n = 2 ** zoom
+
+    coords = []
     for ty in range(tile_y0, tile_y0 + tiles_per_side + 1):
         for tx in range(tile_x0, tile_x0 + tiles_per_side + 1):
-            tile_img = _fetch_tile(zoom, tx % n, ty % n)
-            if tile_img is None:
-                continue
-            px = int(tx * TILE - left_px)
-            py = int(ty * TILE - top_px)
-            if -TILE < px < IMG_SIZE and -TILE < py < IMG_SIZE:
-                img.paste(tile_img, (px, py))
+            coords.append((zoom, tx % n, ty % n))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda c: _fetch_tile(*c), coords))
+
+    for (z, tx, ty), tile_img in zip(coords, results):
+        if tile_img is None:
+            continue
+        px = int(tx * TILE - left_px)
+        py = int(ty * TILE - top_px)
+        if -TILE < px < IMG_SIZE and -TILE < py < IMG_SIZE:
+            img.paste(tile_img, (px, py))
     return img
 
 
@@ -148,20 +184,3 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict]) -> None:
         label = RING_STYLE[species][2]
         draw.text((x0 + 32, cy - 8), label, fill=(40, 40, 40), font=font)
 
-        style = RING_STYLE[zone["species"]]
-        if geom.geom_type == "Polygon":
-            rings = [geom.exterior.coords]
-        elif geom.geom_type == "MultiPolygon":
-            rings = [p.exterior.coords for p in geom.geoms]
-        else:
-            continue
-        for ring in rings:
-            pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
-            draw.polygon(pts, fill=style[0], outline=style[1], width=3)
-
-    _draw_legend(draw, zones)
-    _draw_marker(draw, west, north, mpp, lon, lat)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
