@@ -26,7 +26,7 @@ values (
     %(confidence)s,
     now()
 )
-returning id, st_x(geom) as lon, st_y(geom) as lat, source_type, source_ref, confidence, last_confirmed
+returning id, st_x(geom) as lon, st_y(geom) as lat, source_type, source_ref, ward, county, confidence, last_confirmed
 """
 
 INSERT_ZONE_SQL = """
