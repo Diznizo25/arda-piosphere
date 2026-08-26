@@ -67,3 +67,18 @@ def update_last_location(phone_number: str, lon: float, lat: float) -> None:
         with conn.cursor() as cur:
             cur.execute(UPDATE_LOCATION_SQL, {"phone": phone_number, "lon": lon, "lat": lat})
         conn.commit()
+
+
+def get_last_location(phone_number: str) -> tuple[float, float] | None:
+    """Return (lon, lat) of the herder's last shared location, or None."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select st_x(last_known_location) as lon, st_y(last_known_location) as lat
+                   from pastoralists where phone_number = %(phone)s""",
+                {"phone": phone_number},
+            )
+            row = cur.fetchone()
+    if not row or row["lon"] is None:
+        return None
+    return float(row["lon"]), float(row["lat"])

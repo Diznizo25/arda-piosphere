@@ -36,3 +36,26 @@ class GroundTruthReportRequest(BaseModel):
     water_source_id: str | None = None
     report_type: Literal["water_dry", "water_available", "pasture_good", "pasture_poor", "other"]
     report_text: str | None = None
+
+
+class CreateWaterSourceRequest(BaseModel):
+    """Register a new water point from coordinates. Species rings are created
+    automatically from config/species_rings.yaml."""
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    source_type: Literal["satellite_gsw", "osm", "wpdx", "ilri", "ground_truth"] = "ground_truth"
+    source_ref: str | None = None
+    ward: str | None = None
+    county: str = "Isiolo"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class WaterSourceResponse(BaseModel):
+    water_source_id: str
+    lat: float
+    lon: float
+    source_type: str
+    ward: str | None = None
+    county: str
+    status: str
+    note: str

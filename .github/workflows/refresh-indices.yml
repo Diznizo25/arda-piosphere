@@ -1,0 +1,59 @@
+name: refresh-indices
+
+# Two-week satellite refresh: recompute the index stack in Earth Engine and push
+# updated COGs + 8x overviews to R2, so advisories always reflect ~2-week-old
+# (or fresher) Sentinel-2 data.
+#
+# Setup (one time, in the repo Settings -> Secrets and variables -> Actions):
+#   DATABASE_URL            Supabase Postgres connection string
+#   SUPABASE_URL            project URL (https://<ref>.supabase.co)
+#   SUPABASE_SERVICE_ROLE_KEY
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_ENDPOINT_URL
+#   GEE_PROJECT_ID, GEE_SERVICE_ACCOUNT_EMAIL
+#   GEE_SERVICE_ACCOUNT_KEY  the service-account private-key JSON (as a single-line secret)
+#   GEE_EXPORT_DRIVE_FOLDER  Drive folder shared with the GEE service account (or a GCS bucket)
+
+on:
+  schedule:
+    # Every 14 days at 03:00 UTC.
+    - cron: "0 3 */14 * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write GEE service-account key
+        run: |
+          mkdir -p secrets
+          echo "$GEE_KEY" > secrets/gee-service-account.json
+        env:
+          GEE_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
+
+      - name: Refresh satellite indices (Oldonyiro)
+        run: python scripts/refresh_indices.py --ward Oldonyiro
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          GEE_PROJECT_ID: ${{ secrets.GEE_PROJECT_ID }}
+          GEE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GEE_SERVICE_ACCOUNT_EMAIL }}
+          GEE_SERVICE_ACCOUNT_KEY_PATH: ./secrets/gee-service-account.json
+          GEE_EXPORT_DRIVE_FOLDER: ${{ secrets.GEE_EXPORT_DRIVE_FOLDER }}
+          GEE_EXPORT_GCS_BUCKET: ${{ secrets.GEE_EXPORT_GCS_BUCKET }}

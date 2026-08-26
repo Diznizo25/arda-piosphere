@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     r2_endpoint_url: str = ""
     cog_public_base_url: str = ""
 
+    # Public base URL of this app, used to build absolute links (e.g. the
+    # WhatsApp map image URL). On Render it is the .onrender.com domain.
+    app_public_base_url: str = ""
+
     # Google Earth Engine
     gee_service_account_email: str = ""
     gee_service_account_key_path: str = "./secrets/gee-service-account.json"

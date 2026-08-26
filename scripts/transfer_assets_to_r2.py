@@ -304,13 +304,15 @@ def _merge_tiles(tile_paths: list[Path], bounds: tuple[float, float, float, floa
 
 
 
-def download_asset_to_r2(asset_id: str) -> bool:
+def download_asset_to_r2(asset_id: str, fresh: bool = False) -> bool:
     """Download a GEE asset as GeoTIFF (tiled) and upload to R2.
 
     Tiles are saved to a persistent directory (data/tiles/<asset_id>/) so a
     re-run can skip tiles already downloaded. This makes the transfer
     resumable across many runs on a flaky network. Once all tiles are present
-    they are merged and uploaded to R2.
+    they are merged and uploaded to R2. `fresh=True` clears the tile cache
+    first (used by the 2-week refresh, where the underlying GEE image changed
+    and cached tiles would be stale).
     """
     import time
 
@@ -326,6 +328,10 @@ def download_asset_to_r2(asset_id: str) -> bool:
     # Persistent tile cache so re-runs skip already-downloaded tiles.
     tile_dir = Path("data") / "tiles" / water_source_id
     tile_dir.mkdir(parents=True, exist_ok=True)
+    if fresh:
+        log.info(f"  --fresh: clearing cached tiles for {water_source_id}")
+        for cached in tile_dir.glob("tile_*.tif"):
+            cached.unlink()
 
     for asset_attempt in range(1, ASSET_ATTEMPTS + 1):
         try:
@@ -382,19 +388,26 @@ def download_asset_to_r2(asset_id: str) -> bool:
 
 
 
-def run(force: bool = False):
+def run(force: bool = False, asset_id: str | None = None, fresh: bool = False):
     init_earth_engine()
     assets = list_piosphere_assets()
+    if asset_id:
+        # Accept either the full GEE asset name or the bare water_source_id.
+        match = [a for a in assets if a == asset_id or a.endswith(f"/piosphere/{asset_id}")]
+        if not match:
+            log.warning(f"Asset {asset_id} not found in piosphere folder; nothing to do.")
+            return
+        assets = match
     log.info(f"Found {len(assets)} image assets in piosphere folder")
 
     ok, skipped, failed = 0, 0, 0
     for asset_id in assets:
         water_source_id = asset_id.rsplit("/", 1)[-1]
-        if not force and asset_exists_in_r2(water_source_id):
+        if not force and not fresh and asset_exists_in_r2(water_source_id):
             log.info(f"Skipping {water_source_id} (already in R2)")
             skipped += 1
             continue
-        if download_asset_to_r2(asset_id):
+        if download_asset_to_r2(asset_id, fresh=fresh):
             ok += 1
             try:
                 with get_pg_connection() as conn:
@@ -424,8 +437,23 @@ def main():
         help="Re-transfer every asset, overwriting any that already exist in R2 "
              "(used to replace COGs written by the earlier broken rasterio merge).",
     )
+    parser.add_argument(
+        "--asset",
+        help="Transfer only this single asset id (full GEE asset name, or the "
+             "bare water_source_id). Used by the pin-water-point flow.",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Force re-download of all tiles (clears the tile cache first). "
+             "Used by the 2-week refresh where the underlying GEE image changed.",
+    )
     args = parser.parse_args()
-    run(force=args.force)
+
+    asset = args.asset
+    if asset and "/" in asset:
+        asset = asset  # full asset name passed through
+    run(force=args.force, asset_id=asset, fresh=args.fresh)
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ join water_sources ws on ws.id = pz.water_source_id
 where pz.species = 'camel'
   and (%(ward)s::text is null or ws.ward = %(ward)s)
   and (%(county)s::text is null or ws.county = %(county)s)
+  and (%(water_source_id)s::uuid is null or ws.id = %(water_source_id)s)
 """
 
 MARK_COMPUTED_SQL = """
@@ -67,10 +68,10 @@ where water_source_id = %(water_source_id)s and species = 'camel'
 """
 
 
-def fetch_scope(ward: str | None, county: str | None) -> list[dict]:
+def fetch_scope(ward: str | None, county: str | None, water_source_id: str | None = None) -> list[dict]:
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(FETCH_SQL, {"ward": ward, "county": county})
+            cur.execute(FETCH_SQL, {"ward": ward, "county": county, "water_source_id": water_source_id})
             return cur.fetchall()
 
 
@@ -253,7 +254,7 @@ def poll_and_transfer(tasks: dict[str, "ee.batch.Task"], gcs_bucket: str | None,
 
 def run(ward: str | None, county: str | None, as_of_date: str,
         composite_window_days: int, vci_years_back: int, batch_size: int,
-        timeout_s: int = 10800):
+        timeout_s: int = 10800, water_source_id: str | None = None):
 
     settings = get_settings()
     gcs_bucket = settings.gee_export_gcs_bucket
@@ -275,8 +276,9 @@ def run(ward: str | None, county: str | None, as_of_date: str,
     if not gcs_bucket:
         drive_service = _drive_service()
 
-    rows = fetch_scope(ward, county)
-    log.info(f"Scope ward={ward!r} county={county!r}: {len(rows)} water points to compute")
+    rows = fetch_scope(ward, county, water_source_id)
+    log.info(f"Scope ward={ward!r} county={county!r} water_source={water_source_id!r}: "
+             f"{len(rows)} water points to compute")
     if not rows:
         log.warning("Nothing in scope — did you run generate_piosphere_zones.py for this ward/county?")
         return
@@ -308,6 +310,7 @@ def main():
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--ward", help="Restrict to a single ward (validation gate)")
     scope.add_argument("--county", help="Restrict to a full county (scale-up)")
+    scope.add_argument("--water-source", help="Restrict to a single water_source id (pin flow)")
     parser.add_argument("--as-of-date", default=date.today().isoformat())
     parser.add_argument("--composite-window-days", type=int, default=30)
     parser.add_argument("--vci-years-back", type=int, default=5)
@@ -320,7 +323,7 @@ def main():
                               "heavy 10m COG exports can take >1 hour each.")
     args = parser.parse_args()
     run(args.ward, args.county, args.as_of_date, args.composite_window_days,
-        args.vci_years_back, args.batch_size, args.timeout_s)
+        args.vci_years_back, args.batch_size, args.timeout_s, args.water_source)
 
 
 

@@ -43,6 +43,7 @@ select
 from water_sources ws
 where (%(ward)s::text is null or ws.ward = %(ward)s)
   and (%(county)s::text is null or ws.county = %(county)s)
+  and (%(water_source_id)s::uuid is null or ws.id = %(water_source_id)s)
 on conflict (water_source_id, species)
 do update set
     radius_km     = excluded.radius_km,
@@ -51,7 +52,7 @@ do update set
 """
 
 
-def run(ward: str | None, county: str | None) -> None:
+def run(ward: str | None, county: str | None, water_source_id: str | None = None) -> None:
     rings = get_species_rings()
 
     with get_pg_connection() as conn:
@@ -60,14 +61,16 @@ def run(ward: str | None, county: str | None) -> None:
             cur.execute(
                 """select count(*) as n from water_sources
                    where (%(ward)s::text is null or ward = %(ward)s)
-                     and (%(county)s::text is null or county = %(county)s)""",
-                {"ward": ward, "county": county},
+                     and (%(county)s::text is null or county = %(county)s)
+                     and (%(water_source_id)s::uuid is null or id = %(water_source_id)s)""",
+                {"ward": ward, "county": county, "water_source_id": water_source_id},
             )
             n = cur.fetchone()["n"]
-            log.info(f"Scope ward={ward!r} county={county!r}: {n} water_sources in range")
+            log.info(f"Scope ward={ward!r} county={county!r} water_source={water_source_id!r}: "
+                     f"{n} water_sources in range")
             if n == 0:
                 log.warning("No water_sources match this scope — nothing to do. "
-                             "Did you run import_water_sources.py for this ward/county first?")
+                             "Did you run import_water_sources.py (or pin_water_point.py) first?")
                 return
 
             for species in rings.radii_km:
@@ -81,6 +84,7 @@ def run(ward: str | None, county: str | None) -> None:
                         "radius_m": radius_km * 1000,
                         "ward": ward,
                         "county": county,
+                        "water_source_id": water_source_id,
                     },
                 )
                 log.info(f"  -> {cur.rowcount} piosphere_zones rows upserted for {species}")
@@ -93,8 +97,9 @@ def main():
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--ward", help="Restrict to a single ward (validation gate)")
     scope.add_argument("--county", help="Restrict to a full county (scale-up)")
+    scope.add_argument("--water-source", help="Restrict to a single water_source id (pin flow)")
     args = parser.parse_args()
-    run(ward=args.ward, county=args.county)
+    run(ward=args.ward, county=args.county, water_source_id=args.water_source)
 
 
 if __name__ == "__main__":
