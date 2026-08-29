@@ -97,7 +97,7 @@ def _stt_pass(audio: bytes, locale: str) -> tuple[str, float] | None:
     try:
         resp = httpx.post(
             url,
-            params={"language": locale, "format": "detailed", "profanity": "masked"},
+            params={"language": locale, "format": "detailed", "profanity": "raw"},
             content=audio,
             headers={
                 "Ocp-Apim-Subscription-Key": settings.azure_speech_key,
