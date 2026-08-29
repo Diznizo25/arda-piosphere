@@ -12,6 +12,10 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=["legal"])
 
+# Meta's URL validator probes pages (some check with HEAD); make every legal
+# page respond to both GET and HEAD so it never looks like a dead link.
+_LEGAL_METHODS = ["GET", "HEAD"]
+
 _HEAD = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,7 +32,7 @@ _FOOT = """<footer>Arda Link — Piosphere Grazing Advisory &middot; Contact: ar
 </footer></body></html>"""
 
 
-@router.get("/privacy", response_class=HTMLResponse)
+@router.api_route("/privacy", methods=_LEGAL_METHODS, response_class=HTMLResponse)
 def privacy_policy() -> str:
     body = """
 <h1>Privacy Policy</h1>
@@ -69,7 +73,7 @@ ardalinkai@gmail.com. Deletion is completed within 30 days.</p>
     return _HEAD.format(title="Privacy Policy") + body + _FOOT
 
 
-@router.get("/terms", response_class=HTMLResponse)
+@router.api_route("/terms", methods=_LEGAL_METHODS, response_class=HTMLResponse)
 def terms_of_service() -> str:
     body = """
 <h1>Terms of Service</h1>
@@ -105,7 +109,7 @@ means you accept the updated terms.</p>
     return _HEAD.format(title="Terms of Service") + body + _FOOT
 
 
-@router.get("/data-deletion", response_class=HTMLResponse)
+@router.api_route("/data-deletion", methods=_LEGAL_METHODS, response_class=HTMLResponse)
 def data_deletion() -> str:
     body = """
 <h1>User Data Deletion Instructions</h1>
