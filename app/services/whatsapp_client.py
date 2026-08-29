@@ -71,7 +71,9 @@ def send_quick_reply_buttons(to: str, body: str, buttons: list[tuple[str, str]])
 def download_media(media_id: str) -> bytes | None:
     """Download a WhatsApp media object (e.g. a voice note) as raw bytes.
 
-    Two-step Graph API call: resolve the media id to a temporary download URL,
+    Two-step Graph API call: resolve the media id to a temporary download URL
+    (GET /{media-id} — the current documented pattern; the older
+    /{phone-number-id}/media/{media-id} path returns "Unknown path components"),
     then fetch that URL with the same bearer token. Returns None on any failure
     so callers can fail open.
     """
@@ -79,8 +81,7 @@ def download_media(media_id: str) -> bytes | None:
     auth = {"Authorization": f"Bearer {settings.whatsapp_access_token}"}
     try:
         info_resp = httpx.get(
-            f"https://graph.facebook.com/{GRAPH_API_VERSION}/"
-            f"{settings.whatsapp_phone_number_id}/media/{media_id}",
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}",
             headers=auth,
             timeout=15,
         )
