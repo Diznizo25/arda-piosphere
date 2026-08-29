@@ -68,6 +68,32 @@ def send_quick_reply_buttons(to: str, body: str, buttons: list[tuple[str, str]])
     _post(payload)
 
 
+def download_media(media_id: str) -> bytes | None:
+    """Download a WhatsApp media object (e.g. a voice note) as raw bytes.
+
+    Two-step Graph API call: resolve the media id to a temporary download URL,
+    then fetch that URL with the same bearer token. Returns None on any failure
+    so callers can fail open.
+    """
+    settings = get_settings()
+    auth = {"Authorization": f"Bearer {settings.whatsapp_access_token}"}
+    try:
+        info_resp = httpx.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/"
+            f"{settings.whatsapp_phone_number_id}/media/{media_id}",
+            headers=auth,
+            timeout=15,
+        )
+        info_resp.raise_for_status()
+        url = info_resp.json()["url"]
+        media_resp = httpx.get(url, headers=auth, timeout=60)
+        media_resp.raise_for_status()
+        return media_resp.content
+    except Exception:  # noqa: BLE001
+        log.exception(f"Failed to download WhatsApp media {media_id}")
+        return None
+
+
 def _post(payload: dict) -> None:
     try:
         resp = httpx.post(_base_url(), json=payload, headers=_headers(), timeout=15)

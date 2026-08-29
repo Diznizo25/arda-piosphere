@@ -12,12 +12,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import threading
 
 from fastapi import APIRouter, Request, Response, HTTPException
 
 from app.config import get_settings
 from app.models.schemas import AdvisoryRequest
-from app.services import ai, water_reach, water_sources, whatsapp_client
+from app.services import ai, speech, water_reach, water_sources, whatsapp_client
 from app.services.advisory_service import get_advisory
 from app.services.ground_truth import record_ground_truth
 from app.services.pastoralists import (
@@ -63,6 +64,16 @@ WATER_ADDED_MSG = {
                "baada ya kukamilika kwa hesabu ya satelaiti (inachukua dakika kadhaa).",
     "english": "Thank you! We have registered this as a new water point. Pasture data will appear once "
                "the satellite calculation is done (takes a few minutes).",
+}
+
+VOICE_ERR_MSG = {
+    "swahili": "Samahani, sikuelewa ujumbe wako wa sauti. Jaribu kuandika ujumbe au tuma eneo lako (location).",
+    "english": "Sorry, I could not understand your voice note. Please type a message or share your location.",
+}
+
+VOICE_TOO_LONG_MSG = {
+    "swahili": "Ujumbe wa sauti ni mrefu sana. Tuma ujumbe mfupi (chini ya dakika moja) au andika ujumbe.",
+    "english": "That voice note is too long. Send a shorter one (under a minute) or type your message.",
 }
 
 
@@ -121,8 +132,49 @@ def _handle_message(message: dict) -> None:
     elif msg_type == "interactive":
         reply = message["interactive"].get("button_reply", {})
         _handle_text(phone, pastoralist, reply.get("id", ""))
+    elif msg_type == "audio":
+        _handle_audio(phone, pastoralist, message.get("audio", {}))
     else:
         log.info(f"Ignoring unsupported message type from {phone}: {msg_type}")
+
+
+def _handle_audio(phone: str, pastoralist, audio: dict) -> None:
+    """Transcribe a WhatsApp voice note and process the result as text.
+
+    Runs in a background thread so the webhook returns 200 immediately (Meta
+    retries slow webhooks); the reply is sent via the Graph API when done.
+    """
+    threading.Thread(
+        target=_process_voice_note, args=(phone, pastoralist, audio), daemon=True
+    ).start()
+
+
+def _process_voice_note(phone: str, pastoralist, audio: dict) -> None:
+    media_id = (audio or {}).get("id")
+    if not media_id:
+        log.warning(f"Voice note from {phone} without a media id")
+        return
+    audio_bytes = whatsapp_client.download_media(media_id)
+    if not audio_bytes:
+        whatsapp_client.send_text(phone, VOICE_ERR_MSG[pastoralist.preferred_language])
+        return
+
+    transcription = speech.transcribe_voice_note(
+        audio_bytes, pastoralist.preferred_language
+    )
+    if transcription is None:
+        whatsapp_client.send_text(phone, VOICE_ERR_MSG[pastoralist.preferred_language])
+        return
+    if transcription.duration_s > speech.MAX_DURATION_S:
+        whatsapp_client.send_text(phone, VOICE_TOO_LONG_MSG[pastoralist.preferred_language])
+        return
+    if not transcription.text:
+        whatsapp_client.send_text(phone, VOICE_ERR_MSG[pastoralist.preferred_language])
+        return
+
+    log.info(f"Voice note from {phone} [{transcription.language}] conf={transcription.confidence:.2f}: "
+             f"{transcription.text!r}")
+    _handle_text(phone, pastoralist, transcription.text)
 
 
 def _handle_location(phone: str, pastoralist, location: dict) -> None:
