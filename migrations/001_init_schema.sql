@@ -69,7 +69,7 @@ alter table piosphere_zones force row level security;
 create table if not exists pastoralists (
   id                  uuid primary key default gen_random_uuid(),
   phone_number        text not null unique,   -- E.164, WhatsApp wa_id
-  preferred_language  text not null default 'borana' check (preferred_language in ('borana', 'swahili')),
+  preferred_language  text not null default 'swahili' check (preferred_language in ('swahili', 'english')),
   primary_species     text check (primary_species in ('cattle', 'shoat', 'camel')),
   last_known_location geometry(Point, 4326),
   created_at          timestamptz not null default now(),

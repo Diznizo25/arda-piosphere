@@ -1,15 +1,10 @@
 """
-Advisory message templates in Borana and Swahili.
+Advisory message templates in Swahili and English.
 
-*** IMPORTANT: the Borana strings below are a best-effort draft, NOT verified
-by a native speaker. Borana is under-resourced for MT/LLM translation and
-mistakes here go straight to a herder making real decisions about their
-animals. Before this goes anywhere near production, have a native Borana
-speaker (ideally from Isiolo) review and correct every string in
-BORANA_TEMPLATES. Swahili is more reliable but still worth a native check
-given the domain-specific vocabulary (piosphere/forage terms don't have
-standard everyday translations). Flag this explicitly to end users/testers
-during the one-ward validation gate. ***
+Swahili strings are the primary ones (the service targets Kenyan pastoralists);
+English is provided as a fallback/preference. The Swahili wording is kept
+simple and domain-appropriate (piosphere/forage terms), and should be reviewed
+with native speakers during the field validation gate.
 """
 from __future__ import annotations
 
@@ -18,7 +13,7 @@ from app.services.advisory_logic import ForageCondition, WaterReliability
 Species = str  # "cattle" | "shoat" | "camel"
 
 SPECIES_LABEL_SW = {"cattle": "ng'ombe", "shoat": "kondoo/mbuzi", "camel": "ngamia"}
-SPECIES_LABEL_BO = {"cattle": "loon", "shoat": "hoolaa", "camel": "gaala"}  # DRAFT — verify
+SPECIES_LABEL_EN = {"cattle": "cattle", "shoat": "sheep/goats", "camel": "camels"}
 
 CONDITION_TEXT_SW = {
     ForageCondition.GREEN_GROWING: "malisho mabichi yanayoota",
@@ -27,12 +22,11 @@ CONDITION_TEXT_SW = {
     ForageCondition.UNCERTAIN: "hali ya malisho haijulikani wazi",
 }
 
-# DRAFT — needs native Borana speaker review before production use.
-CONDITION_TEXT_BO = {
-    ForageCondition.GREEN_GROWING: "marga magaariifi guddataa jira",
-    ForageCondition.DRY_FORAGE_AVAILABLE: "marga gogaa gaarii tuni jira",
-    ForageCondition.BARE_DEGRADED: "lafti duwwaa, marga hin jiru",
-    ForageCondition.UNCERTAIN: "haala margaa sirriitti hin beekamne",
+CONDITION_TEXT_EN = {
+    ForageCondition.GREEN_GROWING: "fresh growing pasture",
+    ForageCondition.DRY_FORAGE_AVAILABLE: "good dry forage is available",
+    ForageCondition.BARE_DEGRADED: "bare ground, very little pasture",
+    ForageCondition.UNCERTAIN: "pasture condition is unclear",
 }
 
 WATER_TEXT_SW = {
@@ -42,13 +36,14 @@ WATER_TEXT_SW = {
     WaterReliability.UNKNOWN: "uhakika wa maji haujulikani kwa sasa — thibitisha kabla ya kwenda",
 }
 
-# DRAFT — needs native Borana speaker review before production use.
-WATER_TEXT_BO = {
-    WaterReliability.RELIABLE: "bishaan yeroo kana amanamaa dha",
-    WaterReliability.SEASONAL: "bishaan waqtii, guutuu waggaa hin ga'u ta'a",
-    WaterReliability.UNRELIABLE: "bishaan yeroo kana amanamaa miti — dursanii mirkaneessaa",
-    WaterReliability.UNKNOWN: "amanummaan bishaanii yeroo ammaa hin beekamne — dursanii mirkaneessaa",
+WATER_TEXT_EN = {
+    WaterReliability.RELIABLE: "reliable water for now",
+    WaterReliability.SEASONAL: "seasonal water — may not last all year",
+    WaterReliability.UNRELIABLE: "water is unreliable right now — verify before going",
+    WaterReliability.UNKNOWN: "water reliability unknown — verify before going",
 }
+
+_SUPPORTED = ("swahili", "english")
 
 
 def format_advisory_message(
@@ -60,36 +55,40 @@ def format_advisory_message(
     curing_stage_note: str | None,
     water_reliability: WaterReliability,
 ) -> str:
-    if language == "swahili":
-        species_label = SPECIES_LABEL_SW.get(species, species)
-        condition_text = CONDITION_TEXT_SW[condition]
-        water_text = WATER_TEXT_SW[water_reliability]
+    if language not in _SUPPORTED:
+        language = "swahili"
+
+    if language == "english":
+        species_label = SPECIES_LABEL_EN.get(species, species)
+        condition_text = CONDITION_TEXT_EN[condition]
+        water_text = WATER_TEXT_EN[water_reliability]
         lines = [
-            f"Kwa {species_label} wako: maji ya karibu yapo umbali wa {distance_km:.1f} km.",
-            f"Hali ya malisho karibu na maji hayo: {condition_text}.",
+            f"For your {species_label}: nearest water is {distance_km:.1f} km away.",
+            f"Pasture condition near that water: {condition_text}.",
         ]
         if condition == ForageCondition.BARE_DEGRADED and not seasonally_normal:
-            lines.append("Hali hii ni mbaya zaidi ya kawaida kwa msimu huu — angalia maeneo mengine.")
+            lines.append("This is worse than usual for this season — consider other areas.")
         elif condition == ForageCondition.BARE_DEGRADED and seasonally_normal:
-            lines.append("Hii ni ya kawaida kwa msimu huu wa kiangazi.")
+            lines.append("This is normal for the dry season.")
         if curing_stage_note == "still_curing":
-            lines.append("Nyasi bado inakauka, si kavu kabisa.")
-        lines.append(f"Maji: {water_text}.")
+            lines.append("Grass is still curing, not fully dry yet.")
+        lines.append(f"Water: {water_text}.")
         return "\n".join(lines)
 
-    # default: borana (DRAFT translations, see module docstring)
-    species_label = SPECIES_LABEL_BO.get(species, species)
-    condition_text = CONDITION_TEXT_BO[condition]
-    water_text = WATER_TEXT_BO[water_reliability]
+    # swahili (default)
+    species_label = SPECIES_LABEL_SW.get(species, species)
+    condition_text = CONDITION_TEXT_SW[condition]
+    water_text = WATER_TEXT_SW[water_reliability]
     lines = [
-        f"{species_label} keessaniif: bishaan dhihoo km {distance_km:.1f} irratti argama.",
-        f"Haalli margaa bishaan sana bira: {condition_text}.",
+        f"Kwa {species_label} wako: maji ya karibu yapo umbali wa {distance_km:.1f} km.",
+        f"Hali ya malisho karibu na maji hayo: {condition_text}.",
     ]
     if condition == ForageCondition.BARE_DEGRADED and not seasonally_normal:
-        lines.append("Haalli kun waqtii kanaaf illee hin gaarii — bakka biraa ilaalaa.")
+        lines.append("Hali hii ni mbaya zaidi ya kawaida kwa msimu huu — angalia maeneo mengine.")
     elif condition == ForageCondition.BARE_DEGRADED and seasonally_normal:
-        lines.append("Kun waqtii bonaa kanaaf idilee dha.")
+        lines.append("Hii ni ya kawaida kwa msimu huu wa kiangazi.")
     if curing_stage_note == "still_curing":
-        lines.append("Margi ammallee gogaa jira, guutumaan hin gogne.")
-    lines.append(f"Bishaan: {water_text}.")
+        lines.append("Nyasi bado inakauka, si kavu kabisa.")
+    lines.append(f"Maji: {water_text}.")
     return "\n".join(lines)
+

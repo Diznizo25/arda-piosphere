@@ -1,7 +1,7 @@
 # Arda Link — Piosphere Grazing Advisory
 
 Satellite-driven grazing and water advisory for pastoralists in Kenya's arid
-and semi-arid lands, delivered over WhatsApp in Borana and Swahili.
+and semi-arid lands, delivered over WhatsApp in Swahili and English.
 
 A herder shares their location and their animals (cattle, shoat, or camel)
 over WhatsApp. Arda Link tells them where the nearest usable water is, and
@@ -60,7 +60,7 @@ app/
     raster_read.py            # windowed COG reads + zonal stats
     advisory_logic.py         # SATVI/BSI-aware forage classification
     advisory_service.py       # ties the read path together
-    i18n.py                   # Borana/Swahili message templates
+    i18n.py                   # Swahili/English message templates
     whatsapp_client.py        # WhatsApp send helpers
     gee_indices.py            # Earth Engine index math
     storage.py                 # R2 COG storage
@@ -81,8 +81,8 @@ registry, marketplace — those are later phases.
 
 Known open items:
 
-- Borana message templates (`app/services/i18n.py`) are a first draft and
-  need review by a native speaker before relying on them in the field.
+- Swahili message templates (`app/services/i18n.py`) should still be reviewed
+  by native speakers before wide field rollout.
 - Species ring radii and forage-condition thresholds (`config/*.yaml`) are
   starting defaults, meant to be tuned from real ground-truth feedback.
 - Map image generation for WhatsApp replies isn't built yet (text only).

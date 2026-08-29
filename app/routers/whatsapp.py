@@ -39,30 +39,30 @@ SPECIES_KEYWORDS = {
 
 LANGUAGE_KEYWORDS = {
     "swahili": ["swahili", "kiswahili"],
-    "borana": ["borana", "afaan borana", "oromo"],
+    "english": ["english", "kiingereza", "ingereza"],
 }
 
-MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati", "margaa"]
+MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 PIN_KEYWORDS = ["pin", "register", "ongeza", "andika", "new water", "regist"]
 
 ASK_SPECIES_TEXT = {
     "swahili": "Kabla sijakupa jibu, niambie wanyama wako ni gani: ng'ombe, kondoo/mbuzi, au ngamia?",
-    "borana": "Utuma bishaan/margaa dura, horiin keessan maal akka ta'e naaf himaa: loon, hoolaa/re'ee, moo gaala?",
+    "english": "Before I answer, tell me your animals: cattle, sheep/goats, or camels?",
 }
 
 NEW_WATER_POINT_OFFER = {
     "swahili": "Eneo hili haliko kwenye mfumo wetu bado. Tuma 'PIN' niweke kama chanzo kipya cha maji, "
                "na tutaanza kupima malisho yake.",
-    "borana": "Bakki kun sirna keenya keessa amma hin jiru. 'PIN' nuuf ergaa akka laga/boollaa bishaanii "
-              "haaraa ta'ee galmeessineef; marga isaa safaru itti jalqabna.",
+    "english": "This location is not in our system yet. Reply 'PIN' to register it as a new water point, "
+               "and we will start measuring its pasture.",
 }
 
 WATER_ADDED_MSG = {
     "swahili": "Asante! Tumeongeza eneo hili kama chanzo kipya cha maji. Data ya malisho itaonekana "
                "baada ya kukamilika kwa hesabu ya satelaiti (inachukua dakika kadhaa).",
-    "borana": "Galatoomaa! Bakka kana laga bishaanii haaraa ta'ee galmeessine. Odeeffannoon margaa "
-              "yeroo lakkoofsiin satelayitii xumuramu ni mul'ata.",
+    "english": "Thank you! We have registered this as a new water point. Pasture data will appear once "
+               "the satellite calculation is done (takes a few minutes).",
 }
 
 
@@ -133,7 +133,7 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
         whatsapp_client.send_quick_reply_buttons(
             phone,
             ASK_SPECIES_TEXT[pastoralist.preferred_language],
-            [("cattle", "Ng'ombe/Loon"), ("shoat", "Mbuzi/Hoolaa"), ("camel", "Ngamia/Gaala")],
+            [("cattle", "Ng'ombe"), ("shoat", "Mbuzi/Kondoo"), ("camel", "Ngamia")],
         )
         return
 
@@ -153,13 +153,13 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
     text_lower = text.strip().lower()
 
     # Data-deletion request (see the privacy policy + /data-deletion page).
-    if text_lower == "delete" or text_lower == "futa" or text_lower == "haqi":
+    if text_lower == "delete" or text_lower == "futa":
         delete_pastoralist(phone)
         whatsapp_client.send_text(
             phone,
             {
                 "swahili": "Taarifa zako zimefutwa. Kwa usaidizi, tutumie ujumbe.",
-                "borana": "Odeeffannoon keessan haqame. Gargaarsaaf nuuf ergaa.",
+                "english": "Your data has been deleted. Message us if you need help.",
             }[pastoralist.preferred_language],
         )
         return
@@ -168,8 +168,8 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
         if any(k in text_lower for k in keywords):
             upsert_pastoralist(phone, species=species)
             confirm = {
-                "swahili": f"Sawa, nimeandika wanyama wako. Tuma tena eneo lako (location) upate jibu.",
-                "borana": f"Tole, horii keessan galmeesse. Bakka jirtan ergaa deebii argachuuf.",
+                "swahili": "Sawa, nimeandika wanyama wako. Tuma tena eneo lako (location) upate jibu.",
+                "english": "Okay, I have noted your animals. Send your location again for an answer.",
             }[pastoralist.preferred_language]
             whatsapp_client.send_text(phone, confirm)
             return
@@ -179,7 +179,7 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
             upsert_pastoralist(phone, language=language)
             whatsapp_client.send_text(
                 phone,
-                "Sawa, nitatumia Kiswahili." if language == "swahili" else "Tole, Afaan Boranaan isiniif deebisa.",
+                "Sawa, nitatumia Kiswahili." if language == "swahili" else "Okay, I will reply in English.",
             )
             return
 
@@ -198,7 +198,7 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
         record_ground_truth(pastoralist, gt_intent, text)
         thanks = {
             "swahili": "Asante kwa taarifa! Itatusaidia kuboresha maelezo ya eneo hilo.",
-            "borana": "Galatoomaa odeeffannoo kanaaf! Kun bakka sana fooyyessuuf nu gargaara.",
+            "english": "Thank you for the report! It will help us improve information for that area.",
         }[pastoralist.preferred_language]
         whatsapp_client.send_text(phone, thanks)
         return
@@ -207,7 +207,7 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
         phone,
         {
             "swahili": "Tuma eneo lako (location) ili nikupe taarifa za maji na malisho karibu nawe.",
-            "borana": "Bakka jirtan (location) naaf ergaa akkan odeeffannoo bishaanii fi margaa isiniif kennuuf.",
+            "english": "Send your location so I can give you water and pasture information near you.",
         }[pastoralist.preferred_language],
     )
 
@@ -221,7 +221,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
             phone,
             {
                 "swahili": "Samahani, ramani haipatikani kwa sasa.",
-                "borana": "Dhiifama, maapaan yeroo ammaa hin argamne.",
+                "english": "Sorry, the map is not available right now.",
             }[pastoralist.preferred_language],
         )
         return
@@ -232,7 +232,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
             phone,
             {
                 "swahili": "Kwanza tuma eneo lako (location) ili nikutumie ramani ya maeneo.",
-                "borana": "Dura bakka jirtan (location) naaf ergaa akkan maapaa bakkeewwan isiniif erguuf.",
+                "english": "First send your location so I can send you the area map.",
             }[pastoralist.preferred_language],
         )
         return
@@ -253,7 +253,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         url,
         caption={
             "swahili": "Ramani ya duara za wanyama wako karibu na chanzo hiki cha maji.",
-            "borana": "Maapaan geengoo horii keessanii bakka bishaanii kanaatti.",
+            "english": "Map of your animals' rings around this water source.",
         }[pastoralist.preferred_language],
     )
 
@@ -266,7 +266,7 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
             phone,
             {
                 "swahili": "Tuma eneo lako (location) kwanza, kisha tuma 'PIN' kuliandikisha.",
-                "borana": "Dura bakka jirtan (location) naaf ergaa, achumaan 'PIN' naaf ergaa.",
+                "english": "Send your location first, then send 'PIN' to register it.",
             }[pastoralist.preferred_language],
         )
         return
@@ -281,6 +281,6 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
             phone,
             {
                 "swahili": "Samahani, hatukuweza kuongeza eneo hili. Jaribu tena baadaye.",
-                "borana": "Dhiifama, bakka kana galmeessuu hin dandeenye. Yeroo booda irra deebi'aa.",
+                "english": "Sorry, we could not register this area. Please try again later.",
             }[pastoralist.preferred_language],
         )

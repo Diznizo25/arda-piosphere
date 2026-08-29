@@ -16,12 +16,12 @@ log = logging.getLogger(__name__)
 
 NO_WATER_MESSAGE = {
     "swahili": "Samahani, hatuna maji yanayofikika kwa {species} karibu na eneo lako kwa sasa.",
-    "borana": "Dhiifama, bishaan {species} keessaniif dhihoo bakka isin jirtan hin argamne.",
+    "english": "Sorry, there is no reachable water for {species} near your location right now.",
 }
 
 SPECIES_PLAIN = {
     ("swahili", "cattle"): "ng'ombe", ("swahili", "shoat"): "kondoo/mbuzi", ("swahili", "camel"): "ngamia",
-    ("borana", "cattle"): "loon", ("borana", "shoat"): "hoolaa", ("borana", "camel"): "gaala",
+    ("english", "cattle"): "cattle", ("english", "shoat"): "sheep/goats", ("english", "camel"): "camels",
 }
 
 
@@ -53,7 +53,7 @@ def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
                 f"(COG_READ_ERROR: {type(e).__name__}: {e})"
                 if req.language == "swahili"
                 else (
-                    f"Bakka bishaanii beekna, garuu odeeffannoon margaa yeroo ammaa hin argamne. "
+                    f"We know the water location but pasture data is not available right now. "
                     f"(COG_READ_ERROR: {type(e).__name__}: {e})"
                 )
             ),

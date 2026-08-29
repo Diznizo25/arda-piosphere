@@ -51,7 +51,7 @@ def get_pastoralist(phone_number: str) -> Pastoralist | None:
 def upsert_pastoralist(phone_number: str, language: str | None = None, species: str | None = None) -> Pastoralist:
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(UPSERT_SQL, {"phone": phone_number, "language": language or "borana", "species": species})
+            cur.execute(UPSERT_SQL, {"phone": phone_number, "language": language or "swahili", "species": species})
             row = cur.fetchone()
         conn.commit()
     return Pastoralist(

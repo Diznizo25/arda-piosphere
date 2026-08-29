@@ -6,14 +6,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Species = Literal["cattle", "shoat", "camel"]
-Language = Literal["borana", "swahili"]
+Language = Literal["swahili", "english"]
 
 
 class AdvisoryRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
     lon: float = Field(..., ge=-180, le=180)
     species: Species
-    language: Language = "borana"
+    language: Language = "swahili"
 
 
 class AdvisoryResult(BaseModel):
