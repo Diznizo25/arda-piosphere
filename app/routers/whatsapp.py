@@ -20,7 +20,13 @@ from app.models.schemas import AdvisoryRequest
 from app.services import water_reach, water_sources, whatsapp_client
 from app.services.advisory_service import get_advisory
 from app.services.ground_truth import parse_ground_truth_intent, record_ground_truth
-from app.services.pastoralists import get_pastoralist, upsert_pastoralist, update_last_location, get_last_location
+from app.services.pastoralists import (
+    get_pastoralist,
+    upsert_pastoralist,
+    update_last_location,
+    get_last_location,
+    delete_pastoralist,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
@@ -145,6 +151,18 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
 
 def _handle_text(phone: str, pastoralist, text: str) -> None:
     text_lower = text.strip().lower()
+
+    # Data-deletion request (see the privacy policy + /data-deletion page).
+    if text_lower == "delete" or text_lower == "futa" or text_lower == "haqi":
+        delete_pastoralist(phone)
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Taarifa zako zimefutwa. Kwa usaidizi, tutumie ujumbe.",
+                "borana": "Odeeffannoon keessan haqame. Gargaarsaaf nuuf ergaa.",
+            }[pastoralist.preferred_language],
+        )
+        return
 
     for species, keywords in SPECIES_KEYWORDS.items():
         if any(k in text_lower for k in keywords):

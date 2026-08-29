@@ -82,3 +82,12 @@ def get_last_location(phone_number: str) -> tuple[float, float] | None:
     if not row or row["lon"] is None:
         return None
     return float(row["lon"]), float(row["lat"])
+
+
+def delete_pastoralist(phone_number: str) -> None:
+    """Remove the herder's profile + ground-truth reports (data-deletion request)."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("delete from pastoralists where phone_number = %(phone)s",
+                        {"phone": phone_number})
+        conn.commit()
