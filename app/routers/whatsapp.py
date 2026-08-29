@@ -18,7 +18,7 @@ from fastapi import APIRouter, Request, Response, HTTPException
 
 from app.config import get_settings
 from app.models.schemas import AdvisoryRequest
-from app.services import ai, speech, water_reach, water_sources, whatsapp_client
+from app.services import ai, build_tracker, speech, water_reach, water_sources, whatsapp_client
 from app.services.advisory_service import get_advisory
 from app.services.ground_truth import record_ground_truth
 from app.services.pastoralists import (
@@ -60,13 +60,6 @@ NEW_WATER_POINT_OFFER = {
                "and we will start measuring its pasture.",
 }
 
-WATER_ADDED_MSG = {
-    "swahili": "Asante! Tumeongeza eneo hili kama chanzo kipya cha maji. Data ya malisho itaonekana "
-               "baada ya kukamilika kwa hesabu ya satelaiti (inachukua dakika kadhaa).",
-    "english": "Thank you! We have registered this as a new water point. Pasture data will appear once "
-               "the satellite calculation is done (takes a few minutes).",
-}
-
 VOICE_ERR_MSG = {
     "swahili": "Samahani, sikuelewa ujumbe wako wa sauti. Jaribu kuandika ujumbe au tuma eneo lako (location).",
     "english": "Sorry, I could not understand your voice note. Please type a message or share your location.",
@@ -89,6 +82,8 @@ VOICE_OFF_MSG = {
 
 VOICE_KEYWORDS = ["sauti", "voice", "speak", "spika", "sikiliza"]
 TEXT_KEYWORDS = ["maandishi", "text", "maandiko"]
+
+STATUS_KEYWORDS = ["status", "hali", "progress", "maendeleo", "uko wapi"]
 
 
 @router.get("")
@@ -290,6 +285,11 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _handle_map_request(phone, pastoralist)
         return
 
+    # Build-status request: current progress of the herder's pinned point.
+    if any(k in text_lower for k in STATUS_KEYWORDS):
+        _handle_status_request(phone, pastoralist)
+        return
+
     # Pin request: register a new water point at the herder's last shared location.
     if any(k in text_lower for k in PIN_KEYWORDS):
         _handle_pin_request(phone, pastoralist)
@@ -363,7 +363,9 @@ def _handle_map_request(phone: str, pastoralist) -> None:
 
 
 def _handle_pin_request(phone: str, pastoralist) -> None:
-    """Register the herder's last shared location as a new water point."""
+    """Register the herder's last shared location as a new water point and kick
+    off the build tracker so the point gets computed and the herder sees
+    progress (see app/services/build_tracker.py + the scheduled builder job)."""
     loc = get_last_location(phone)
     if loc is None:
         whatsapp_client.send_text(
@@ -376,10 +378,9 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
         return
     lon, lat = loc
     try:
-        water_sources.create_water_source(lon=lon, lat=lat, source_type="ground_truth",
-                                          confidence=0.5)
-        whatsapp_client.send_text(phone, WATER_ADDED_MSG[pastoralist.preferred_language])
-    except Exception as e:  # noqa: BLE001
+        ws = water_sources.create_water_source(lon=lon, lat=lat, source_type="ground_truth",
+                                               confidence=0.5)
+    except Exception:  # noqa: BLE001
         log.exception(f"Failed to register water point for {phone}")
         whatsapp_client.send_text(
             phone,
@@ -388,3 +389,53 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
                 "english": "Sorry, we could not register this area. Please try again later.",
             }[pastoralist.preferred_language],
         )
+        return
+
+    build_tracker.start_build(ws.id, phone, pastoralist.preferred_language)
+    _send_reply(
+        phone,
+        pastoralist,
+        {
+            "swahili": "Asante! Tumeanza kujenga chanzo chako cha maji. "
+                       "Tutakutumia maendeleo ya hatua kwa hatua — subiri kidogo.",
+            "english": "Thank you! We have started building your water point. "
+                       "We will send you progress updates — hang on.",
+        }[pastoralist.preferred_language],
+        voice=pastoralist.voice_replies,
+    )
+
+
+def _handle_status_request(phone: str, pastoralist) -> None:
+    """Reply with the current build progress of the herder's last pinned point."""
+    build = build_tracker.get_build_for_phone(phone)
+    if build is None:
+        _send_reply(
+            phone,
+            pastoralist,
+            {
+                "swahili": "Hujapokea chanzo kipya cha maji bado. Tuma eneo lako "
+                           "(location) kisha 'PIN' ili tujenge chanzo chako.",
+                "english": "You have not registered a new water point yet. Send your "
+                           "location, then 'PIN' to build one.",
+            }[pastoralist.preferred_language],
+            voice=pastoralist.voice_replies,
+        )
+        return
+    if build.status == "pending" or build.status == "running":
+        text = {
+            "swahili": f"Chanzo chako kiko hatua ya {build.progress}% — {build.stage or 'inaandaliwa'}.",
+            "english": f"Your water point is at {build.progress}% — {build.stage or 'being prepared'}.",
+        }[pastoralist.preferred_language]
+    elif build.status == "done":
+        text = {
+            "swahili": "Chanzo chako kimekamilika! Tuma 'map' uone ramani yake.",
+            "english": "Your water point is ready! Send 'map' to see it.",
+        }[pastoralist.preferred_language]
+    else:
+        text = {
+            "swahili": "Chanzo chako kilikwama kwa bahati mbaya. Tutaendelea kujaribu — "
+                       "tumie 'status' baadaye au wasiliana nasi.",
+            "english": "Your water point hit an issue. We will keep retrying — "
+                       "send 'status' later or contact us.",
+        }[pastoralist.preferred_language]
+    _send_reply(phone, pastoralist, text, voice=pastoralist.voice_replies)

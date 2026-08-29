@@ -1,0 +1,58 @@
+name: build-water-points
+
+# Water-point builder worker. Every 10 minutes it claims any water_sources with
+# a pending build record and runs the single-point GEE compute -> export -> R2
+# transfer pipeline (scripts/build_water_point.py), updating the build's
+# progress and notifying the herder through the web service's /dev/notify
+# endpoint (text + rendered progress-bar image) at each stage.
+#
+# Setup (same secrets as refresh-indices.yml):
+#   DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_ENDPOINT_URL
+#   GEE_PROJECT_ID, GEE_SERVICE_ACCOUNT_EMAIL, GEE_SERVICE_ACCOUNT_KEY, GEE_EXPORT_DRIVE_FOLDER/GCS_BUCKET
+
+on:
+  schedule:
+    # Every 10 minutes; GitHub skips a scheduled run if the previous is still
+    # running, so a long transfer just delays the next drain (safe).
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write GEE service-account key
+        run: |
+          mkdir -p secrets
+          echo "$GEE_KEY" > secrets/gee-service-account.json
+        env:
+          GEE_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
+
+      - name: Build pending water points
+        run: python scripts/build_water_point.py --process-pending
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          GEE_PROJECT_ID: ${{ secrets.GEE_PROJECT_ID }}
+          GEE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GEE_SERVICE_ACCOUNT_EMAIL }}
+          GEE_SERVICE_ACCOUNT_KEY_PATH: ./secrets/gee-service-account.json
+          GEE_EXPORT_DRIVE_FOLDER: ${{ secrets.GEE_EXPORT_DRIVE_FOLDER }}
+          GEE_EXPORT_GCS_BUCKET: ${{ secrets.GEE_EXPORT_GCS_BUCKET }}

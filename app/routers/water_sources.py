@@ -2,16 +2,16 @@
 
 Lets an operator (or the WhatsApp pin flow) register a brand-new water point
 from just coordinates. The point's three species rings are buffered in PostGIS
-immediately; GEE compute for it is triggered separately (scripts/gee_compute_export.py
---water-source <id>, or scripts/pin_water_point.py --compute) because batch
-compute runs outside the web instance.
+immediately, and a build record is created so the scheduled builder job
+(scripts/build_water_point.py + .github/workflows/build-water-points.yml)
+computes + uploads its COG and notifies the creator with progress.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import CreateWaterSourceRequest, WaterSourceResponse
-from app.services import water_sources
+from app.services import build_tracker, water_sources
 
 router = APIRouter(prefix="/water-sources", tags=["water-sources"])
 
@@ -29,6 +29,7 @@ def create_water_source(req: CreateWaterSourceRequest) -> WaterSourceResponse:
             county=req.county,
             confidence=req.confidence,
         )
+        build_tracker.start_build(ws.id, req.created_by or "", req.language or "swahili")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to register water source: {e}")
     return WaterSourceResponse(
@@ -38,10 +39,10 @@ def create_water_source(req: CreateWaterSourceRequest) -> WaterSourceResponse:
         source_type=ws.source_type,
         ward=ws.ward,
         county=ws.county,
-        status="registered",
+        status="building",
         note=(
-            "Water point and species rings created. Grazing data will appear after "
-            "the GEE compute+transfer for this point completes."
+            "Water point and species rings created; the satellite build is queued "
+            "and its creator will be notified with progress."
         ),
     )
 

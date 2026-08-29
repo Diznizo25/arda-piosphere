@@ -47,6 +47,18 @@ def send_image_bytes_url(to: str, image_url: str, caption: str | None = None) ->
     _post(payload)
 
 
+def send_image(to: str, media_id: str, caption: str | None = None) -> None:
+    """Send an image by referencing an uploaded media id (e.g. the progress-bar
+    PNG rendered by app/services/build_progress.py)."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "image",
+        "image": {"id": media_id, **({"caption": caption} if caption else {})},
+    }
+    _post(payload)
+
+
 def upload_media(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str | None:
     """Upload an audio file to WhatsApp, returning its media id (fail-open).
 

@@ -48,6 +48,10 @@ class CreateWaterSourceRequest(BaseModel):
     ward: str | None = None
     county: str = "Isiolo"
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Optional build-tracker info: who pinned it (E.164) + preferred language,
+    # so the scheduled builder can notify them with progress.
+    created_by: str | None = None
+    language: Language = "swahili"
 
 
 class WaterSourceResponse(BaseModel):
