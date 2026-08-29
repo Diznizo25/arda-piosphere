@@ -48,6 +48,8 @@ over WhatsApp. This policy explains what we collect, why, and your rights.</p>
   <li><strong>Livestock type</strong> (cattle, shoats, or camels) — used to give
       species-appropriate advice.</li>
   <li><strong>Language preference</strong> (Swahili or English).</li>
+  <li><strong>Voice notes you send</strong> — transcribed to text by Azure Speech
+      (Microsoft) to understand your request; the audio is not retained.</li>
   <li><strong>Optional feedback reports</strong> you send about water or pasture
       conditions — used to improve our advice.</li>
 </ul>

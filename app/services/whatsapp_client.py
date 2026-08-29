@@ -47,6 +47,41 @@ def send_image_bytes_url(to: str, image_url: str, caption: str | None = None) ->
     _post(payload)
 
 
+def upload_media(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str | None:
+    """Upload an audio file to WhatsApp, returning its media id (fail-open).
+
+    The media id is valid for 30 days and is referenced by send_audio(). Audio
+    must be OGG/Opus mono (per WhatsApp's supported-media list) — which is
+    exactly what synthesize_speech() produces.
+    """
+    settings = get_settings()
+    try:
+        resp = httpx.post(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/"
+            f"{settings.whatsapp_phone_number_id}/media",
+            headers={"Authorization": f"Bearer {settings.whatsapp_access_token}"},
+            data={"messaging_product": "whatsapp", "type": mime_type},
+            files={"file": ("reply.ogg", audio_bytes, mime_type)},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["id"]
+    except Exception:  # noqa: BLE001
+        log.exception("WhatsApp media upload failed")
+        return None
+
+
+def send_audio(to: str, media_id: str) -> None:
+    """Send an audio message by referencing an uploaded media id."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "audio",
+        "audio": {"id": media_id},
+    }
+    _post(payload)
+
+
 def send_quick_reply_buttons(to: str, body: str, buttons: list[tuple[str, str]]) -> None:
     """buttons: list of (id, title) pairs, max 3 per WhatsApp's interactive
     reply-button limits."""

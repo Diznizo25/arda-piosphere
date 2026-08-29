@@ -18,6 +18,12 @@ on conflict (phone_number) do update set
 returning *
 """
 
+SET_VOICE_REPLIES_SQL = """
+update pastoralists
+set voice_replies = %(enabled)s
+where phone_number = %(phone)s
+"""
+
 UPDATE_LOCATION_SQL = """
 update pastoralists
 set last_known_location = st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)
@@ -31,6 +37,7 @@ class Pastoralist:
     phone_number: str
     preferred_language: str
     primary_species: str | None
+    voice_replies: bool = False
 
 
 def get_pastoralist(phone_number: str) -> Pastoralist | None:
@@ -45,6 +52,7 @@ def get_pastoralist(phone_number: str) -> Pastoralist | None:
         phone_number=row["phone_number"],
         preferred_language=row["preferred_language"],
         primary_species=row["primary_species"],
+        voice_replies=bool(row.get("voice_replies", False)),
     )
 
 
@@ -59,7 +67,16 @@ def upsert_pastoralist(phone_number: str, language: str | None = None, species: 
         phone_number=row["phone_number"],
         preferred_language=row["preferred_language"],
         primary_species=row["primary_species"],
+        voice_replies=bool(row.get("voice_replies", False)),
     )
+
+
+def set_voice_replies(phone_number: str, enabled: bool) -> None:
+    """Persist the herder's voice-reply preference (said 'sauti'/'voice')."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SET_VOICE_REPLIES_SQL, {"phone": phone_number, "enabled": enabled})
+        conn.commit()
 
 
 def update_last_location(phone_number: str, lon: float, lat: float) -> None:

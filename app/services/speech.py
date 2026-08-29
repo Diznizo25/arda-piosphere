@@ -37,6 +37,10 @@ OPUS_SAMPLE_RATE = 48000
 # Azure short-form REST recognition supports up to 60 s of audio.
 MAX_DURATION_S = 60.0
 
+# --- Text-to-speech (voice replies) ---
+TTS_VOICES = {"swahili": "sw-KE-RafikiNeural", "english": "en-US-JennyNeural"}
+TTS_OUTPUT_FORMAT = "ogg-24khz-16bit-mono-opus"  # OGG/Opus mono — WhatsApp-compatible
+
 _LANG_TO_LOCALE: dict[str, str] = {}
 
 
@@ -76,6 +80,63 @@ def ogg_duration_seconds(data: bytes) -> float:
         nsegs = data[pos + 26]
         pos += 27 + nsegs
     return granule / OPUS_SAMPLE_RATE if granule else 0.0
+
+
+def _xml_escape(text: str) -> str:
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _tts_clean(text: str) -> str:
+    """Make a reply safe/pleasant to speak aloud: drop technical
+    parentheticals (COG_READ_ERROR: ...), URLs, and markdown; normalize
+    punctuation. Never strips the advisory facts themselves."""
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"[\u2014\u2013]", ", ", text)  # em/en dash -> comma (reads better)
+    text = text.replace("*", "")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def synthesize_speech(text: str, language: str = "swahili") -> bytes | None:
+    """Synthesize a short reply to OGG/Opus via Azure Neural TTS (fail-open).
+
+    The returned bytes are ready to upload to WhatsApp as an audio message.
+    Returns None on any failure so callers fall back to text.
+    """
+    settings = get_settings()
+    if not settings.azure_speech_key or not settings.azure_speech_region:
+        return None
+    clean = _tts_clean(text)
+    if not clean:
+        return None
+    voice = TTS_VOICES.get(language, "sw-KE-RafikiNeural")
+    xml_lang = "sw-KE" if voice.startswith("sw-") else "en-US"
+    ssml = (
+        f"<speak version='1.0' xml:lang='{xml_lang}'>"
+        f"<voice name='{voice}'>{_xml_escape(clean)}</voice></speak>"
+    )
+    try:
+        resp = httpx.post(
+            f"https://{settings.azure_speech_region}.tts.speech.microsoft.com"
+            "/cognitiveservices/v1",
+            content=ssml,
+            headers={
+                "Ocp-Apim-Subscription-Key": settings.azure_speech_key,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": TTS_OUTPUT_FORMAT,
+                "User-Agent": "ardalink-piosphere",
+            },
+            timeout=45,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Azure TTS request failed - falling back to text")
+        return None
+    if resp.status_code != 200:
+        log.warning("Azure TTS returned %s: %.160s", resp.status_code, resp.text)
+        return None
+    return resp.content or None
 
 
 def _clean(text: str) -> str:

@@ -27,6 +27,7 @@ from app.services.pastoralists import (
     update_last_location,
     get_last_location,
     delete_pastoralist,
+    set_voice_replies,
 )
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,19 @@ VOICE_TOO_LONG_MSG = {
     "swahili": "Ujumbe wa sauti ni mrefu sana. Tuma ujumbe mfupi (chini ya dakika moja) au andika ujumbe.",
     "english": "That voice note is too long. Send a shorter one (under a minute) or type your message.",
 }
+
+VOICE_ON_MSG = {
+    "swahili": "Sawa! Nitakujibu kwa sauti sasa.",
+    "english": "Okay! I will reply by voice from now on.",
+}
+
+VOICE_OFF_MSG = {
+    "swahili": "Sawa, nitarudi kujibu kwa maandishi.",
+    "english": "Okay, I will go back to text replies.",
+}
+
+VOICE_KEYWORDS = ["sauti", "voice", "speak", "spika", "sikiliza"]
+TEXT_KEYWORDS = ["maandishi", "text", "maandiko"]
 
 
 @router.get("")
@@ -138,6 +152,24 @@ def _handle_message(message: dict) -> None:
         log.info(f"Ignoring unsupported message type from {phone}: {msg_type}")
 
 
+def _send_reply(phone: str, pastoralist, text: str, voice: bool = False) -> None:
+    """Send a text reply, or a synthesized voice note when `voice` is requested.
+
+    Fail-open: if TTS or the media upload ever fails, the reply goes out as
+    plain text so the herder always gets an answer.
+    """
+    if not voice or not text:
+        whatsapp_client.send_text(phone, text)
+        return
+    audio = speech.synthesize_speech(text, pastoralist.preferred_language)
+    media_id = whatsapp_client.upload_media(audio) if audio else None
+    if media_id is None:
+        log.warning("Voice reply unavailable - falling back to text for %s", phone)
+        whatsapp_client.send_text(phone, text)
+        return
+    whatsapp_client.send_audio(phone, media_id)
+
+
 def _handle_audio(phone: str, pastoralist, audio: dict) -> None:
     """Transcribe a WhatsApp voice note and process the result as text.
 
@@ -174,7 +206,8 @@ def _process_voice_note(phone: str, pastoralist, audio: dict) -> None:
 
     log.info(f"Voice note from {phone} [{transcription.language}] conf={transcription.confidence:.2f}: "
              f"{transcription.text!r}")
-    _handle_text(phone, pastoralist, transcription.text)
+    # A voice note gets a voice reply (conversational symmetry).
+    _handle_text(phone, pastoralist, transcription.text, voice=True)
 
 
 def _handle_location(phone: str, pastoralist, location: dict) -> None:
@@ -194,26 +227,41 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
     result = get_advisory(req)
 
     if result.found:
-        whatsapp_client.send_text(phone, result.message)
+        _send_reply(phone, pastoralist, result.message, voice=pastoralist.voice_replies)
         return
 
     # No known water point reaches this location -> offer to register a new one.
-    whatsapp_client.send_text(phone, NEW_WATER_POINT_OFFER[pastoralist.preferred_language])
+    _send_reply(phone, pastoralist, NEW_WATER_POINT_OFFER[pastoralist.preferred_language],
+                voice=pastoralist.voice_replies)
 
 
-def _handle_text(phone: str, pastoralist, text: str) -> None:
+def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> None:
     text_lower = text.strip().lower()
 
     # Data-deletion request (see the privacy policy + /data-deletion page).
     if text_lower == "delete" or text_lower == "futa":
         delete_pastoralist(phone)
-        whatsapp_client.send_text(
+        _send_reply(
             phone,
+            pastoralist,
             {
                 "swahili": "Taarifa zako zimefutwa. Kwa usaidizi, tutumie ujumbe.",
                 "english": "Your data has been deleted. Message us if you need help.",
             }[pastoralist.preferred_language],
+            voice=voice,
         )
+        return
+
+    # Voice-reply preference toggle.
+    if any(k in text_lower for k in VOICE_KEYWORDS):
+        set_voice_replies(phone, True)
+        pastoralist.voice_replies = True
+        _send_reply(phone, pastoralist, VOICE_ON_MSG[pastoralist.preferred_language], voice=True)
+        return
+    if any(k in text_lower for k in TEXT_KEYWORDS):
+        set_voice_replies(phone, False)
+        pastoralist.voice_replies = False
+        _send_reply(phone, pastoralist, VOICE_OFF_MSG[pastoralist.preferred_language], voice=False)
         return
 
     for species, keywords in SPECIES_KEYWORDS.items():
@@ -223,15 +271,17 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
                 "swahili": "Sawa, nimeandika wanyama wako. Tuma tena eneo lako (location) upate jibu.",
                 "english": "Okay, I have noted your animals. Send your location again for an answer.",
             }[pastoralist.preferred_language]
-            whatsapp_client.send_text(phone, confirm)
+            _send_reply(phone, pastoralist, confirm, voice=voice)
             return
 
     for language, keywords in LANGUAGE_KEYWORDS.items():
         if any(k in text_lower for k in keywords):
             upsert_pastoralist(phone, language=language)
-            whatsapp_client.send_text(
+            _send_reply(
                 phone,
+                pastoralist,
                 "Sawa, nitatumia Kiswahili." if language == "swahili" else "Okay, I will reply in English.",
+                voice=voice,
             )
             return
 
@@ -252,15 +302,17 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
             "swahili": "Asante kwa taarifa! Itatusaidia kuboresha maelezo ya eneo hilo.",
             "english": "Thank you for the report! It will help us improve information for that area.",
         }[pastoralist.preferred_language]
-        whatsapp_client.send_text(phone, thanks)
+        _send_reply(phone, pastoralist, thanks, voice=voice)
         return
 
-    whatsapp_client.send_text(
+    _send_reply(
         phone,
+        pastoralist,
         {
             "swahili": "Tuma eneo lako (location) ili nikupe taarifa za maji na malisho karibu nawe.",
             "english": "Send your location so I can give you water and pasture information near you.",
         }[pastoralist.preferred_language],
+        voice=voice,
     )
 
 
