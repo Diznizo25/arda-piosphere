@@ -49,6 +49,16 @@ services:
         sync: false
       - key: WPDX_API_KEY
         sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_MODEL
+        value: gpt-5-mini
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        value: southafricanorth
     # GEE_SERVICE_ACCOUNT_KEY_PATH / GOOGLE_APPLICATION_CREDENTIALS point at a
     # file (./secrets/gee-service-account.json) that isn't in git. On Render,
     # add the key's JSON contents as a "Secret File" in the dashboard instead

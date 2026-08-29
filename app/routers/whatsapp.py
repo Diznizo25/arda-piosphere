@@ -17,9 +17,9 @@ from fastapi import APIRouter, Request, Response, HTTPException
 
 from app.config import get_settings
 from app.models.schemas import AdvisoryRequest
-from app.services import water_reach, water_sources, whatsapp_client
+from app.services import ai, water_reach, water_sources, whatsapp_client
 from app.services.advisory_service import get_advisory
-from app.services.ground_truth import parse_ground_truth_intent, record_ground_truth
+from app.services.ground_truth import record_ground_truth
 from app.services.pastoralists import (
     get_pastoralist,
     upsert_pastoralist,
@@ -193,7 +193,7 @@ def _handle_text(phone: str, pastoralist, text: str) -> None:
         _handle_pin_request(phone, pastoralist)
         return
 
-    gt_intent = parse_ground_truth_intent(text_lower)
+    gt_intent = ai.classify_report(text)
     if gt_intent is not None:
         record_ground_truth(pastoralist, gt_intent, text)
         thanks = {

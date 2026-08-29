@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from app.models.schemas import AdvisoryRequest, AdvisoryResult
-from app.services import water_reach, raster_read
+from app.services import ai, water_reach, raster_read
 from app.services.advisory_logic import classify_forage_condition, classify_water_reliability
 from app.services.i18n import format_advisory_message
 
@@ -70,6 +70,13 @@ def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
         seasonally_normal=forage.seasonally_normal,
         curing_stage_note=forage.curing_stage_note,
         water_reliability=water_reliability,
+    )
+    # The LLM may only rephrase the deterministic text, never add facts; on any
+    # failure the original message is returned (see app/services/ai.py).
+    message = ai.rephrase_advisory(
+        language=req.language,
+        base_message=message,
+        distance_km=nearest.distance_m / 1000,
     )
 
     return AdvisoryResult(

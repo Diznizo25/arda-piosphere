@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     # Data sources
     wpdx_api_key: str = ""
 
+    # Azure OpenAI (GPT-5-mini) — optional smart layer. If unset, the app
+    # silently uses the deterministic rule-based path (fail-open).
+    azure_openai_endpoint: str = ""
+    azure_openai_api_key: str = ""
+    azure_openai_model: str = "gpt-5-mini"
+
+    # Azure AI Speech — for transcribing herders' WhatsApp voice notes.
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+
     species_rings_path: Path = CONFIG_DIR / "species_rings.yaml"
     advisory_thresholds_path: Path = CONFIG_DIR / "advisory_thresholds.yaml"
 
