@@ -27,7 +27,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # Keep in sync with .python-version (3.11). requirements.txt pins
+          # rasterio==1.3.11 and osmium==3.7.0, which ship no cp312 wheels —
+          # pip would try (and fail) to compile them from source on 3.12.
+          python-version: "3.11"
           cache: pip
 
       - name: Install dependencies
