@@ -1,0 +1,56 @@
+# Heart-girth (tape) weight formulas:  W(kg) = a * G(cm)^b
+#
+# G = heart girth in cm, measured with a tailor's tape just behind the front
+# legs, snug but not tight. These are published equations for East-African
+# breeds (zebu-type cattle, small East African goats/sheep, dromedary camels).
+# Starting defaults — tune with ground-truth weighbridge data once real data
+# comes in. Never hardcode these in app code.
+#
+# age_adjust: young animals are lighter for the same girth; applied as a
+# multiplicative factor to the base estimate.
+heart_girth_formulas:
+  cattle:
+    a: 0.0000693      # W = 69.3 * (G/100)^3  (FAO "Agri" formula, zebu-type cattle)
+    b: 3
+    valid_cm: [90, 230]
+    age_adjust: {young: 0.90, adult: 1.0}
+  goat:
+    a: 0.00007143     # W = G^3 / 14000 (small East African goat)
+    b: 3
+    valid_cm: [35, 90]
+    age_adjust: {young: 0.92, adult: 1.0}
+  sheep:
+    a: 0.00008        # W = G^3 / 12500
+    b: 3
+    valid_cm: [40, 105]
+    age_adjust: {young: 0.92, adult: 1.0}
+  camel:
+    a: 0.0001878      # Schwartz & Dioli (1992): W = a * G^2.78
+    b: 2.78
+    valid_cm: [120, 250]
+    age_adjust: {young: 0.93, adult: 1.0}
+
+# Guide copy used to teach the heart-girth measurement, per language.
+measurement_guide:
+  swahili: |
+    PIMA UZITO KWA KIPIMO CHA NAMBA (heart girth):
+    1. Chukua mkanda wa kushonea (tailor's tape).
+    2. Simama pembeni ya mnyama.
+    3. Funika mkanda kuzunguka kifua, nyuma ya miguu ya mbele.
+    4. Kagua kwamba mkanda umeweka sawa, si mbaya wala imebana.
+    5. Soma sentimita (cm) pale mkanda unapokutana.
+    Tuma namba ya sentimita hapa.
+  english: |
+    MEASURING WEIGHT WITH A HEART-GIRTH TAPE:
+    1. Get a tailor's tape.
+    2. Stand beside the animal.
+    3. Wrap the tape around the chest, just behind the front legs.
+    4. Make sure it sits level - not loose and not tight.
+    5. Read the measurement in centimeters (cm) where the tape meets.
+    Send the cm value here.
+
+# Optional, generic medication guidance shown after an estimate. Never
+# prescribe - just a nudge to dose by weight.
+medication_note:
+  swahili: "Vidokezo: dawa nyingi (km dawa za minyoo) hutolewa kwa uzito wa mnyama (mg kwa kila kg). Hakikisha unamwambia daktari wa mifugo uzito kamili."
+  english: "Tip: many medicines (e.g. dewormers) are dosed by body weight (mg per kg). Make sure you tell the vet the animal's exact weight."

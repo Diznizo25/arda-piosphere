@@ -38,6 +38,19 @@ class Pastoralist:
     preferred_language: str
     primary_species: str | None
     voice_replies: bool = False
+    full_name: str | None = None
+    herd_composition: dict | None = None
+    onboarded_at: object | None = None
+
+    @property
+    def is_onboarded(self) -> bool:
+        return self.onboarded_at is not None
+
+    @property
+    def first_name(self) -> str | None:
+        if not self.full_name:
+            return None
+        return self.full_name.split()[0]
 
 
 def get_pastoralist(phone_number: str) -> Pastoralist | None:
@@ -47,13 +60,7 @@ def get_pastoralist(phone_number: str) -> Pastoralist | None:
             row = cur.fetchone()
     if not row:
         return None
-    return Pastoralist(
-        id=str(row["id"]),
-        phone_number=row["phone_number"],
-        preferred_language=row["preferred_language"],
-        primary_species=row["primary_species"],
-        voice_replies=bool(row.get("voice_replies", False)),
-    )
+    return _from_row(row)
 
 
 def upsert_pastoralist(phone_number: str, language: str | None = None, species: str | None = None) -> Pastoralist:
@@ -62,12 +69,27 @@ def upsert_pastoralist(phone_number: str, language: str | None = None, species: 
             cur.execute(UPSERT_SQL, {"phone": phone_number, "language": language or "swahili", "species": species})
             row = cur.fetchone()
         conn.commit()
+    return _from_row(row)
+
+
+def _from_row(row) -> Pastoralist:
+    import json
+
+    herd = row.get("herd_composition")
+    if isinstance(herd, str):
+        try:
+            herd = json.loads(herd)
+        except Exception:  # noqa: BLE001
+            herd = {}
     return Pastoralist(
         id=str(row["id"]),
         phone_number=row["phone_number"],
         preferred_language=row["preferred_language"],
         primary_species=row["primary_species"],
         voice_replies=bool(row.get("voice_replies", False)),
+        full_name=row.get("full_name"),
+        herd_composition=herd,
+        onboarded_at=row.get("onboarded_at"),
     )
 
 

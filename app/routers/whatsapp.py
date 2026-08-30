@@ -18,7 +18,18 @@ from fastapi import APIRouter, Request, Response, HTTPException
 
 from app.config import get_settings
 from app.models.schemas import AdvisoryRequest
-from app.services import ai, build_tracker, speech, water_reach, water_sources, whatsapp_client
+from app.services import (
+    ai,
+    build_tracker,
+    conversation,
+    registration,
+    speech,
+    water_reach,
+    water_sources,
+    water_validation,
+    weight as weight_service,
+    whatsapp_client,
+)
 from app.services.advisory_service import get_advisory
 from app.services.ground_truth import record_ground_truth
 from app.services.pastoralists import (
@@ -85,6 +96,84 @@ TEXT_KEYWORDS = ["maandishi", "text", "maandiko"]
 
 STATUS_KEYWORDS = ["status", "hali", "progress", "maendeleo", "uko wapi"]
 
+WEIGHT_KEYWORDS = ["weight", "uzito", "pima", "measure"]
+HERD_KEYWORDS = ["herd", "kundi", "wingi", "zote"]
+AGE_KEYWORDS = {
+    "adult": ["adult", "mzima", "wazima", "kubwa", "big"],
+    "young": ["young", "mdogo", "ndogo", "kidogo", "small", "calf", "kondoo mdogo"],
+}
+DONE_KEYWORDS = ["done", "stop", "isha", "kumaliza", "finish", "maliza"]
+ANOTHER_KEYWORDS = ["another", "nyingine", "tena", "more", "zaidi"]
+
+WEIGHT_MSG = {
+    "swahili": "PIMA UZITO WA MNYAMA 🐄\n\nChagua aina ya mnyama:",
+    "english": "MEASURE ANIMAL WEIGHT 🐄\n\nChoose the type of animal:",
+}
+
+WEIGHT_ANIMAL_BUTTONS = [
+    ("weight:cattle", "Ng'ombe"),
+    ("weight:goat", "Mbuzi"),
+    ("weight:sheep", "Kondoo"),
+    ("weight:camel", "Ngamia"),
+]
+
+WEIGHT_AGE_BUTTONS = [
+    ("age:adult", "Mzima"),
+    ("age:young", "Mdogo"),
+]
+
+ASK_AGE = {
+    "swahili": "Mnyama ni mzima au mdogo?",
+    "english": "Is the animal adult or young?",
+}
+
+ASK_GIRTH = {
+    "swahili": "Sawa! Sasa pima kifua kwa mkanda.\n\n{guide}\n\nTuma namba ya sentimita (k.m. '165').",
+    "english": "Okay! Now measure the chest with the tape.\n\n{guide}\n\nSend the number in centimeters (e.g. '165').",
+}
+
+GIRTH_INVALID = {
+    "swahili": "Namba hiyo haiwezekani ({error}). Angalia kipimo na ujaribu tena (k.m. '165').",
+    "english": "That measurement is not possible ({error}). Check the tape and try again (e.g. '165').",
+}
+
+WEIGHT_RESULT = {
+    "swahili": "Mnyama wako ana uzito wa takriban {weight} kg (kifua {girth} cm).\n\n{medication}\n\nPima mwingine? Tuma 'uzito'. Ukipenda kupima kundi zima, tuma 'herd'.",
+    "english": "Your animal weighs approximately {weight} kg (heart girth {girth} cm).\n\n{medication}\n\nMeasure another? Send 'weight'. To estimate a whole herd, send 'herd'.",
+}
+
+ASK_HERD_COUNT = {
+    "swahili": "Kundi lako lina wanyama wangapi wa aina hii? (tuma namba, k.m. '15')",
+    "english": "How many animals of this type are in your herd? (send a number, e.g. '15')",
+}
+
+ASK_SAMPLE = {
+    "swahili": "Sasa pima {sample} wanyama na utume vipimo vyao kwa sentimita.\n"
+               "Tuma namba zote kwa ujumbe mmoja ukiachana na nafasi (k.m. '150 155 160')\n"
+               "au utume moja kwa moja — nitaendelea kuzichukua hadi utakaposema 'done'.",
+    "english": "Now measure {sample} animals and send their girths in cm.\n"
+              "Send all numbers in one message separated by spaces (e.g. '150 155 160')\n"
+              "or send them one at a time — I'll keep collecting until you say 'done'.",
+}
+
+SAMPLE_PARTIAL = {
+    "swahili": "Nimepata vipimo {count}. Nimehesabu wanyama wachache zaidi? Tuma namba, au 'done' kumaliza.",
+    "english": "Got {count} measurements so far. Measure a few more? Send a number, or 'done' to finish.",
+}
+
+HERD_RESULT = {
+    "swahili": "Makadirio ya kundi lako la {species} ({count} wanyama, sampuli {sample}):\n"
+               "• Wastani kwa mnyama: ~{mean} kg\n"
+               "• Jumla: ~{total} kg\n"
+               "• Kiwango cha uhakika: {low} - {high} kg\n\n"
+               "{medication}\n\nPima kundi lingine? Tuma 'uzito'. Tuma 'done' kumaliza.",
+    "english": "Estimate for your {species} herd ({count} animals, sample {sample}):\n"
+              "• Average per animal: ~{mean} kg\n"
+              "• Total: ~{total} kg\n"
+              "• Confidence range: {low} - {high} kg\n\n"
+              "{medication}\n\nMeasure another herd? Send 'weight'. Send 'done' to finish.",
+}
+
 
 @router.get("")
 def verify_webhook(request: Request):
@@ -135,7 +224,17 @@ def _handle_message(message: dict) -> None:
     pastoralist = get_pastoralist(phone) or upsert_pastoralist(phone)
 
     if msg_type == "location":
-        _handle_location(phone, pastoralist, message["location"])
+        # Locations always update the herder's last known location, but if a
+        # guided flow is active (onboarding/pin), let the flow own the reply.
+        location = message["location"]
+        update_last_location(phone, location["longitude"], location["latitude"])
+        state, _ = conversation.get_state(phone)
+        if state and state.startswith("pin."):
+            _handle_active_flow(phone, pastoralist, None)
+        elif state and state.startswith("onboarding."):
+            _handle_active_flow(phone, pastoralist, None)
+        else:
+            _handle_location(phone, pastoralist, location)
     elif msg_type == "text":
         _handle_text(phone, pastoralist, message["text"]["body"])
     elif msg_type == "interactive":
@@ -236,6 +335,7 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     # Data-deletion request (see the privacy policy + /data-deletion page).
     if text_lower == "delete" or text_lower == "futa":
         delete_pastoralist(phone)
+        conversation.clear_state(phone)
         _send_reply(
             phone,
             pastoralist,
@@ -245,6 +345,15 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             }[pastoralist.preferred_language],
             voice=voice,
         )
+        return
+
+    # An in-progress guided flow (onboarding / weight / pin) owns the turn.
+    if _handle_active_flow(phone, pastoralist, text):
+        return
+
+    # Brand-new (or never-onboarded) users are guided through registration first.
+    if not pastoralist.is_onboarded:
+        _start_onboarding(phone, pastoralist, text, voice=voice)
         return
 
     # Voice-reply preference toggle.
@@ -293,6 +402,11 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     # Pin request: register a new water point at the herder's last shared location.
     if any(k in text_lower for k in PIN_KEYWORDS):
         _handle_pin_request(phone, pastoralist)
+        return
+
+    # Weight request: start the heart-girth weight flow.
+    if any(k in text_lower for k in WEIGHT_KEYWORDS):
+        _start_weight_flow(phone, pastoralist)
         return
 
     gt_intent = ai.classify_report(text)
@@ -363,9 +477,13 @@ def _handle_map_request(phone: str, pastoralist) -> None:
 
 
 def _handle_pin_request(phone: str, pastoralist) -> None:
-    """Register the herder's last shared location as a new water point and kick
-    off the build tracker so the point gets computed and the herder sees
-    progress (see app/services/build_tracker.py + the scheduled builder job)."""
+    """Register the herder's last shared location as a new water point.
+
+    The location is first VALIDATED against known water sources (duplicate?
+    near a known point?) so we don't burn GEE compute on a wrong pin. The
+    herder then confirms the water type before anything is created, and the
+    build pipeline starts automatically (build tracker + scheduled builder).
+    """
     loc = get_last_location(phone)
     if loc is None:
         whatsapp_client.send_text(
@@ -377,11 +495,90 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
         )
         return
     lon, lat = loc
+
+    result = water_validation.validate_pin(lon, lat)
+    if result.is_duplicate:
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Eneo hili tayari limeandikishwa kwenye mfumo wetu (chanso cha "
+                           "maji kinachojulikana). Tuma eneo lako (location) ili uone taarifa zake, "
+                           "au tuma 'map' kuona ramani yake.",
+                "english": "This location is already registered in our system as a known "
+                           "water source. Send your location to see its info, or send 'map' "
+                           "to view its map.",
+            }[pastoralist.preferred_language],
+        )
+        return
+
+    if result.has_nearby_source:
+        nearby_note = {
+            "swahili": f"Kuna chanzo cha maji kinachojulikana umbali wa {result.distance_to_nearest_m/1000:.1f} km "
+                       "kutoka hapa. Tafadhali hakikisha unapima mahali pale maji yalipo hasa.",
+            "english": f"There is a known water source about {result.distance_to_nearest_m/1000:.1f} km "
+                       "from here. Please make sure you are pointing at the exact water spot.",
+        }[pastoralist.preferred_language]
+    else:
+        nearby_note = {
+            "swahili": "Hatuna chanzo cha maji kinachojulikana karibu na eneo hili.",
+            "english": "We don't have a known water source near this location.",
+        }[pastoralist.preferred_language]
+
+    conversation.set_state(phone, "pin.confirm", {"lon": lon, "lat": lat})
+    whatsapp_client.send_quick_reply_buttons(
+        phone,
+        f"{nearby_note}\n\n"
+        + {
+            "swahili": "Je, eneo hili ni chanzo cha maji hasa? Chagua aina yake:",
+            "english": "Is this really a water source? Choose its type:",
+        }[pastoralist.preferred_language],
+        [
+            ("type:borehole", "Kisima (borehole)"),
+            ("type:well", "Kisima cha kuchimba"),
+            ("type:river", "Mto"),
+        ],
+    )
+
+
+def _finish_pin_registration(phone: str, pastoralist, water_type: str) -> None:
+    """Create the validated water source, its species rings, and start the build."""
+    loc = get_last_location(phone)
+    if loc is None:
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Tuma eneo lako (location) kwanza.",
+                "english": "Send your location first.",
+            }[pastoralist.preferred_language],
+        )
+        return
+    lon, lat = loc
+
+    # Re-validate to be safe against a stale pin.
+    result = water_validation.validate_pin(lon, lat)
+    if result.is_duplicate:
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Eneo hili limeandikishwa tayari. Tuma 'map' kuona ramani yake.",
+                "english": "This location is already registered. Send 'map' to see it.",
+            }[pastoralist.preferred_language],
+        )
+        return
+
+    # Confidence from validation: near a known source = moderate; otherwise low
+    # until a herder confirms it in the field.
+    confidence = 0.6 if result.has_nearby_source else 0.45
     try:
-        ws = water_sources.create_water_source(lon=lon, lat=lat, source_type="ground_truth",
-                                               confidence=0.5)
+        ws = water_sources.create_water_source(
+            lon=lon, lat=lat, source_type="ground_truth",
+            source_ref=f"whatsapp:{water_type}:{phone}", confidence=confidence,
+        )
     except Exception:  # noqa: BLE001
         log.exception(f"Failed to register water point for {phone}")
+        conversation.clear_state(phone)
         whatsapp_client.send_text(
             phone,
             {
@@ -392,14 +589,15 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
         return
 
     build_tracker.start_build(ws.id, phone, pastoralist.preferred_language)
+    conversation.clear_state(phone)
     _send_reply(
         phone,
         pastoralist,
         {
-            "swahili": "Asante! Tumeanza kujenga chanzo chako cha maji. "
-                       "Tutakutumia maendeleo ya hatua kwa hatua — subiri kidogo.",
-            "english": "Thank you! We have started building your water point. "
-                       "We will send you progress updates — hang on.",
+            "swahili": "Asante! Eneo lako limeandikishwa kama chanzo cha maji na "
+                       "tumeanza kujenga taarifa zake. Tutakutumia maendeleo ya hatua kwa hatua — subiri kidogo.",
+            "english": "Thank you! Your location is now registered as a water source and "
+                       "we have started building its info. We will send progress updates — hang on.",
         }[pastoralist.preferred_language],
         voice=pastoralist.voice_replies,
     )
@@ -439,3 +637,342 @@ def _handle_status_request(phone: str, pastoralist) -> None:
                        "send 'status' later or contact us.",
         }[pastoralist.preferred_language]
     _send_reply(phone, pastoralist, text, voice=pastoralist.voice_replies)
+
+
+# =============================================================================
+# Guided conversation flows (onboarding / weight / pin)
+# =============================================================================
+
+
+def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
+    """Resume an in-progress guided flow. Returns True if the message was
+    consumed by a flow (even if the user typed something off-flow, we keep the
+    state so they can abandon it with 'stop')."""
+    state, data = conversation.get_state(phone)
+    if not state:
+        return False
+
+    if state.startswith("onboarding."):
+        _handle_onboarding_step(phone, pastoralist, text)
+        return True
+    if state.startswith("weight."):
+        _handle_weight_step(phone, pastoralist, state, data, text)
+        return True
+    if state.startswith("pin."):
+        _handle_pin_step(phone, pastoralist, state, data, text)
+        return True
+    return False
+
+
+# --- onboarding --------------------------------------------------------------
+
+def _start_onboarding(phone: str, pastoralist, text: str, voice: bool = False) -> None:
+    conversation.set_state(phone, "onboarding.name", {})
+    whatsapp_client.send_text(phone, registration.ASK_NAME[pastoralist.preferred_language])
+
+
+def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
+    state, data = conversation.get_state(phone)
+    lang = pastoralist.preferred_language
+    t = (text or "").strip().lower()
+
+    if t in ("stop", "isha", "cancel", "ghairi"):
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, registration.WELCOME.format(name="").strip())
+        return
+
+    if state == "onboarding.name":
+        if not text or len(text.strip()) < 2:
+            whatsapp_client.send_text(phone, registration.ASK_NAME[lang])
+            return
+        registration.set_name(phone, text.strip().title())
+        data["name"] = text.strip().title()
+        conversation.set_state(phone, "onboarding.language", data)
+        whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=data["name"]))
+
+    elif state == "onboarding.language":
+        for language, keys in LANGUAGE_KEYWORDS.items():
+            if any(k in t for k in keys):
+                registration.set_language(phone, language)
+                pastoralist.preferred_language = language
+                data["language"] = language
+                break
+        else:
+            whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=data.get("name", "")))
+            return
+        conversation.set_state(phone, "onboarding.animals", data)
+        whatsapp_client.send_quick_reply_buttons(
+            phone, registration.ASK_ANIMALS[pastoralist.preferred_language], registration.ANIMAL_BUTTONS
+        )
+
+    elif state == "onboarding.animals":
+        species = registration.detect_species(t)
+        if species is None:
+            whatsapp_client.send_text(phone, registration.ASK_ANIMALS[pastoralist.preferred_language])
+            return
+        data["primary_species"] = species
+        upsert_pastoralist(phone, species=species)
+        conversation.set_state(phone, "onboarding.count", data)
+        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+
+    elif state == "onboarding.count":
+        count = _parse_int(t)
+        if count is None:
+            whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+            return
+        species = data.get("primary_species", "cattle")
+        data["herd_composition"] = {species: count}
+        registration.complete_onboarding(phone, {species: count})
+        conversation.clear_state(phone)
+
+        name = data.get("name", "")
+        whatsapp_client.send_text(
+            phone, registration.ONBOARDING_DONE[pastoralist.preferred_language].format(name=name)
+        )
+        if get_last_location(phone):
+            whatsapp_client.send_text(
+                phone, registration.NO_WATER_GUIDANCE[pastoralist.preferred_language].format(name=name)
+            )
+
+
+def _parse_int(text: str | None) -> int | None:
+    if not text:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
+# --- weight flow -------------------------------------------------------------
+
+def _start_weight_flow(phone: str, pastoralist) -> None:
+    conversation.set_state(phone, "weight.species", {})
+    whatsapp_client.send_text(phone, WEIGHT_MSG[pastoralist.preferred_language])
+    whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[pastoralist.preferred_language],
+                                             WEIGHT_ANIMAL_BUTTONS)
+
+
+def _handle_weight_step(phone: str, pastoralist, state: str, data: dict, text: str | None) -> None:
+    lang = pastoralist.preferred_language
+    t = (text or "").strip().lower()
+
+    if any(k in t for k in DONE_KEYWORDS):
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Sawa! Kama unahitaji kupima tena, tuma 'uzito' wakati wowote.",
+                "english": "Okay! If you want to measure again, send 'weight' anytime.",
+            }[lang],
+        )
+        return
+
+    if state == "weight.species":
+        species = _weight_species_from_text(t)
+        if species is None:
+            whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
+            return
+        data["species"] = species
+        conversation.set_state(phone, "weight.age", data)
+        whatsapp_client.send_quick_reply_buttons(phone, ASK_AGE[lang], WEIGHT_AGE_BUTTONS)
+
+    elif state == "weight.age":
+        age = None
+        for a, keys in AGE_KEYWORDS.items():
+            if any(k in t for k in keys):
+                age = a
+                break
+        if age is None:
+            whatsapp_client.send_text(phone, ASK_AGE[lang])
+            return
+        data["age"] = age
+        conversation.set_state(phone, "weight.girth", data)
+        guide = weight_service.measurement_guide(lang)
+        whatsapp_client.send_text(phone, ASK_GIRTH[lang].format(guide=guide))
+
+    elif state == "weight.girth":
+        girth = _parse_float(text)
+        species = data.get("species", "cattle")
+        if girth is None:
+            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error="si namba"))
+            return
+        ok, err = weight_service.validate_girth(species, girth)
+        if not ok:
+            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error=err or ""))
+            return
+        est = weight_service.estimate_weight(species, girth, data.get("age", "adult"))
+        try:
+            weight_service.record_weight(
+                pastoralist.id, species, girth, est.weight_kg,
+                age_class=data.get("age"), sex=None,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("failed to save weight record")
+        med = weight_service.medication_note(lang)
+        whatsapp_client.send_text(
+            phone,
+            WEIGHT_RESULT[lang].format(weight=est.weight_kg, girth=girth, medication=med),
+        )
+        data["last_girth"] = girth
+        conversation.set_state(phone, "weight.idle", data)
+
+    elif state == "weight.idle":
+        if any(k in t for k in WEIGHT_KEYWORDS):
+            conversation.set_state(phone, "weight.species", {})
+            whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
+            whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang], WEIGHT_ANIMAL_BUTTONS)
+            return
+        if any(k in t for k in HERD_KEYWORDS):
+            conversation.set_state(phone, "weight.herd_count", {**data, "samples": []})
+            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+            return
+        whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
+        whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang], WEIGHT_ANIMAL_BUTTONS)
+        conversation.set_state(phone, "weight.species", {})
+
+    elif state == "weight.herd_count":
+        count = _parse_int(text)
+        if count is None or count < 1:
+            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+            return
+        data["herd_count"] = count
+        data["samples"] = []
+        conversation.set_state(phone, "weight.sample", data)
+        whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3))
+
+    elif state == "weight.sample":
+        species = data.get("species", "cattle")
+        samples: list[float] = list(data.get("samples") or [])
+        numbers = _parse_many_floats(text)
+        for n in numbers:
+            ok, _ = weight_service.validate_girth(species, n)
+            if ok:
+                samples.append(n)
+        if not numbers:
+            whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3))
+            return
+        data["samples"] = samples
+        if len(samples) >= 3:
+            _finish_herd_estimate(phone, pastoralist, data)
+            return
+        conversation.set_state(phone, "weight.sample", data)
+        whatsapp_client.send_text(phone, SAMPLE_PARTIAL[lang].format(count=len(samples)))
+
+
+def _finish_herd_estimate(phone: str, pastoralist, data: dict) -> None:
+    lang = pastoralist.preferred_language
+    species = data.get("species", "cattle")
+    herd_count = int(data.get("herd_count", 1))
+    samples: list[float] = list(data.get("samples") or [])
+    if not samples:
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+        return
+    age = data.get("age", "adult")
+    herd = weight_service.estimate_herd(species, herd_count, samples, age_class=age)
+    try:
+        weight_service.record_herd_estimate(
+            pastoralist.id, species, herd.herd_count, herd.sample_size,
+            herd.sample_mean_kg, herd.estimated_total_kg,
+            herd.low_estimate_kg, herd.high_estimate_kg,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("failed to save herd estimate")
+    med = weight_service.medication_note(lang)
+    label = _species_label(species, lang)
+    whatsapp_client.send_text(
+        phone,
+        HERD_RESULT[lang].format(
+            species=label, count=herd.herd_count, sample=herd.sample_size,
+            mean=herd.sample_mean_kg, total=herd.estimated_total_kg,
+            low=herd.low_estimate_kg, high=herd.high_estimate_kg, medication=med,
+        ),
+    )
+    conversation.clear_state(phone)
+
+
+def _weight_species_from_text(t: str) -> str | None:
+    for key, aliases in {
+        "cattle": ["cattle", "cow", "ng'ombe", "ngombe"],
+        "goat": ["goat", "mbuzi"],
+        "sheep": ["sheep", "kondoo"],
+        "camel": ["camel", "ngamia", "gaala"],
+    }.items():
+        if any(a in t for a in aliases):
+            return key
+    if "weight:" in t:
+        return t.split("weight:", 1)[1].strip()
+    return None
+
+
+def _parse_float(text: str | None) -> float | None:
+    if not text:
+        return None
+    cleaned = text.strip().replace(",", ".")
+    digits = [ch for ch in cleaned if ch.isdigit() or ch == "."]
+    if not digits or digits.count(".") > 1:
+        return None
+    try:
+        return float("".join(digits))
+    except ValueError:
+        return None
+
+
+def _parse_many_floats(text: str | None) -> list[float]:
+    if not text:
+        return []
+    out = []
+    for token in text.replace(",", " ").split():
+        val = _parse_float(token)
+        if val is not None:
+            out.append(val)
+    return out
+
+
+def _species_label(species: str, lang: str) -> str:
+    labels = {
+        "cattle": {"swahili": "ng'ombe", "english": "cattle"},
+        "goat": {"swahili": "mbuzi", "english": "goats"},
+        "sheep": {"swahili": "kondoo", "english": "sheep"},
+        "camel": {"swahili": "ngamia", "english": "camels"},
+    }
+    return labels.get(species, {}).get(lang, species)
+
+
+# --- pin flow ----------------------------------------------------------------
+
+def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str | None) -> None:
+    lang = pastoralist.preferred_language
+    t = (text or "").strip().lower()
+
+    if state == "pin.confirm":
+        water_type = None
+        for key in water_validation.WATER_TYPES:
+            if f"type:{key}" in t:
+                water_type = key
+                break
+        if water_type is None:
+            if any(w in t for w in ["borehole", "kisima", "bore"]):
+                water_type = "borehole"
+            elif any(w in t for w in ["well", "kuchimba"]):
+                water_type = "well"
+            elif any(w in t for w in ["river", "mto"]):
+                water_type = "river"
+            elif any(w in t for w in ["pan", "bwawa", "dam"]):
+                water_type = "pan"
+            elif any(w in t for w in ["spring", "chemchemi"]):
+                water_type = "spring"
+        if water_type is None:
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": "Chagua aina ya chanzo cha maji: borehole, kisima cha kuchimba, mto, bwawa, au chemchemi.",
+                    "english": "Choose the water type: borehole, well, river, pan, or spring.",
+                }[lang],
+            )
+            return
+        _finish_pin_registration(phone, pastoralist, water_type)
