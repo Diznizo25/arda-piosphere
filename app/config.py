@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -77,6 +77,28 @@ class Settings(BaseSettings):
 
     species_rings_path: Path = CONFIG_DIR / "species_rings.yaml"
     advisory_thresholds_path: Path = CONFIG_DIR / "advisory_thresholds.yaml"
+
+    # Guard against stray whitespace/newlines sneaking into env values (e.g. a
+    # trailing newline when a secret is pasted into GitHub Actions). Trimming
+    # connection strings and credentials here prevents "database X\n does not
+    # exist" style failures caused by a copied newline.
+    @field_validator(
+        "database_url",
+        "supabase_url",
+        "supabase_service_role_key",
+        "r2_account_id",
+        "r2_access_key_id",
+        "r2_secret_access_key",
+        "r2_bucket_name",
+        "r2_endpoint_url",
+        "gee_project_id",
+        "gee_service_account_email",
+        "gee_export_drive_folder",
+        "gee_export_gcs_bucket",
+    )
+    @classmethod
+    def _strip_whitespace(cls, v):
+        return v.strip() if isinstance(v, str) else v
 
 
 class SpeciesRingConfig:
