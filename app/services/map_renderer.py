@@ -103,7 +103,7 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     half = IMG_SIZE / 2 * mpp
     west, north = center_x - half, center_y + half
 
-    img = _build_base_map(zoom, west, north, mpp)
+    img = _build_base_map(zoom, center_x, center_y, mpp)
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
@@ -203,8 +203,13 @@ def _draw_compass(draw: ImageDraw.ImageDraw) -> None:
     draw.text((cx - 3, cy + 16), "N", fill=(40, 40, 40), font=font)
 
 
-def _build_base_map(zoom: int, west: float, north: float, mpp: float) -> Image.Image:
+def _build_base_map(zoom: int, center_x: float, center_y: float, mpp: float) -> Image.Image:
     """Assemble the OSM tile mosaic for the viewport; blank fallback on failure.
+
+    center_x/center_y are the viewport center in EPSG:3857 metres. Pixel (col,
+    row) in the world tile grid: col = world_px/2 + x/mpp_world,
+    row = world_px/2 - y/mpp_world  (row grows SOUTHWARD; mercator y is
+    positive north). The viewport is IMG_SIZE pixels around that center.
 
     Tiles are fetched concurrently with a short timeout so the map always
     renders in a few seconds even when the tile server is slow/unreachable
@@ -213,12 +218,11 @@ def _build_base_map(zoom: int, west: float, north: float, mpp: float) -> Image.I
     import concurrent.futures
 
     img = Image.new("RGB", (IMG_SIZE, IMG_SIZE), (228, 224, 216))
-    # World in mercator at this zoom: 40075016.686 m over 256*2^z px.
     world_px = TILE * (2 ** zoom)
     mpp_world = 40075016.686 / world_px
-    # Center pixel of the viewport in world-tile-pixel space.
-    cx_px = west / mpp_world + world_px / 2
-    cy_px = north / mpp_world + world_px / 2  # mercator y grows downward
+    # Centre pixel of the viewport in world-tile-pixel space.
+    cx_px = world_px / 2 + center_x / mpp_world
+    cy_px = world_px / 2 - center_y / mpp_world
     tiles_per_side = IMG_SIZE // TILE + 1
     half = IMG_SIZE / 2 / mpp_world
     left_px, top_px = cx_px - half, cy_px - half
