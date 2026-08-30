@@ -465,13 +465,15 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         return
 
     water_source_id = candidates[0].water_source_id
-    url = f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
+    url = f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png?lat={lat}&lon={lon}"
     whatsapp_client.send_image_bytes_url(
         phone,
         url,
         caption={
-            "swahili": "Ramani ya duara za wanyama wako karibu na chanzo hiki cha maji.",
-            "english": "Map of your animals' rings around this water source.",
+            "swahili": f"Ramani ya duara za wanyama wako karibu na chanzo hiki cha maji. "
+                       f"Bluu = 'wewe hapa', nyekundu = chanzo cha maji.",
+            "english": f"Map of your animals' rings around this water source. "
+                       f"Blue = 'you are here', red = water source.",
         }[pastoralist.preferred_language],
     )
 
@@ -682,13 +684,23 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         return
 
     if state == "onboarding.name":
-        if not text or len(text.strip()) < 2:
-            whatsapp_client.send_text(phone, registration.ASK_NAME[lang])
+        if not registration.is_valid_name(text or ""):
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": "Samahani, tafadhali andika jina lako halisi (herufi pekee). "
+                               "Jina lako ni nani?",
+                    "english": "Sorry, please type your real name (letters only). "
+                               "What is your name?",
+                }[lang],
+            )
             return
-        registration.set_name(phone, text.strip().title())
-        data["name"] = text.strip().title()
+        name = text.strip().title()
+        registration.set_name(phone, name)
+        data["name"] = name
+        data["composition"] = {}
         conversation.set_state(phone, "onboarding.language", data)
-        whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=data["name"]))
+        whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=name))
 
     elif state == "onboarding.language":
         for language, keys in LANGUAGE_KEYWORDS.items():
@@ -710,29 +722,80 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         if species is None:
             whatsapp_client.send_text(phone, registration.ASK_ANIMALS[pastoralist.preferred_language])
             return
-        data["primary_species"] = species
-        upsert_pastoralist(phone, species=species)
+        data["species"] = species
         conversation.set_state(phone, "onboarding.count", data)
         whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
 
+    elif state == "onboarding.more_type":
+        species = registration.detect_species(t)
+        if species is None:
+            whatsapp_client.send_text(phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language])
+            return
+        data["species"] = species
+        conversation.set_state(phone, "onboarding.count", data)
+        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+
+    elif state == "onboarding.more":
+        if any(k in t for k in ("yes", "ndiyo", "ndio", "ndiyo!", "sawa", "naam", "yes_more")):
+            conversation.set_state(phone, "onboarding.more_type", data)
+            whatsapp_client.send_quick_reply_buttons(
+                phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language], registration.ANIMAL_BUTTONS
+            )
+            return
+        if any(k in t for k in ("no", "hapana", "no_more", "kumaliza", "la", "siyo")):
+            # No more animals -> finish onboarding.
+            _finish_onboarding(phone, pastoralist, data)
+            return
+        whatsapp_client.send_text(phone, registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language])
+        whatsapp_client.send_quick_reply_buttons(
+            phone,
+            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language],
+            [("yes_more", "Ndiyo, nyingine"), ("no_more", "Hapana, kumaliza")],
+        )
+        return
+
     elif state == "onboarding.count":
         count = _parse_int(t)
-        if count is None:
+        if count is None or count < 1:
             whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
             return
-        species = data.get("primary_species", "cattle")
-        data["herd_composition"] = {species: count}
-        registration.complete_onboarding(phone, {species: count})
-        conversation.clear_state(phone)
+        species = data.get("species", "cattle")
+        composition: dict = dict(data.get("composition") or {})
+        composition[species] = composition.get(species, 0) + count
+        data["composition"] = composition
+        data["primary_species"] = data.get("primary_species") or species
 
-        name = data.get("name", "")
+        # Loop: ask whether there are other animal types (pastoralists are mixed).
+        label = registration.SPECIES_LABELS.get(species, {}).get(lang, species)
+        conversation.set_state(phone, "onboarding.more", data)
         whatsapp_client.send_text(
-            phone, registration.ONBOARDING_DONE[pastoralist.preferred_language].format(name=name)
+            phone,
+            registration.ADDED_ANIMAL[lang].format(species_label=label, count=count),
         )
-        if get_last_location(phone):
-            whatsapp_client.send_text(
-                phone, registration.NO_WATER_GUIDANCE[pastoralist.preferred_language].format(name=name)
-            )
+        whatsapp_client.send_quick_reply_buttons(
+            phone,
+            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language],
+            [("yes_more", "Ndiyo, nyingine"), ("no_more", "Hapana, kumaliza")],
+        )
+
+
+def _finish_onboarding(phone: str, pastoralist, data: dict) -> None:
+    composition: dict = data.get("composition") or {}
+    if not composition:
+        composition = {data.get("primary_species", "cattle"): 1}
+    primary = data.get("primary_species") or next(iter(composition))
+    upsert_pastoralist(phone, species=primary)
+    registration.complete_onboarding(phone, composition)
+    conversation.clear_state(phone)
+
+    name = data.get("name", "")
+    whatsapp_client.send_text(
+        phone, registration.ONBOARDING_DONE[pastoralist.preferred_language].format(name=name)
+    )
+    if get_last_location(phone):
+        whatsapp_client.send_text(
+            phone, registration.NO_WATER_GUIDANCE[pastoralist.preferred_language].format(name=name)
+        )
 
 
 def _parse_int(text: str | None) -> int | None:

@@ -37,4 +37,8 @@ def get_pg_connection() -> psycopg.Connection:
             "DATABASE_URL is not set. Copy .env.example to .env and fill in your "
             "Supabase Postgres connection string (Settings -> Database -> Connection string)."
         )
-    return psycopg.connect(settings.database_url, row_factory=dict_row)
+    # connect_timeout keeps a flaky network from hanging the request path.
+    url = settings.database_url
+    sep = "&" if "?" in url else "?"
+    url = f"{url}{sep}connect_timeout=10"
+    return psycopg.connect(url, row_factory=dict_row)

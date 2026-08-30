@@ -64,6 +64,25 @@ ASK_COUNT = {
     "english": "Roughly how many? (e.g. '12') — send the total number of animals.",
 }
 
+ASK_OTHER_ANIMALS = {
+    "swahili": "Je, una wanyama wa aina nyingine pia? (k.m. mbuzi, kondoo, au ngamia) — "
+               "chagua 'Ndiyo' kuongeza, au 'Hapana' kumaliza.",
+    "english": "Do you also have other kinds of animals? (e.g. goats, sheep, or camels) — "
+               "choose 'Yes' to add more, or 'No' to finish.",
+}
+
+ASK_MORE_TYPE = {
+    "swahili": "Una aina gani nyingine? (Chagua: ng'ombe, mbuzi/kondoo, au ngamia)",
+    "english": "Which other type? (Choose: cattle, sheep/goats, or camels)",
+}
+
+ADDED_ANIMAL = {
+    "swahili": "Sawa, nimeongeza {species_label} ({count}). Je, una aina nyingine pia? "
+               "(chagua 'Ndiyo' kuongeza, 'Hapana' kumaliza)",
+    "english": "Okay, added {species_label} ({count}). Do you have any other type too? "
+               "(choose 'Yes' to add, 'No' to finish)",
+}
+
 NO_WATER_GUIDANCE = {
     "swahili": "Mashukuru! {name}, chanzo chako cha maji hakijasajiliwa bado.\n"
                "Hatua zinazofuata:\n"
@@ -93,6 +112,39 @@ def detect_species(text: str) -> str | None:
         if any(k in t for k in keys):
             return species
     return None
+
+
+def is_valid_name(text: str) -> bool:
+    """A name must be 2+ letters, contain no digits, and not be a keyword we
+    would otherwise misinterpret (animal type, language, or flow commands)."""
+    if not text:
+        return False
+    name = text.strip()
+    if len(name) < 2:
+        return False
+    letters = [ch for ch in name if ch.isalpha() or ch in (" ", "'", "-")]
+    if len(letters) < 2:
+        return False
+    if any(ch.isdigit() for ch in name):
+        return False
+    t = name.lower()
+    reserved = [
+        "cattle", "cow", "ng'ombe", "ngombe", "shoat", "goat", "sheep",
+        "kondoo", "mbuzi", "camel", "ngamia", "swahili", "english",
+        "kiswahili", "kiingereza", "stop", "isha", "cancel", "ghairi",
+        "uzito", "weight", "pin", "map", "status", "hali", "delete", "futa",
+        "yes", "no", "ndiyo", "ndio", "hapana", "sawa", "naam", "la",
+        "hello", "hi", "jambo", "habari", "mambo", "hey", "sema", "bro",
+        "yes_more", "no_more", "type", "age",
+    ]
+    return not any(k in t for k in reserved)
+
+
+SPECIES_LABELS = {
+    "cattle": {"swahili": "ng'ombe", "english": "cattle"},
+    "shoat": {"swahili": "mbuzi/kondoo", "english": "sheep/goats"},
+    "camel": {"swahili": "ngamia", "english": "camels"},
+}
 
 
 def set_name(phone: str, name: str) -> None:
