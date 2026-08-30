@@ -8,6 +8,7 @@ SQLAlchemy==2.0.35
 GeoAlchemy2==0.15.2
 supabase==2.9.0
 rasterio==1.3.11
+tifffile==2024.8.30
 shapely==2.0.6
 pyproj==3.6.1
 geopandas==1.0.1

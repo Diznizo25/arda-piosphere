@@ -49,6 +49,7 @@ join water_sources ws on ws.id = pz.water_source_id
 where pz.species = 'camel'
   and (%(ward)s::text is null or ws.ward = %(ward)s)
   and (%(county)s::text is null or ws.county = %(county)s)
+  and (%(water_source_id)s::uuid is null or ws.id = %(water_source_id)s)
 """
 
 MARK_COMPUTED_SQL = """
@@ -58,16 +59,30 @@ where water_source_id = %(water_source_id)s and species = 'camel'
 """
 
 
-def fetch_scope(ward: str | None, county: str | None) -> list[dict]:
+def fetch_scope(ward: str | None, county: str | None, water_source_id: str | None = None) -> list[dict]:
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(FETCH_SQL, {"ward": ward, "county": county})
+            cur.execute(
+                FETCH_SQL,
+                {"ward": ward, "county": county, "water_source_id": water_source_id},
+            )
             return cur.fetchall()
 
 
 def asset_id_for(water_source_id: str) -> str:
     settings = get_settings()
     return f"projects/{settings.gee_project_id}/assets/piosphere/{water_source_id}"
+
+
+def asset_exists(water_source_id: str) -> bool:
+    """True if the GEE asset already exists (so re-runs skip the export)."""
+    import ee
+
+    try:
+        ee.data.getAsset(asset_id_for(water_source_id))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def submit_asset_task(water_source_id: str, geom_geojson: str, as_of_date: str,
@@ -163,11 +178,13 @@ def poll_and_transfer(tasks: dict[str, object], poll_interval_s: int = 20,
 
 def run(ward: str | None, county: str | None, as_of_date: str,
         composite_window_days: int, vci_years_back: int, batch_size: int,
-        timeout_s: int = 10800):
+        timeout_s: int = 10800, water_source_id: str | None = None,
+        export_only: bool = False):
     init_earth_engine()
 
-    rows = fetch_scope(ward, county)
-    log.info(f"Scope ward={ward!r} county={county!r}: {len(rows)} water points to compute")
+    rows = fetch_scope(ward, county, water_source_id)
+    log.info(f"Scope ward={ward!r} county={county!r} water_source={water_source_id!r}: "
+             f"{len(rows)} water points to compute")
     if not rows:
         log.warning("Nothing in scope — did you run generate_piosphere_zones.py for this ward/county?")
         return
@@ -177,18 +194,49 @@ def run(ward: str | None, county: str | None, as_of_date: str,
         batch = rows[i:i + batch_size]
         log.info(f"Submitting batch {i // batch_size + 1} ({len(batch)} water points)...")
         tasks = {}
+        skipped = 0
         for row in batch:
+            ws_id = str(row["water_source_id"])
+            if asset_exists(ws_id):
+                log.info(f"Asset already exists for {ws_id[:8]} — skipping export")
+                skipped += 1
+                continue
             task = submit_asset_task(
-                str(row["water_source_id"]), row["geom_geojson"], as_of_date,
+                ws_id, row["geom_geojson"], as_of_date,
                 composite_window_days, vci_years_back,
             )
-            tasks[str(row["water_source_id"])] = task
+            tasks[ws_id] = task
 
-        ok, failed = poll_and_transfer(tasks, timeout_s=timeout_s)
-        total_ok += len(ok)
-        total_failed += len(failed)
+        if skipped:
+            log.info(f"{skipped} asset(s) already exported, not resubmitted.")
 
-    log.info(f"Done. {totoal_ok} COGs computed + transferred, {total_failed} failed.")
+        if export_only:
+            # Only create the GEE assets; the caller transfers them to R2 with
+            # the tiled transfer script (single-shot download can exceed limits).
+            pending = dict(tasks)
+            done_ok, done_failed = [], []
+            while pending:
+                for ws_id, task in list(pending.items()):
+                    state = task.status().get("state")
+                    if state == "COMPLETED":
+                        done_ok.append(ws_id)
+                        pending.pop(ws_id)
+                    elif state in ("FAILED", "CANCELLED"):
+                        done_failed.append(ws_id)
+                        pending.pop(ws_id)
+                if pending:
+                    log.info(f"{len(pending)} export tasks still running, waiting 20s...")
+                    time.sleep(20)
+            total_ok += len(done_ok) + skipped
+            total_failed += len(done_failed)
+        else:
+            ok, failed = poll_and_transfer(tasks, timeout_s=timeout_s)
+            total_ok += len(ok) + skipped
+            total_failed += len(failed)
+
+    log.info(f"Done. {total_ok} COGs computed + transferred, {total_failed} failed.")
+    if total_failed:
+        raise RuntimeError(f"{total_failed} water point(s) failed to export")
 
 
 def main():
@@ -196,14 +244,19 @@ def main():
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--ward", help="Restrict to a single ward (validation gate)")
     scope.add_argument("--county", help="Restrict to a full county (scale-up)")
+    scope.add_argument("--water-source", help="Restrict to a single water_source id (pin flow)")
     parser.add_argument("--as-of-date", default=date.today().isoformat())
     parser.add_argument("--composite-window-days", type=int, default=30)
     parser.add_argument("--vci-years-back", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--timeout-s", type=int, default=10800)
+    parser.add_argument("--export-only", action="store_true",
+                        help="Only create GEE assets; skip the R2 upload (the tiled "
+                             "transfer script uploads to R2 afterwards).")
     args = parser.parse_args()
     run(args.ward, args.county, args.as_of_date, args.composite_window_days,
-        args.vci_years_back, args.batch_size, args.timeout_s)
+        args.vci_years_back, args.batch_size, args.timeout_s, args.water_source,
+        args.export_only)
 
 
 if __name__ == "__main__":

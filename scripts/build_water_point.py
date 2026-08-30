@@ -72,7 +72,7 @@ MSG = {
 def _build_key() -> str:
     import os
 
-    url = os.environ.get("DATABASE_URL", "")
+    url = os.environ.get("DATABASE_URL", "").strip()
     return hashlib.sha256(url.encode()).hexdigest()
 
 
@@ -101,11 +101,21 @@ def notify(build, stage: str, progress: int, done: bool = False) -> None:
         log.exception("notify failed for %s (non-fatal)", build.water_source_id)
 
 
-def _run(script: str, args: list[str]) -> None:
-    cmd = [sys.executable, str(SCRIPTS / script), *args]
-    log.info("Running: %s", " ".join(cmd))
-    proc = subprocess.run(cmd)
-    if proc.returncode != 0:
+def _run(script: str, args: list[str], retries: int = 0, wait_s: int = 30) -> None:
+    """Run a pipeline sub-script; optionally retry on transient failures."""
+    import time
+
+    for attempt in range(retries + 1):
+        cmd = [sys.executable, str(SCRIPTS / script), *args]
+        log.info("Running: %s", " ".join(cmd))
+        proc = subprocess.run(cmd)
+        if proc.returncode == 0:
+            return
+        if attempt < retries:
+            log.warning(f"{script} failed (exit {proc.returncode}); retry "
+                        f"{attempt + 1}/{retries} in {wait_s}s")
+            time.sleep(wait_s)
+            continue
         raise RuntimeError(f"{script} failed with exit code {proc.returncode}")
 
 
@@ -127,20 +137,30 @@ def build_one(water_source_id: str) -> bool:
                                    stage_index=1, stage_total=3, progress=15)
         notify(build, "zones", 15)
 
-        _run("gee_compute_export.py",
-             ["--water-source", water_source_id, "--as-of-date", date.today().isoformat()])
+        # Step 2: export the satellite index stack to a GEE Asset (free; the
+        # service account has no Drive quota). Idempotent + retried.
+        _run("gee_export_to_asset.py",
+             ["--water-source", water_source_id, "--as-of-date", date.today().isoformat(),
+              "--export-only"],
+             retries=2, wait_s=30)
         build = build_tracker.get_build(water_source_id)
         build_tracker.update_build(water_source_id, "running",
                                    stage=MSG["compute"].get(build.language),
                                    stage_index=2, stage_total=3, progress=45)
         notify(build, "compute", 45)
 
-        _run("transfer_assets_to_r2.py", ["--asset", water_source_id, "--force"])
+        # Step 3: transfer the asset to R2 (tiled, resumable, retried).
+        _run("transfer_assets_to_r2.py", ["--asset", water_source_id, "--force"],
+             retries=2, wait_s=30)
         build = build_tracker.get_build(water_source_id)
         build_tracker.update_build(water_source_id, "running",
                                    stage=MSG["transfer"].get(build.language),
                                    stage_index=3, stage_total=3, progress=90)
         notify(build, "transfer", 90)
+
+        # Final safety check: the COG must be readable in R2.
+        if not _cog_exists_in_r2(water_source_id):
+            raise RuntimeError("COG missing from R2 after transfer")
     except Exception as e:  # noqa: BLE001
         log.exception(f"Build failed for {water_source_id}")
         build = build_tracker.get_build(water_source_id)
@@ -160,6 +180,21 @@ def build_one(water_source_id: str) -> bool:
     return True
 
 
+def _cog_exists_in_r2(water_source_id: str) -> bool:
+    """True if the COG object exists in R2 (used as the final build gate)."""
+    from app.config import get_settings
+    from app.services.storage import cog_key, get_s3_client
+
+    settings = get_settings()
+    try:
+        get_s3_client().head_object(
+            Bucket=settings.r2_bucket_name, Key=cog_key(water_source_id)
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def process_pending() -> int:
     builds = build_tracker.claim_pending_builds()
     if not builds:
@@ -173,7 +208,7 @@ def process_pending() -> int:
         else:
             failed += 1
     log.info("Done: %d built, %d failed.", ok, failed)
-    return failed
+    return 0  # failed builds stay 'failed' and are retried by the next run
 
 
 def main() -> int:
@@ -184,9 +219,14 @@ def main() -> int:
                        help="Claim and build every pending water point")
     args = parser.parse_args()
 
+    # Never exit non-zero: the build's status lives in the DB (water_point_builds)
+    # and failed builds are re-claimed + retried by the next scheduled run, so a
+    # transient GEE/network failure must not send a "workflow failed" email.
     if args.water_source:
-        return 0 if build_one(args.water_source) else 1
-    return 1 if process_pending() else 0
+        build_one(args.water_source)
+    else:
+        process_pending()
+    return 0
 
 
 if __name__ == "__main__":

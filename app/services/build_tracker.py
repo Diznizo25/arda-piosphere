@@ -57,7 +57,7 @@ select b.id, b.water_source_id, b.creator_phone, b.language, b.status,
        b.stage, b.stage_index, b.stage_total, b.progress, b.error, b.updated_at
 from water_point_builds b
 join water_sources ws on ws.id = b.water_source_id
-where b.status = 'pending'
+where b.status in ('pending', 'failed')
 order by b.created_at asc
 for update skip locked
 """
