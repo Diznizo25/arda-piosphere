@@ -383,7 +383,7 @@ def _build_pasture_overlay(water_source_id, west, north, mpp):
         my = _mercator_y(lats.astype(float))
         mx_c = float(np.average(mx, weights=wgt))
         my_c = float(np.average(my, weights=wgt))
-        best = (_mercator_x_inv(mx_c), _mercator_y_inv(my_c), int(score.max()))
+        best = (float(_mercator_x_inv(mx_c)), float(_mercator_y_inv(my_c)), int(score.max()))
 
     # Sample the classification into the IMG_SIZE viewport with an accurate
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
@@ -414,12 +414,18 @@ def _build_pasture_overlay(water_source_id, west, north, mpp):
     return Image.fromarray(out_rgba, "RGBA"), best, note
 
 
-def _mercator_x_inv(x: float) -> float:
-    return x * 180.0 / 20037508.34
+def _mercator_x_inv(x):
+    """Inverse Web Mercator x (m) -> longitude. Vectorised (numpy-safe)."""
+    import numpy as np
+
+    return np.asarray(x, dtype=float) * 180.0 / 20037508.34
 
 
-def _mercator_y_inv(y: float) -> float:
-    return math.degrees(math.atan(math.sinh(y * math.pi / 20037508.34)))
+def _mercator_y_inv(y):
+    """Inverse Web Mercator y (m) -> latitude. Vectorised (numpy-safe)."""
+    import numpy as np
+
+    return np.degrees(np.arctan(np.sinh(np.asarray(y, dtype=float) * np.pi / 20037508.34)))
 
 
 def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
