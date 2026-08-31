@@ -19,8 +19,9 @@ CACHE_TTL_SECONDS = 3600  # rings only change when zones are regenerated
 
 @lru_cache(maxsize=64)
 def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: float | None,
-                   version: int) -> bytes:
-    return render_rings_png(water_source_id, herder_lon, herder_lat)
+                   version: int, species: str | None, pasture: bool) -> bytes:
+    return render_rings_png(water_source_id, herder_lon, herder_lat,
+                            species=species, pasture=pasture)
 
 
 @router.get("/{water_source_id}.png")
@@ -28,16 +29,20 @@ def get_rings_map(
     water_source_id: str,
     lat: float | None = Query(default=None, ge=-90, le=90),
     lon: float | None = Query(default=None, ge=-180, le=180),
+    species: str | None = Query(default=None, pattern="^(cattle|shoat|camel)$"),
+    pasture: bool = Query(default=True, description="Show the satellite pasture layer."),
     v: int = Query(default=1, description="Cache-buster; bump when the renderer changes."),
 ) -> Response:
     """Render the species rings for a water point.
 
     Optional `lat`/`lon` query params mark the herder's position on the map
     (blue "You are here" pin + distance to the water) and center the view on
-    them, so the map shows where the herder is relative to the water.
+    them. `species` zooms to that species' ring, and `pasture=1` (default)
+    colours the map by satellite forage quality (green=dry-forage/grass,
+    red=bare) with a green arrow to the best pasture patch.
     """
     try:
-        png = _render_cached(water_source_id, lon, lat, v)
+        png = _render_cached(water_source_id, lon, lat, v, species, pasture)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:  # noqa: BLE001

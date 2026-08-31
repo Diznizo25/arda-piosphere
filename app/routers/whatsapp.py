@@ -532,16 +532,19 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         return
 
     water_source_id = candidates[0].water_source_id
+    species = pastoralist.primary_species or "camel"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
-           f"?lat={lat}&lon={lon}&v=2")
+           f"?lat={lat}&lon={lon}&species={species}&pasture=1&v=3")
     whatsapp_client.send_image_bytes_url(
         phone,
         url,
         caption={
-            "swahili": f"Ramani ya duara za wanyama wako karibu na chanzo hiki cha maji. "
-                       f"Bluu = 'wewe hapa', nyekundu = chanzo cha maji.",
-            "english": f"Map of your animals' rings around this water source. "
-                       f"Blue = 'you are here', red = water source.",
+            "swahili": f"Ramani ya malisho na duara za wanyama wako. "
+                       f"Bluu = 'wewe hapa', nyekundu = chanzo cha maji. "
+                       f"Kijani = malisho, nyekundu = eneo tupu, mshale wa kijani = malisho bora.",
+            "english": f"Pasture map with your animals' rings. "
+                       f"Blue = 'you are here', red = water source. "
+                       f"Green = pasture, red = bare, green arrow = best pasture.",
         }[pastoralist.preferred_language],
     )
 

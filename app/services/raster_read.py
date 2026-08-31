@@ -189,3 +189,30 @@ def _read_via_s3(water_source_id: str, geom) -> ZoneStats:
     return _read_band_means(out, transform, geom)
 
 
+def read_overview_array(water_source_id: str) -> tuple[np.ndarray, object] | None:
+    """Fetch the 8x overview COG for a water source and return (bands, transform).
+
+    Returns None if no COG/overview exists (e.g. the point has not been built).
+    The band order is NDVI, NDRE, SATVI, BSI, NDMI, NDWI, VCI, GSW.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    try:
+        client = get_s3_client()
+        obj = client.get_object(
+            Bucket=settings.r2_bucket_name, Key=cog_overview_key(water_source_id)
+        )
+        data = obj["Body"].read()
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        with MemoryFile(data) as memfile:
+            with memfile.open() as src:
+                out = src.read()
+                transform = src.transform
+        return out, transform
+    except Exception:  # noqa: BLE001
+        return None
+
+

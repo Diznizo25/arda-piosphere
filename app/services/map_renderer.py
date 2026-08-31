@@ -22,6 +22,7 @@ from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
+from app.config import get_advisory_thresholds
 from app.services import water_sources
 
 IMG_SIZE = 1024
@@ -74,14 +75,21 @@ def _compute_zoom(lat: float, max_radius_km: float) -> int:
 
 
 def render_rings_png(water_source_id: str, herder_lon: float | None = None,
-                     herder_lat: float | None = None) -> bytes:
-    """Render the water point's species rings to PNG bytes. Raises ValueError if
-    the water source (or its zones) doesn't exist.
+                     herder_lat: float | None = None, species: str | None = None,
+                     pasture: bool = True) -> bytes:
+    """Render the water point's rings — and, when pasture=True, the actual
+    satellite forage-quality layer — to PNG bytes. Raises ValueError if the
+    water source (or its zones) doesn't exist.
 
     When the herder's location is supplied, the view is centered on THE HERDER
     (not the water point) and both markers are drawn: blue "You are here" and a
     red water-source pin with a distance label — so the map answers "where am I
     relative to the water?" instead of showing a far-away circle.
+
+    With pasture=True the COG's SATVI/NDVI/BSI stack is rendered as a coloured
+    overlay: green = growing grass, olive = dry forage, red = bare ground,
+    yellow = unclear. A green arrow then points from the herder to the nearest
+    patch of good pasture, with distance + direction.
     """
     ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
     if ws is None:
@@ -91,42 +99,56 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
         raise ValueError(f"water_source {water_source_id} has no species rings")
 
     lat, lon = ws.lat, ws.lon
-    # Center the viewport on the herder when we know their position.
     c_lat = herder_lat if herder_lat is not None else lat
     c_lon = herder_lon if herder_lon is not None else lon
 
-    max_radius_km = max(z["radius_km"] for z in zones)
+    # Zoom so the HERDER'S species ring fits (more local + accurate); default
+    # to the widest ring when no species is known.
+    if species and any(z["species"] == species for z in zones):
+        max_radius_km = max(z["radius_km"] for z in zones if z["species"] == species)
+    else:
+        max_radius_km = max(z["radius_km"] for z in zones)
+
     zoom = _compute_zoom(c_lat, max_radius_km)
-    mpp = 156543.03392 * math.cos(math.radians(c_lat)) / (2 ** zoom)  # meters per pixel
+    mpp = 156543.03392 * math.cos(math.radians(c_lat)) / (2 ** zoom)
 
     center_x, center_y = _mercator_x(c_lon), _mercator_y(c_lat)
     half = IMG_SIZE / 2 * mpp
     west, north = center_x - half, center_y + half
 
     img = _build_base_map(zoom, center_x, center_y, mpp)
+
+    # Pasture-quality overlay (satellite forage classification) under the rings.
+    best_pasture: tuple[float, float, int] | None = None
+    pasture_note: str | None = None
+    if pasture:
+        pasture_img, best_pasture, pasture_note = _build_pasture_overlay(
+            water_source_id, west, north, mpp
+        )
+        if pasture_img is not None:
+            img = Image.alpha_composite(img.convert("RGBA"), pasture_img)
+
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     # Draw rings outer -> inner so the smallest stays on top.
     for zone in sorted(zones, key=lambda z: -z["radius_km"]):
         geom = shape(json.loads(zone["geojson"]))
-        geom = geom.simplify(tolerance=0.0004, preserve_topology=True)  # ~45m, plenty for a map
+        geom = geom.simplify(tolerance=0.0004, preserve_topology=True)
         style = RING_STYLE[zone["species"]]
         if geom.geom_type == "Polygon":
-            rings = [geom.exterior.coords]
+            rings_ = [geom.exterior.coords]
         elif geom.geom_type == "MultiPolygon":
-            rings = [p.exterior.coords for p in geom.geoms]
+            rings_ = [p.exterior.coords for p in geom.geoms]
         else:
             continue
-        for ring in rings:
+        for ring in rings_:
             pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
             draw.polygon(pts, fill=style[0], outline=style[1], width=3)
 
-    # Water source pin + its ward/county as a landmark label.
     wx, wy = _lonlat_to_px(lon, lat, west, north, mpp)
     _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.ward or "Water")
 
-    # "You are here" marker + straight-line distance to the water.
     if herder_lon is not None and herder_lat is not None:
         hx, hy = _lonlat_to_px(herder_lon, herder_lat, west, north, mpp)
         draw.line((hx, hy, wx, wy), fill=(30, 64, 175, 220), width=3)
@@ -137,8 +159,19 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
             (hx + 14, hy - 14),
             f"{dist_km:.1f} km to water" if dist_km >= 1 else f"{dist_km*1000:.0f} m to water",
         )
+        # Green arrow to the best pasture patch, with distance + direction.
+        if best_pasture is not None and (abs(best_pasture[0] - herder_lon) > 1e-6
+                                         or abs(best_pasture[1] - herder_lat) > 1e-6):
+            px_, py_ = _lonlat_to_px(best_pasture[0], best_pasture[1], west, north, mpp)
+            _draw_direction_arrow(draw, hx, hy, px_, py_)
+            bearing = _bearing_deg(herder_lat, herder_lon, best_pasture[1], best_pasture[0])
+            direction = _compass_label(bearing)
+            bp_dist = _haversine_km(herder_lat, herder_lon, best_pasture[1], best_pasture[0])
+            label = (f"Best pasture {direction}"
+                     + (f", {bp_dist:.1f} km" if bp_dist >= 1 else f", {bp_dist*1000:.0f} m"))
+            _draw_badge(draw, (hx - 240, hy + 30), label, fill=(22, 101, 52, 235))
 
-    _draw_legend(draw, zones, ward=ws.ward, county=ws.county)
+    _draw_legend(draw, zones, ward=ws.ward, county=ws.county, pasture_note=pasture_note)
     _draw_scale_bar(draw, mpp)
     _draw_compass(draw)
 
@@ -170,11 +203,12 @@ def _draw_pin(draw: ImageDraw.ImageDraw, x: float, y: float, fill: tuple, label:
     draw.text((x - tw / 2, by0 + 3), label, fill=(20, 20, 20), font=font)
 
 
-def _draw_badge(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str) -> None:
+def _draw_badge(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str,
+                fill: tuple = (37, 99, 235, 230)) -> None:
     font = ImageFont.load_default()
     tw = draw.textlength(text, font=font)
     x, y = xy
-    draw.rounded_rectangle((x, y, x + tw + 14, y + 18), radius=5, fill=(37, 99, 235, 230))
+    draw.rounded_rectangle((x, y, x + tw + 14, y + 18), radius=5, fill=fill)
     draw.text((x + 7, y + 3), text, fill=(255, 255, 255), font=font)
 
 
@@ -255,21 +289,160 @@ def _draw_marker(draw: ImageDraw.ImageDraw, west: float, north: float, mpp: floa
 
 
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,
-                 county: str | None = None) -> None:
+                 county: str | None = None, pasture_note: str | None = None) -> None:
     font = ImageFont.load_default()
-    line_h = 26
+    line_h = 24
     x0, y0 = 16, 16
     items = [(zone["species"], RING_STYLE[zone["species"]][1])
              for zone in sorted(zones, key=lambda z: z["radius_km"])]
+
+    pasture_rows = []
+    if pasture_note:
+        pasture_rows = [
+            ("Pasture layer", None),
+            ("  green = grass", (21, 128, 61, 255)),
+            ("  olive = dry forage", (132, 204, 22, 255)),
+            ("  red = bare", (220, 38, 38, 255)),
+            ("  yellow = unclear", (245, 158, 11, 255)),
+            (f"  {pasture_note}", None),
+        ]
+
     header = f"{ward or 'Water source'} · {county}" if county else (ward or "Water source")
-    header_h = 22
-    box_w = 200
-    box_h = header_h + len(items) * line_h + 12
-    draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 215))
-    draw.text((x0 + 12, y0 + 6), header, fill=(20, 20, 20), font=font)
-    for i, (species, color) in enumerate(items):
-        cy = y0 + header_h + 10 + i * line_h
+    header_h = 20
+    box_w = 210
+    box_h = header_h + len(items) * line_h + len(pasture_rows) * line_h + 12
+    draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 225))
+    draw.text((x0 + 12, y0 + 5), header, fill=(20, 20, 20), font=font)
+
+    cy = y0 + header_h + 8
+    for species, color in items:
         draw.ellipse((x0 + 12, cy - 5, x0 + 24, cy + 7), fill=color)
-        label = RING_STYLE[species][2]
+        draw.text((x0 + 32, cy - 8), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
+        cy += line_h
+
+    for label, color in pasture_rows:
+        if color:
+            draw.rectangle((x0 + 12, cy - 6, x0 + 24, cy + 6), fill=color)
         draw.text((x0 + 32, cy - 8), label, fill=(40, 40, 40), font=font)
+        cy += line_h
+
+
+
+# --- pasture overlay ---------------------------------------------------------
+
+
+def _build_pasture_overlay(water_source_id, west, north, mpp):
+    """Classify each COG pixel into a forage class and build an RGBA overlay.
+
+    Returns (overlay_image_or_None, best_pasture_(lon,lat,score), note).
+    """
+    from app.services.raster_read import read_overview_array
+
+    res = read_overview_array(water_source_id)
+    if res is None:
+        return None, None, None
+    arr, transform = res
+    if arr.shape[0] < 4:
+        return None, None, None
+
+    import numpy as np
+
+    t = get_advisory_thresholds().vegetation
+    ndvi, satvi, bsi = arr[0], arr[2], arr[3]
+
+    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
+    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
+    # 1 green | 2 dry forage | 3 bare | 4 uncertain
+    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
+    classes[good & (ndvi < t["ndvi_green_threshold"])
+            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi <= t["bsi_low_threshold"])] = 2
+    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
+    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
+    classes[good & (classes == 0)] = 4  # uncertain
+
+    # Fraction of valid pixels that are usable forage (for the legend note).
+    usable = int((classes == 1).sum()) + int((classes == 2).sum())
+    valid_px = int(good.sum())
+    note = None
+    if valid_px:
+        note = f"{100 * usable / valid_px:.0f}% usable pasture"
+
+    # Best-pasture patch: centroid of good pixels (green or dry), weighted by a
+    # simple score, converted back to lon/lat.
+    best = None
+    score = np.where(classes == 1, 3.0, np.where(classes == 2, 2.0, 0.0))
+    good_px = score > 0
+    if good_px.any():
+        rows_i, cols_i = np.nonzero(good_px)
+        wgt = score[good_px]
+        c0, f0 = transform.c, transform.f
+        a_, e_ = transform.a, transform.e
+        lons = c0 + cols_i * a_
+        lats = f0 + rows_i * e_
+        mx = _mercator_x(lons.astype(float))
+        my = _mercator_y(lats.astype(float))
+        mx_c = float(np.average(mx, weights=wgt))
+        my_c = float(np.average(my, weights=wgt))
+        best = (_mercator_x_inv(mx_c), _mercator_y_inv(my_c), int(score.max()))
+
+    # Sample the classification into the IMG_SIZE viewport with an accurate
+    # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
+    color_map = {
+        0: (0, 0, 0, 0),
+        1: (21, 128, 61, 110),
+        2: (132, 204, 22, 105),
+        3: (220, 38, 38, 105),
+        4: (245, 158, 11, 75),
+    }
+    h, w = classes.shape
+    iy, ix = np.mgrid[0:IMG_SIZE, 0:IMG_SIZE]
+    lon_img = _mercator_x_inv(west + ix * mpp)
+    lat_img = _mercator_y_inv(north - iy * mpp)
+    c0, f0 = transform.c, transform.f
+    a_, e_ = transform.a, transform.e
+    col = (lon_img - c0) / a_
+    row = (f0 - lat_img) / e_
+    col_i = np.clip(np.round(col).astype(int), 0, w - 1)
+    row_i = np.clip(np.round(row).astype(int), 0, h - 1)
+    in_bounds = (col >= 0) & (col <= w - 1) & (row >= 0) & (row <= h - 1)
+    sampled = classes[row_i, col_i]
+    sampled[~in_bounds] = 0
+
+    out_rgba = np.zeros((IMG_SIZE, IMG_SIZE, 4), dtype=np.uint8)
+    for k, color in color_map.items():
+        out_rgba[sampled == k] = color
+    return Image.fromarray(out_rgba, "RGBA"), best, note
+
+
+def _mercator_x_inv(x: float) -> float:
+    return x * 180.0 / 20037508.34
+
+
+def _mercator_y_inv(y: float) -> float:
+    return math.degrees(math.atan(math.sinh(y * math.pi / 20037508.34)))
+
+
+def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r1, r2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    y = math.sin(dlon) * math.cos(r2)
+    x = math.cos(r1) * math.sin(r2) - math.sin(r1) * math.cos(r2) * math.cos(dlon)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _compass_label(bearing: float) -> str:
+    """8-point compass label for a bearing (degrees, 0=N)."""
+    dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    idx = int((bearing + 22.5) // 45) % 8
+    return dirs[idx]
+
+
+def _draw_direction_arrow(draw, x1: float, y1: float, x2: float, y2: float) -> None:
+    """Draw a green arrow from (x1,y1) to (x2,y2) with a small head."""
+    draw.line((x1, y1, x2, y2), fill=(22, 101, 52, 255), width=4)
+    ang = math.atan2(y2 - y1, x2 - x1)
+    L = 14
+    head1 = (x2 - L * math.cos(ang - 0.45), y2 - L * math.sin(ang - 0.45))
+    head2 = (x2 - L * math.cos(ang + 0.45), y2 - L * math.sin(ang + 0.45))
+    draw.polygon([(x2, y2), head1, head2], fill=(22, 101, 52, 255))
 
