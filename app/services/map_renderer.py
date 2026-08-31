@@ -1,11 +1,24 @@
 """
-Render a herder-friendly map of a water point's species rings (cattle/shoat/camel)
-as a PNG for WhatsApp / HTTP.
+Render a pastoralist-friendly map of a water point's species rings
+(cattle/shoat/camel) as a PNG for WhatsApp / HTTP.
 
-Base map: OpenStreetMap raster tiles (public tile server, low-volume usage —
+Base map: OpenStreetMap raster tiles (public tile server, low-volume usage --
 respect their tile usage policy by a real User-Agent and a short timeout).
 Overlay: the three piosphere ring polygons from PostGIS, drawn outer-to-inner
-so the narrowest ring stays visible, plus a legend and the water point marker.
+so the narrowest ring stays visible, plus a satellite pasture-quality layer.
+
+Pastoralist-first design decisions:
+  * The map is CENTERED ON THE HERDER, with a blue "Wewe hapa / You are here"
+    pin, a red water-source pin, and the distance + direction between them.
+  * A big bold place banner (ward - county) always says WHERE you are.
+  * Bold TrueType fonts (DejaVu/Arial) so labels survive WhatsApp's
+    downscaling -- tiny default-PIL fonts are illegible on a phone.
+  * Directions use Swahili words (Kaskazini, Kusini, Mashariki, Magharibi, ...)
+    that pastoralists use, not abstract "NE" abbreviations.
+  * The best-pasture arrow points at the NEAREST walkable good patch, not a
+    far-away global centroid.
+  * Other nearby water sources are drawn as small landmark dots with names, so
+    the map is anchored by familiar places even at wide (camel) zoom.
 
 Everything is pure PIL + stdlib math (Web Mercator is a closed-form transform,
 no projection library needed). Fallback: if the tile server is unreachable the
@@ -16,6 +29,7 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import urllib.request
 from functools import lru_cache
 
@@ -36,6 +50,71 @@ RING_STYLE = {
     "shoat": ((16, 185, 129, 60), (5, 150, 105, 255), "shoat (11km)"),
     "camel": ((249, 115, 22, 55), (234, 88, 12, 255), "camel (25km)"),
 }
+
+# Full compass in the words herders actually use (Swahili first, English fallback).
+COMPASS_SWA = [
+    "Kaskazini", "Kaskazini-Mashariki", "Mashariki", "Kusini-Mashariki",
+    "Kusini", "Kusini-Magharibi", "Magharibi", "Kaskazini-Magharibi",
+]
+COMPASS_ENG = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+# Text in the pastoralist's language.
+_UI = {
+    "swa": {
+        "here": "Wewe hapa",
+        "water": "hadi maji",
+        "best": "Malisho bora",
+        "pasture": "malisho bora",
+    },
+    "eng": {
+        "here": "You are here",
+        "water": "to water",
+        "best": "Best pasture",
+        "pasture": "best pasture",
+    },
+}
+
+_FONT_PATHS = [
+    # Windows
+    r"C:\Windows\Fonts\arialbd.ttf",
+    r"C:\Windows\Fonts\segoeuib.ttf",
+    r"C:\Windows\Fonts\arial.ttf",
+    # Linux (Render / Debian): DejaVu ships with most base images.
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
+_FONT_PATH: str | None = None
+_FONT_CACHE: dict[tuple[int, bool], ImageFont.ImageFont] = {}
+
+
+def _get_font(size: int, bold: bool = True) -> ImageFont.ImageFont:
+    """A bold TrueType font at the requested size (tiny default PIL fonts are
+    unreadable on phones); falls back to the bitmap font when no TTF exists."""
+    global _FONT_PATH
+    key = (size, bold)
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
+    if _FONT_PATH is None:
+        for p in _FONT_PATHS:
+            if os.path.exists(p):
+                _FONT_PATH = p
+                break
+    try:
+        if _FONT_PATH:
+            font = ImageFont.truetype(_FONT_PATH, size)
+        else:
+            try:
+                font = ImageFont.load_default(size=size)  # Pillow >= 10.1
+            except TypeError:
+                font = ImageFont.load_default()
+    except Exception:  # noqa: BLE001
+        try:
+            font = ImageFont.load_default(size=size)
+        except TypeError:
+            font = ImageFont.load_default()
+    _FONT_CACHE[key] = font
+    return font
 
 
 def _mercator_x(lon):
@@ -60,7 +139,7 @@ def _lonlat_to_px(lon: float, lat: float, west: float, north: float, mpp: float)
 def _fetch_tile(z: int, x: int, y: int) -> Image.Image | None:
     url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in (1, 2):  # one retry — transient tile-server blips are common
+    for attempt in (1, 2):  # one retry -- transient tile-server blips are common
         try:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = resp.read()
@@ -80,20 +159,15 @@ def _compute_zoom(lat: float, max_radius_km: float) -> int:
 
 def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                      herder_lat: float | None = None, species: str | None = None,
-                     pasture: bool = True) -> bytes:
-    """Render the water point's rings — and, when pasture=True, the actual
-    satellite forage-quality layer — to PNG bytes. Raises ValueError if the
+                     pasture: bool = True, lang: str = "swa") -> bytes:
+    """Render the water point's rings -- and, when pasture=True, the actual
+    satellite forage-quality layer -- to PNG bytes. Raises ValueError if the
     water source (or its zones) doesn't exist.
 
     When the herder's location is supplied, the view is centered on THE HERDER
-    (not the water point) and both markers are drawn: blue "You are here" and a
-    red water-source pin with a distance label — so the map answers "where am I
-    relative to the water?" instead of showing a far-away circle.
-
-    With pasture=True the COG's SATVI/NDVI/BSI stack is rendered as a coloured
-    overlay: green = growing grass, olive = dry forage, red = bare ground,
-    yellow = unclear. A green arrow then points from the herder to the nearest
-    patch of good pasture, with distance + direction.
+    (not the water point) and both are marked, so the map answers "where am I
+    relative to the water?" instead of showing a far-away circle. `lang` is
+    "swa" (default) or "eng" for labels and direction words.
     """
     ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
     if ws is None:
@@ -127,13 +201,16 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     pasture_note: str | None = None
     if pasture:
         pasture_img, best_pasture, pasture_note = _build_pasture_overlay(
-            water_source_id, west, north, mpp
+            water_source_id, west, north, mpp, herder_lon, herder_lat
         )
         if pasture_img is not None:
             img = Image.alpha_composite(img.convert("RGBA"), pasture_img)
 
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
+
+    # Other nearby water sources as familiar landmark dots (under the rings).
+    _draw_nearby_water(draw, west, north, mpp, exclude=water_source_id)
 
     # Draw rings outer -> inner so the smallest stays on top.
     for zone in sorted(zones, key=lambda z: -z["radius_km"]):
@@ -151,33 +228,42 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
             draw.polygon(pts, fill=style[0], outline=style[1], width=3)
 
     wx, wy = _lonlat_to_px(lon, lat, west, north, mpp)
-    _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.ward or "Water")
+    _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.ward or "Maji")
 
     if herder_lon is not None and herder_lat is not None:
         hx, hy = _lonlat_to_px(herder_lon, herder_lat, west, north, mpp)
-        draw.line((hx, hy, wx, wy), fill=(30, 64, 175, 220), width=3)
-        _draw_pin(draw, hx, hy, fill=(37, 99, 235, 255), label="You are here")
+        draw.line((hx, hy, wx, wy), fill=(30, 64, 175, 220), width=4)
+        _draw_pin(draw, hx, hy, fill=(37, 99, 235, 255), label=_UI[lang]["here"])
         dist_km = _haversine_km(herder_lat, herder_lon, lat, lon)
+        dist_txt = f"{dist_km:.1f} km" if dist_km >= 1 else f"{dist_km * 1000:.0f} m"
+        w_bearing = _bearing_deg(herder_lat, herder_lon, lat, lon)
+        w_dir = _compass_swa(w_bearing)
         _draw_badge(
             draw,
-            (hx + 14, hy - 14),
-            f"{dist_km:.1f} km to water" if dist_km >= 1 else f"{dist_km*1000:.0f} m to water",
+            (hx + 16, hy - 16),
+            f"{dist_txt} {_UI[lang]['water']}  [{w_dir}]",
+            fill=(37, 99, 235, 235),
         )
-        # Green arrow to the best pasture patch, with distance + direction.
+        # Green arrow to the NEAREST usable pasture patch, with distance +
+        # direction in the herder's words, in a big readable banner.
         if best_pasture is not None and (abs(best_pasture[0] - herder_lon) > 1e-6
                                          or abs(best_pasture[1] - herder_lat) > 1e-6):
             px_, py_ = _lonlat_to_px(best_pasture[0], best_pasture[1], west, north, mpp)
             _draw_direction_arrow(draw, hx, hy, px_, py_)
             bearing = _bearing_deg(herder_lat, herder_lon, best_pasture[1], best_pasture[0])
-            direction = _compass_label(bearing)
+            direction = _compass_swa(bearing)
             bp_dist = _haversine_km(herder_lat, herder_lon, best_pasture[1], best_pasture[0])
-            label = (f"Best pasture {direction}"
-                     + (f", {bp_dist:.1f} km" if bp_dist >= 1 else f", {bp_dist*1000:.0f} m"))
-            _draw_badge(draw, (hx - 240, hy + 30), label, fill=(22, 101, 52, 235))
+            bp_txt = f"{bp_dist:.1f} km" if bp_dist >= 1 else f"{bp_dist * 1000:.0f} m"
+            _draw_banner_bottom(
+                draw,
+                f"{_UI[lang]['best']}: {direction}  -  {bp_txt}",
+                fill=(22, 101, 52, 240),
+            )
 
-    _draw_legend(draw, zones, ward=ws.ward, county=ws.county, pasture_note=pasture_note)
+    _draw_place_banner(draw, f"{ws.ward or 'Maji'}  -  {ws.county or ''}".strip())
+    _draw_legend(draw, zones, ward=ws.ward, county=ws.county, pasture_note=pasture_note, lang=lang)
     _draw_scale_bar(draw, mpp)
-    _draw_compass(draw)
+    _draw_compass(draw, lang=lang)
 
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
     buf = io.BytesIO()
@@ -194,51 +280,108 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
+def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r1, r2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    y = math.sin(dlon) * math.cos(r2)
+    x = math.cos(r1) * math.sin(r2) - math.sin(r1) * math.cos(r2) * math.cos(dlon)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _compass_swa(bearing: float) -> str:
+    """8-point compass label in Swahili (0 = Kaskazini / north)."""
+    idx = int((bearing + 22.5) // 45) % 8
+    return COMPASS_SWA[idx]
+
+
+def _compass_label(bearing: float) -> str:
+    """8-point compass label in English (N/NE/E/...)."""
+    idx = int((bearing + 22.5) // 45) % 8
+    return COMPASS_ENG[idx]
+
+
+def compass_swa(bearing: float) -> str:
+    """Public Swahili compass label (used by the WhatsApp flow for captions)."""
+    return _compass_swa(bearing)
+
+
+def water_guidance(lat: float, lon: float, ws_lat: float, ws_lon: float) -> tuple[float, float]:
+    """(bearing_deg, dist_km) from the herder to a water source."""
+    return _bearing_deg(lat, lon, ws_lat, ws_lon), _haversine_km(lat, lon, ws_lat, ws_lon)
+
+
 def _draw_pin(draw: ImageDraw.ImageDraw, x: float, y: float, fill: tuple, label: str) -> None:
-    """A map pin (circle with a point) + a small label below it."""
-    r = 10
-    draw.ellipse((x - r, y - r, x + r, y + r), fill=fill, outline=(255, 255, 255, 255), width=3)
-    draw.polygon([(x - 4, y + r - 2), (x + 4, y + r - 2), (x, y + r + 9)], fill=fill)
-    font = ImageFont.load_default()
+    """A map pin (circle with a point) + a big readable label below it."""
+    r = 11
+    draw.ellipse((x - r, y - r, x + r, y + r), fill=fill, outline=(255, 255, 255, 255), width=4)
+    draw.polygon([(x - 4, y + r - 2), (x + 4, y + r - 2), (x, y + r + 11)], fill=fill)
+    font = _get_font(20)
     tw = draw.textlength(label, font=font)
-    bx0, by0 = x - tw / 2 - 6, y + r + 12
-    draw.rounded_rectangle((bx0, by0, bx0 + tw + 12, by0 + 16), radius=4,
-                           fill=(255, 255, 255, 220))
-    draw.text((x - tw / 2, by0 + 3), label, fill=(20, 20, 20), font=font)
+    bx0, by0 = x - tw / 2 - 8, y + r + 14
+    draw.rounded_rectangle((bx0, by0, bx0 + tw + 16, by0 + 32), radius=6,
+                           fill=(255, 255, 255, 235), outline=(40, 40, 40, 180), width=1)
+    draw.text((x - tw / 2, by0 + 5), label, fill=(20, 20, 20), font=font)
 
 
 def _draw_badge(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str,
                 fill: tuple = (37, 99, 235, 230)) -> None:
-    font = ImageFont.load_default()
+    font = _get_font(22)
     tw = draw.textlength(text, font=font)
     x, y = xy
-    draw.rounded_rectangle((x, y, x + tw + 14, y + 18), radius=5, fill=fill)
-    draw.text((x + 7, y + 3), text, fill=(255, 255, 255), font=font)
+    draw.rounded_rectangle((x, y, x + tw + 16, y + 34), radius=7, fill=fill,
+                           outline=(255, 255, 255, 220), width=2)
+    draw.text((x + 8, y + 5), text, fill=(255, 255, 255), font=font)
+
+
+def _draw_place_banner(draw: ImageDraw.ImageDraw, text: str) -> None:
+    """Big top-centre banner: the ward/county so the map always says WHERE."""
+    font = _get_font(30)
+    tw = draw.textlength(text, font=font)
+    x0 = max(10, (IMG_SIZE - tw) / 2 - 22)
+    y0 = 14
+    w = min(tw + 44, IMG_SIZE - 20)
+    h = 56
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=14,
+                           fill=(255, 255, 255, 240), outline=(20, 20, 20, 200), width=2)
+    draw.text((x0 + 22, y0 + 9), text, fill=(20, 20, 20), font=font)
+
+
+def _draw_banner_bottom(draw: ImageDraw.ImageDraw, text: str, fill: tuple = (22, 101, 52, 240)) -> None:
+    """Big bottom-centre banner: direction + distance to the best pasture."""
+    font = _get_font(28)
+    tw = draw.textlength(text, font=font)
+    x0 = max(10, (IMG_SIZE - tw) / 2 - 20)
+    y0 = IMG_SIZE - 96
+    w = min(tw + 40, IMG_SIZE - 20)
+    h = 54
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=14, fill=fill,
+                           outline=(255, 255, 255, 230), width=3)
+    draw.text((x0 + 20, y0 + 9), text, fill=(255, 255, 255), font=font)
 
 
 def _draw_scale_bar(draw: ImageDraw.ImageDraw, mpp: float) -> None:
-    """Draw a scale bar (2km / 5km depending on zoom) bottom-left."""
-    font = ImageFont.load_default()
+    """Scale bar (10/5/2/1 km depending on zoom) bottom-left, big text."""
     for km in (10, 5, 2, 1):
         px = km * 1000 / mpp
         if px <= 300:
             break
-    x0, y0 = 20, IMG_SIZE - 30
-    draw.rounded_rectangle((x0 - 6, y0 - 6, x0 + px + 6, y0 + 12), radius=4,
-                           fill=(255, 255, 255, 210))
+    font = _get_font(20)
+    x0, y0 = 20, IMG_SIZE - 40
+    draw.rounded_rectangle((x0 - 8, y0 - 8, x0 + px + 8, y0 + 32), radius=4,
+                           fill=(255, 255, 255, 215))
     draw.rectangle((x0, y0, x0 + px, y0 + 5), fill=(40, 40, 40))
-    draw.text((x0, y0 + 8), f"{km} km", fill=(40, 40, 40), font=font)
+    draw.text((x0, y0 + 9), f"{km} km", fill=(40, 40, 40), font=font)
 
 
-def _draw_compass(draw: ImageDraw.ImageDraw) -> None:
-    """Small north arrow, top-right under the legend."""
-    cx, cy = IMG_SIZE - 40, 120
-    draw.rounded_rectangle((cx - 22, cy - 22, cx + 22, cy + 22), radius=6,
-                           fill=(255, 255, 255, 200))
-    draw.line((cx, cy - 14, cx, cy + 14), fill=(40, 40, 40), width=2)
-    draw.polygon([(cx, cy - 17), (cx - 5, cy - 8), (cx + 5, cy - 8)], fill=(220, 38, 38))
-    font = ImageFont.load_default()
-    draw.text((cx - 3, cy + 16), "N", fill=(40, 40, 40), font=font)
+def _draw_compass(draw: ImageDraw.ImageDraw, lang: str = "swa") -> None:
+    """A clear north arrow (top-right under the legend), big enough to read."""
+    cx, cy = IMG_SIZE - 58, 150
+    draw.rounded_rectangle((cx - 30, cy - 30, cx + 30, cy + 30), radius=8,
+                           fill=(255, 255, 255, 225), outline=(40, 40, 40, 200), width=2)
+    draw.line((cx, cy - 20, cx, cy + 20), fill=(40, 40, 40), width=3)
+    draw.polygon([(cx, cy - 24), (cx - 7, cy - 12), (cx + 7, cy - 12)], fill=(220, 38, 38))
+    font = _get_font(20)
+    draw.text((cx - 9, cy + 22), "N", fill=(40, 40, 40), font=font)
 
 
 def _build_base_map(zoom: int, center_x: float, center_y: float, mpp: float) -> Image.Image:
@@ -251,7 +394,7 @@ def _build_base_map(zoom: int, center_x: float, center_y: float, mpp: float) -> 
 
     Tiles are fetched concurrently with a short timeout so the map always
     renders in a few seconds even when the tile server is slow/unreachable
-    (a blank beige background still gets drawn — WhatsApp users always get a map).
+    (a blank beige background still gets drawn -- WhatsApp users always get a map).
     """
     import concurrent.futures
 
@@ -286,17 +429,41 @@ def _build_base_map(zoom: int, center_x: float, center_y: float, mpp: float) -> 
     return img
 
 
-def _draw_marker(draw: ImageDraw.ImageDraw, west: float, north: float, mpp: float, lon: float, lat: float) -> None:
-    mx, my = _lonlat_to_px(lon, lat, west, north, mpp)
-    r = 9
-    draw.ellipse((mx - r, my - r, mx + r, my + r), fill=(220, 38, 38, 255), outline=(255, 255, 255, 255), width=3)
+def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
+                       mpp: float, exclude: str) -> None:
+    """Draw other nearby water sources as teal landmark dots with names, so the
+    map is anchored by familiar places even at wide (camel) zoom."""
+    try:
+        sources = water_sources.list_water_sources()
+    except Exception:  # noqa: BLE001
+        return
+    font = _get_font(16)
+    drawn = 0
+    for ws in sources:
+        if ws.id == exclude:
+            continue
+        px_, py_ = _lonlat_to_px(ws.lon, ws.lat, west, north, mpp)
+        if 0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE:
+            draw.ellipse((px_ - 7, py_ - 7, px_ + 7, py_ + 7),
+                         fill=(14, 116, 144, 255), outline=(255, 255, 255, 255), width=2)
+            label = ws.ward or "Maji"
+            tw = draw.textlength(label, font=font)
+            bx0 = px_ - tw / 2 - 5
+            by0 = py_ + 10
+            draw.rounded_rectangle((bx0, by0, bx0 + tw + 10, by0 + 24), radius=4,
+                                   fill=(255, 255, 255, 215))
+            draw.text((px_ - tw / 2, by0 + 3), label, fill=(14, 116, 144), font=font)
+            drawn += 1
+            if drawn >= 6:
+                break
 
 
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,
-                 county: str | None = None, pasture_note: str | None = None) -> None:
-    font = ImageFont.load_default()
-    line_h = 24
-    x0, y0 = 16, 16
+                 county: str | None = None, pasture_note: str | None = None,
+                 lang: str = "swa") -> None:
+    font = _get_font(17)
+    line_h = 26
+    x0, y0 = 16, 76
     items = [(zone["species"], RING_STYLE[zone["species"]][1])
              for zone in sorted(zones, key=lambda z: z["radius_km"])]
 
@@ -311,31 +478,96 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
             (f"  {pasture_note}", None),
         ]
 
-    header = f"{ward or 'Water source'} · {county}" if county else (ward or "Water source")
-    header_h = 20
-    box_w = 210
-    box_h = header_h + len(items) * line_h + len(pasture_rows) * line_h + 12
+    header = f"{ward or 'Water source'} - {county}" if county else (ward or "Water source")
+    header_h = 22
+    box_w = 236
+    box_h = header_h + len(items) * line_h + len(pasture_rows) * line_h + 14
     draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 225))
     draw.text((x0 + 12, y0 + 5), header, fill=(20, 20, 20), font=font)
 
-    cy = y0 + header_h + 8
+    cy = y0 + header_h + 10
     for species, color in items:
         draw.ellipse((x0 + 12, cy - 5, x0 + 24, cy + 7), fill=color)
-        draw.text((x0 + 32, cy - 8), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
+        draw.text((x0 + 32, cy - 9), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
         cy += line_h
 
     for label, color in pasture_rows:
         if color:
-            draw.rectangle((x0 + 12, cy - 6, x0 + 24, cy + 6), fill=color)
-        draw.text((x0 + 32, cy - 8), label, fill=(40, 40, 40), font=font)
+            draw.rectangle((x0 + 12, cy - 7, x0 + 24, cy + 5), fill=color)
+        draw.text((x0 + 32, cy - 9), label, fill=(40, 40, 40), font=font)
         cy += line_h
 
+
+def _draw_direction_arrow(draw: ImageDraw.ImageDraw, x1: float, y1: float, x2: float, y2: float) -> None:
+    """A thick green arrow from (x1,y1) to (x2,y2) with a big arrowhead."""
+    draw.line((x1, y1, x2, y2), fill=(22, 101, 52, 255), width=7)
+    ang = math.atan2(y2 - y1, x2 - x1)
+    L = 24
+    head1 = (x2 - L * math.cos(ang - 0.42), y2 - L * math.sin(ang - 0.42))
+    head2 = (x2 - L * math.cos(ang + 0.42), y2 - L * math.sin(ang + 0.42))
+    draw.polygon([(x2, y2), head1, head2], fill=(22, 101, 52, 255))
+    # white outline so the arrow reads over any base-map colour
+    draw.line((x1, y1, x2, y2), fill=(255, 255, 255, 200), width=1)
 
 
 # --- pasture overlay ---------------------------------------------------------
 
 
-def _build_pasture_overlay(water_source_id, west, north, mpp):
+def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
+    """Classify the overview stack and return the best usable pasture patch.
+
+    Returns ((lon, lat, score), classes). The patch is the NEAREST good cluster
+    to the herder (good pixels within ~2 km of the closest good pixel), so the
+    green arrow gives local, walkable guidance instead of pointing at a
+    far-away global centroid. Falls back to the global weighted centroid when
+    no herder position is supplied. score = 3 (grass) or 2 (dry forage).
+    """
+    t = get_advisory_thresholds().vegetation
+    ndvi, satvi, bsi = arr[0], arr[2], arr[3]
+
+    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
+    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
+    # 1 green | 2 dry forage | 3 bare | 4 uncertain
+    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
+    classes[good & (ndvi < t["ndvi_green_threshold"])
+            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi <= t["bsi_low_threshold"])] = 2
+    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
+    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
+    classes[good & (classes == 0)] = 4  # uncertain
+
+    score = np.where(classes == 1, 3.0, np.where(classes == 2, 2.0, 0.0))
+    good_px = score > 0
+    if not good_px.any():
+        return None, classes
+
+    c0, f0 = transform.c, transform.f
+    a_, e_ = transform.a, transform.e
+    rows_i, cols_i = np.nonzero(good_px)
+    wgt_all = score[good_px]
+    if herder_lon is not None and herder_lat is not None:
+        h_col = (herder_lon - c0) / a_
+        h_row = (f0 - herder_lat) / e_
+        d0 = np.hypot((cols_i - h_col) * a_, (rows_i - h_row) * abs(e_))
+        k = int(np.argmin(d0))
+        d2 = np.hypot((cols_i - cols_i[k]) * a_, (rows_i - rows_i[k]) * abs(e_))
+        mask = d2 <= 2000.0  # walkable ~2 km cluster
+        cols_c, rows_c = cols_i[mask], rows_i[mask]
+        wgt = wgt_all[mask]
+    else:
+        cols_c, rows_c = cols_i, rows_i
+        wgt = wgt_all
+
+    lons = c0 + cols_c * a_
+    lats = f0 + rows_c * e_
+    mx = _mercator_x(lons.astype(float))
+    my = _mercator_y(lats.astype(float))
+    mx_c = float(np.average(mx, weights=wgt))
+    my_c = float(np.average(my, weights=wgt))
+    best = (float(_mercator_x_inv(mx_c)), float(_mercator_y_inv(my_c)), int(score.max()))
+    return best, classes
+
+
+def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, herder_lat=None):
     """Classify each COG pixel into a forage class and build an RGBA overlay.
 
     Returns (overlay_image_or_None, best_pasture_(lon,lat,score), note).
@@ -351,43 +583,14 @@ def _build_pasture_overlay(water_source_id, west, north, mpp):
 
     import numpy as np
 
-    t = get_advisory_thresholds().vegetation
-    ndvi, satvi, bsi = arr[0], arr[2], arr[3]
-
-    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
-    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
-    # 1 green | 2 dry forage | 3 bare | 4 uncertain
-    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
-    classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi <= t["bsi_low_threshold"])] = 2
-    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
-    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
-    classes[good & (classes == 0)] = 4  # uncertain
+    best, classes = _nearest_good_patch(arr, transform, herder_lon, herder_lat)
 
     # Fraction of valid pixels that are usable forage (for the legend note).
     usable = int((classes == 1).sum()) + int((classes == 2).sum())
-    valid_px = int(good.sum())
+    valid_px = int((classes > 0).sum())
     note = None
     if valid_px:
         note = f"{100 * usable / valid_px:.0f}% usable pasture"
-
-    # Best-pasture patch: centroid of good pixels (green or dry), weighted by a
-    # simple score, converted back to lon/lat.
-    best = None
-    score = np.where(classes == 1, 3.0, np.where(classes == 2, 2.0, 0.0))
-    good_px = score > 0
-    if good_px.any():
-        rows_i, cols_i = np.nonzero(good_px)
-        wgt = score[good_px]
-        c0, f0 = transform.c, transform.f
-        a_, e_ = transform.a, transform.e
-        lons = c0 + cols_i * a_
-        lats = f0 + rows_i * e_
-        mx = _mercator_x(lons.astype(float))
-        my = _mercator_y(lats.astype(float))
-        mx_c = float(np.average(mx, weights=wgt))
-        my_c = float(np.average(my, weights=wgt))
-        best = (float(_mercator_x_inv(mx_c)), float(_mercator_y_inv(my_c)), int(score.max()))
 
     # Sample the classification into the IMG_SIZE viewport with an accurate
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
@@ -418,41 +621,34 @@ def _build_pasture_overlay(water_source_id, west, north, mpp):
     return Image.fromarray(out_rgba, "RGBA"), best, note
 
 
+def pasture_guidance(water_source_id: str, herder_lon: float, herder_lat: float):
+    """(bearing_deg, dist_km) from the herder to the nearest usable pasture
+    patch, or None when the COG is unavailable. Lightweight: only reads the
+    small overview, no rendering. Used by the WhatsApp flow for captions."""
+    from app.services.raster_read import read_overview_array
+
+    try:
+        res = read_overview_array(water_source_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if res is None:
+        return None
+    arr, transform = res
+    if arr.shape[0] < 4:
+        return None
+    best, _ = _nearest_good_patch(arr, transform, herder_lon, herder_lat)
+    if best is None:
+        return None
+    bearing = _bearing_deg(herder_lat, herder_lon, best[1], best[0])
+    dist_km = _haversine_km(herder_lat, herder_lon, best[1], best[0])
+    return bearing, dist_km
+
+
 def _mercator_x_inv(x):
     """Inverse Web Mercator x (m) -> longitude. Vectorised (numpy-safe)."""
-    import numpy as np
-
     return np.asarray(x, dtype=float) * 180.0 / 20037508.34
 
 
 def _mercator_y_inv(y):
     """Inverse Web Mercator y (m) -> latitude. Vectorised (numpy-safe)."""
-    import numpy as np
-
     return np.degrees(np.arctan(np.sinh(np.asarray(y, dtype=float) * np.pi / 20037508.34)))
-
-
-def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    r1, r2 = math.radians(lat1), math.radians(lat2)
-    dlon = math.radians(lon2 - lon1)
-    y = math.sin(dlon) * math.cos(r2)
-    x = math.cos(r1) * math.sin(r2) - math.sin(r1) * math.cos(r2) * math.cos(dlon)
-    return (math.degrees(math.atan2(y, x)) + 360) % 360
-
-
-def _compass_label(bearing: float) -> str:
-    """8-point compass label for a bearing (degrees, 0=N)."""
-    dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-    idx = int((bearing + 22.5) // 45) % 8
-    return dirs[idx]
-
-
-def _draw_direction_arrow(draw, x1: float, y1: float, x2: float, y2: float) -> None:
-    """Draw a green arrow from (x1,y1) to (x2,y2) with a small head."""
-    draw.line((x1, y1, x2, y2), fill=(22, 101, 52, 255), width=4)
-    ang = math.atan2(y2 - y1, x2 - x1)
-    L = 14
-    head1 = (x2 - L * math.cos(ang - 0.45), y2 - L * math.sin(ang - 0.45))
-    head2 = (x2 - L * math.cos(ang + 0.45), y2 - L * math.sin(ang + 0.45))
-    draw.polygon([(x2, y2), head1, head2], fill=(22, 101, 52, 255))
-

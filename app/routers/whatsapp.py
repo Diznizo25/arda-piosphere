@@ -22,6 +22,7 @@ from app.services import (
     ai,
     build_tracker,
     conversation,
+    map_renderer,
     registration,
     speech,
     water_reach,
@@ -533,18 +534,48 @@ def _handle_map_request(phone: str, pastoralist) -> None:
 
     water_source_id = candidates[0].water_source_id
     species = pastoralist.primary_species or "camel"
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
-           f"?lat={lat}&lon={lon}&species={species}&pasture=1&v=3")
+           f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}&v=4")
+
+    # Concrete, herder-friendly caption: where they are, water direction +
+    # distance, and pasture direction + distance (when the COG is available).
+    ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
+    water_bit = pasture_bit = ""
+    if ws:
+        try:
+            w_bearing, w_dist = map_renderer.water_guidance(lat, lon, ws.lat, ws.lon)
+            w_dir = map_renderer.compass_swa(w_bearing)
+            w_txt = f"{w_dist:.1f} km" if w_dist >= 1 else f"{w_dist * 1000:.0f} m"
+            if pastoralist.preferred_language == "swahili":
+                water_bit = f" Maji: {w_dir}, ~{w_txt}."
+            else:
+                water_bit = f" Water: {w_dir}, ~{w_txt}."
+        except Exception:  # noqa: BLE001
+            log.exception("water guidance failed")
+        try:
+            p_guid = map_renderer.pasture_guidance(water_source_id, lon, lat)
+            if p_guid:
+                p_dir = map_renderer.compass_swa(p_guid[0])
+                p_txt = f"{p_guid[1]:.1f} km" if p_guid[1] >= 1 else f"{p_guid[1] * 1000:.0f} m"
+                if pastoralist.preferred_language == "swahili":
+                    pasture_bit = f" Malisho bora: {p_dir}, ~{p_txt} (mshale kijani)."
+                else:
+                    pasture_bit = f" Best pasture: {p_dir}, ~{p_txt} (green arrow)."
+        except Exception:  # noqa: BLE001
+            log.exception("pasture guidance failed")
     whatsapp_client.send_image_bytes_url(
         phone,
         url,
         caption={
-            "swahili": f"Ramani ya malisho na duara za wanyama wako. "
-                       f"Bluu = 'wewe hapa', nyekundu = chanzo cha maji. "
-                       f"Kijani = malisho, nyekundu = eneo tupu, mshale wa kijani = malisho bora.",
-            "english": f"Pasture map with your animals' rings. "
-                       f"Blue = 'you are here', red = water source. "
-                       f"Green = pasture, red = bare, green arrow = best pasture.",
+            "swahili": (f"Ramani yako{(' - ' + (ws.ward or '')) if ws else ''}."
+                        f" Bluu = WEWE HAPA, nyekundu = maji."
+                        f"{water_bit}{pasture_bit}"
+                        f" Jina la eneo liko juu ya ramani; mwelekeo chini ya ramani."),
+            "english": (f"Your map{(' - ' + (ws.ward or '')) if ws else ''}."
+                        f" Blue = YOU ARE HERE, red = water."
+                        f"{water_bit}{pasture_bit}"
+                        f" Place name is at the top; direction is at the bottom."),
         }[pastoralist.preferred_language],
     )
 
