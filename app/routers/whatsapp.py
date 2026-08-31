@@ -97,6 +97,8 @@ TEXT_KEYWORDS = ["maandishi", "text", "maandiko"]
 STATUS_KEYWORDS = ["status", "hali", "progress", "maendeleo", "uko wapi"]
 
 WEIGHT_KEYWORDS = ["weight", "uzito", "pima", "measure"]
+MENU_KEYWORDS = ["menu", "huduma", "services", "msaada", "help", "home",
+                 "chagua", "options", "vitendo", "orodha", "help"]
 HERD_KEYWORDS = ["herd", "kundi", "wingi", "zote"]
 AGE_KEYWORDS = {
     "adult": ["adult", "mzima", "wazima", "kubwa", "big"],
@@ -108,6 +110,34 @@ ANOTHER_KEYWORDS = ["another", "nyingine", "tena", "more", "zaidi"]
 WEIGHT_MSG = {
     "swahili": "PIMA UZITO WA MNYAMA 🐄\n\nChagua aina ya mnyama:",
     "english": "MEASURE ANIMAL WEIGHT 🐄\n\nChoose the type of animal:",
+}
+
+MENU_MSG = {
+    "swahili": "🌿 ARDA LINK — HUDUMA ZETU\n\n"
+               "1. 📍 ENEO (location) — taarifa za maji na malisho karibu nawe\n"
+               "2. 🏷 PIN — andikisha chanzo chako cha maji kipya\n"
+               "3. ⚖️ UZITO — pima uzito wa mnyama (mkanda wa kifua)\n"
+               "4. 🐄 HERD — kadiria uzito wa kundi zima\n"
+               "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
+               "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
+               "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
+               "8. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
+               "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.",
+    "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
+               "1. 📍 LOCATION — water & pasture info near you\n"
+               "2. 🏷 PIN — register your new water point\n"
+               "3. ⚖️ WEIGHT — measure an animal's weight (heart-girth tape)\n"
+               "4. 🐄 HERD — estimate the weight of a whole herd\n"
+               "5. 🗺 MAP — map of the grazing zones\n"
+               "6. 📊 STATUS — your water point build progress\n"
+               "7. 🗣 VOICE — reply by voice / TEXT for text\n"
+               "8. 🌍 SWAHILI / ENGLISH — change language\n\n"
+               "Send the matching word (e.g. 'weight') or the number.",
+}
+
+MENU_NUMBERS = {
+    "1": "location", "2": "pin", "3": "weight", "4": "herd",
+    "5": "map", "6": "status", "7": "voice", "8": "language",
 }
 
 WEIGHT_ANIMAL_BUTTONS = [
@@ -133,8 +163,10 @@ ASK_GIRTH = {
 }
 
 GIRTH_INVALID = {
-    "swahili": "Namba hiyo haiwezekani ({error}). Angalia kipimo na ujaribu tena (k.m. '165').",
-    "english": "That measurement is not possible ({error}). Check the tape and try again (e.g. '165').",
+    "swahili": "Namba hiyo haiwezekani ({error}). Angalia kipimo na ujaribu tena (k.m. '165'), "
+               "au tuma 'menu' kuona huduma zingine.",
+    "english": "That measurement is not possible ({error}). Check the tape and try again (e.g. '165'), "
+               "or send 'menu' to see other services.",
 }
 
 WEIGHT_RESULT = {
@@ -409,6 +441,49 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _start_weight_flow(phone, pastoralist)
         return
 
+    # Menu / help request: show all services.
+    if any(k in text_lower for k in MENU_KEYWORDS):
+        _show_menu(phone, pastoralist)
+        return
+
+    # Menu number shortcuts (1-8).
+    if text_lower in MENU_NUMBERS:
+        service = MENU_NUMBERS[text_lower]
+        if service == "location":
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": "Tuma eneo lako (location) kwenye WhatsApp.",
+                    "english": "Share your location on WhatsApp.",
+                }[pastoralist.preferred_language],
+            )
+        elif service == "pin":
+            _handle_pin_request(phone, pastoralist)
+        elif service == "weight":
+            _start_weight_flow(phone, pastoralist)
+        elif service == "herd":
+            species = pastoralist.primary_species or "cattle"
+            conversation.set_state(phone, "weight.herd_count",
+                                   {"species": species, "samples": []})
+            whatsapp_client.send_text(phone, ASK_HERD_COUNT[pastoralist.preferred_language])
+        elif service == "map":
+            _handle_map_request(phone, pastoralist)
+        elif service == "status":
+            _handle_status_request(phone, pastoralist)
+        elif service == "voice":
+            set_voice_replies(phone, True)
+            pastoralist.voice_replies = True
+            _send_reply(phone, pastoralist, VOICE_ON_MSG[pastoralist.preferred_language], voice=True)
+        elif service == "language":
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": "Tuma 'english' kwa Kiingereza, au 'swahili' kwa Kiswahili.",
+                    "english": "Send 'swahili' for Swahili, or 'english' for English.",
+                }[pastoralist.preferred_language],
+            )
+        return
+
     gt_intent = ai.classify_report(text)
     if gt_intent is not None:
         record_ground_truth(pastoralist, gt_intent, text)
@@ -419,15 +494,7 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _send_reply(phone, pastoralist, thanks, voice=voice)
         return
 
-    _send_reply(
-        phone,
-        pastoralist,
-        {
-            "swahili": "Tuma eneo lako (location) ili nikupe taarifa za maji na malisho karibu nawe.",
-            "english": "Send your location so I can give you water and pasture information near you.",
-        }[pastoralist.preferred_language],
-        voice=voice,
-    )
+    _show_menu(phone, pastoralist)
 
 
 def _handle_map_request(phone: str, pastoralist) -> None:
@@ -465,7 +532,8 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         return
 
     water_source_id = candidates[0].water_source_id
-    url = f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png?lat={lat}&lon={lon}"
+    url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
+           f"?lat={lat}&lon={lon}&v=2")
     whatsapp_client.send_image_bytes_url(
         phone,
         url,
@@ -648,11 +716,48 @@ def _handle_status_request(phone: str, pastoralist) -> None:
 
 def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
     """Resume an in-progress guided flow. Returns True if the message was
-    consumed by a flow (even if the user typed something off-flow, we keep the
-    state so they can abandon it with 'stop')."""
+    consumed by a flow.
+
+    Flows are NOT traps: any message asking for the menu/help (or naming a
+    different service) clears the flow state so the herder can always escape
+    and use another service.
+    """
     state, data = conversation.get_state(phone)
     if not state:
         return False
+
+    t = (text or "").strip().lower()
+
+    # Universal escape hatches: menu/help clears the flow and shows the menu.
+    if any(k in t for k in MENU_KEYWORDS):
+        conversation.clear_state(phone)
+        _show_menu(phone, pastoralist)
+        return True
+    if t in ("done", "isha", "stop", "kumaliza", "cancel", "ghairi", "futa"):
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Sawa, nimeacha mchakato huu. Tuma 'menu' kuona huduma zote.",
+                "english": "Okay, I left that process. Send 'menu' to see all services.",
+            }[pastoralist.preferred_language],
+        )
+        return True
+
+    # If the herder names another service mid-flow, jump to it (don't trap them).
+    if state.startswith("weight.") or state.startswith("pin.") or state.startswith("onboarding."):
+        if any(k in t for k in WEIGHT_KEYWORDS) and not state.startswith("weight.species"):
+            conversation.clear_state(phone)
+            _start_weight_flow(phone, pastoralist)
+            return True
+        if any(k in t for k in MAP_KEYWORDS) and not state.startswith("pin."):
+            conversation.clear_state(phone)
+            _handle_map_request(phone, pastoralist)
+            return True
+        if any(k in t for k in STATUS_KEYWORDS):
+            conversation.clear_state(phone)
+            _handle_status_request(phone, pastoralist)
+            return True
 
     if state.startswith("onboarding."):
         _handle_onboarding_step(phone, pastoralist, text)
@@ -664,6 +769,11 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
         _handle_pin_step(phone, pastoralist, state, data, text)
         return True
     return False
+
+
+def _show_menu(phone: str, pastoralist) -> None:
+    """Send the services menu so a herder always knows what they can do."""
+    whatsapp_client.send_text(phone, MENU_MSG[pastoralist.preferred_language])
 
 
 # --- onboarding --------------------------------------------------------------

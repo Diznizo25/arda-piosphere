@@ -18,7 +18,8 @@ CACHE_TTL_SECONDS = 3600  # rings only change when zones are regenerated
 
 
 @lru_cache(maxsize=64)
-def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: float | None) -> bytes:
+def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: float | None,
+                   version: int) -> bytes:
     return render_rings_png(water_source_id, herder_lon, herder_lat)
 
 
@@ -27,6 +28,7 @@ def get_rings_map(
     water_source_id: str,
     lat: float | None = Query(default=None, ge=-90, le=90),
     lon: float | None = Query(default=None, ge=-180, le=180),
+    v: int = Query(default=1, description="Cache-buster; bump when the renderer changes."),
 ) -> Response:
     """Render the species rings for a water point.
 
@@ -35,7 +37,7 @@ def get_rings_map(
     them, so the map shows where the herder is relative to the water.
     """
     try:
-        png = _render_cached(water_source_id, lon, lat)
+        png = _render_cached(water_source_id, lon, lat, v)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:  # noqa: BLE001
@@ -43,5 +45,5 @@ def get_rings_map(
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": f"public, max-age={CACHE_TTL_SECONDS}"},
+        headers={"Cache-Control": "public, max-age=600"},
     )

@@ -83,6 +83,26 @@ def main() -> int:
     assert "kg" in last and "165" in last
     print("  weight reply:", last[:120].replace("\n", " | "))
 
+    # --- weight flow escape (the reported loop) ---
+    whatsapp._handle_text(PHONE, p, "uzito")
+    whatsapp._handle_text(PHONE, p, "weight:goat")
+    whatsapp._handle_text(PHONE, p, "age:adult")
+    whatsapp._handle_text(PHONE, p, "not a number")
+    assert "si namba" in SENT[-1], SENT[-1]
+    # escape with 'menu' - must NOT loop
+    whatsapp._handle_text(PHONE, p, "menu")
+    assert "HUDUMA" in SENT[-1], SENT[-1]
+    print("  weight-loop escape OK")
+
+    # --- menu + shortcuts ---
+    whatsapp._handle_text(PHONE, p, "menu")
+    assert "HUDUMA" in SENT[-1], SENT[-1]
+    whatsapp._handle_text(PHONE, p, "3")  # weight shortcut
+    whatsapp._handle_text(PHONE, p, "done")
+    whatsapp._handle_text(PHONE, p, "6")  # status shortcut
+    whatsapp._handle_text(PHONE, p, "menu")
+    print("  menu shortcuts OK")
+
     # --- herd flow ---
     whatsapp._handle_text(PHONE, p, "herd")
     whatsapp._handle_text(PHONE, p, "12")
