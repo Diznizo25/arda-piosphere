@@ -19,6 +19,7 @@ import math
 import urllib.request
 from functools import lru_cache
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
@@ -37,12 +38,15 @@ RING_STYLE = {
 }
 
 
-def _mercator_x(lon: float) -> float:
-    return lon * 20037508.34 / 180.0
+def _mercator_x(lon):
+    """Web Mercator x (m) from longitude. Vectorised (numpy-safe)."""
+    return np.asarray(lon, dtype=float) * 20037508.34 / 180.0
 
 
-def _mercator_y(lat: float) -> float:
-    return 20037508.34 / 180.0 * (180.0 / math.pi * math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)))
+def _mercator_y(lat):
+    """Web Mercator y (m) from latitude. Vectorised (numpy-safe)."""
+    r = np.asarray(lat, dtype=float)
+    return 20037508.34 / 180.0 * (180.0 / np.pi * np.log(np.tan(np.pi / 4 + np.radians(r) / 2)))
 
 
 def _lonlat_to_px(lon: float, lat: float, west: float, north: float, mpp: float) -> tuple[float, float]:
