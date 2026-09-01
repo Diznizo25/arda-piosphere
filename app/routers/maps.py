@@ -44,10 +44,22 @@ def get_rings_map(
     big direction banner in the herder's language.
     """
     try:
+        from app.services import query_log
+
+        t = query_log.timer()
         png = _render_cached(water_source_id, lon, lat, v, species, pasture, lang)
+        query_log.log_query(kind="map", lat=lat, lon=lon, species=species,
+                            water_source_id=water_source_id, result="ok", latency_ms=t.ms())
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:  # noqa: BLE001
+        try:
+            from app.services import query_log
+
+            query_log.log_query(kind="map", lat=lat, lon=lon, species=species,
+                                water_source_id=water_source_id, result="error")
+        except Exception:  # noqa: BLE001
+            pass
         raise HTTPException(status_code=500, detail=f"Map render failed: {e}")
     return Response(
         content=png,

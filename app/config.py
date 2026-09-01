@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # WhatsApp map image URL). On Render it is the .onrender.com domain.
     app_public_base_url: str = ""
 
+    # Optional bearer token protecting /dashboard (ops). Empty = dashboard open
+    # (dev only); on Render set DASHBOARD_TOKEN in the environment.
+    dashboard_token: str = ""
+
     # Google Earth Engine
     gee_service_account_email: str = ""
     gee_service_account_key_path: str = "./secrets/gee-service-account.json"

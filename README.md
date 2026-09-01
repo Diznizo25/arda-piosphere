@@ -189,6 +189,28 @@ Deployment & scheduling:
 - `trigger_render_deploy.py`, `trigger_build_workflow.py`,
   `cancel_workflow_run.py`, `set_render_env*.py`, `transfer_watchdog.py`
 
+## Live ops dashboard
+
+`/dashboard` (protected by `DASHBOARD_TOKEN`, pass `?key=<token>`) gives a live
+view of the whole system:
+
+- **Health chips** — DB + R2 reachability, deploy commit, uptime, last build &
+  last query timestamps.
+- **KPI cards** — water points, COGs built, herders, queries in 24h (+ avg
+  latency, errors), builds by status, feedback, weights, active flows.
+- **Live water-point map** (Leaflet) — every registered water point colored by
+  build status (built/running/pending/failed/seed), with popups and a toggle
+  that draws the species rings.
+- **Charts** — queries per day by kind, water points by source, builds by
+  status, herder feedback.
+- **Recent activity** — advisory/map queries, build events, ground-truth
+  reports (auto-refreshes every 30s).
+- **COG explorer** — per water point: all 8 index-band stats (mean/min/max/std)
+  and color-mapped preview images read straight from R2.
+
+Query/activity data lives in `query_log` (migration 004); the advisory and map
+paths write to it fail-open so logging never breaks the herder experience.
+
 ## Deployment
 
 - **Render** auto-deploys `main` on push; the FastAPI app runs Uvicorn.

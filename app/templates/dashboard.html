@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arda Link · Ops Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg:#0f172a; --panel:#1e293b; --panel2:#263449; --text:#e2e8f0; --muted:#94a3b8;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6; --teal:#14b8a6;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding:14px 20px; background:var(--panel); border-bottom:1px solid #334155;
+           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; font-weight:700; }
+  header .sub { color:var(--muted); font-size:12px; }
+  #chips { display:flex; gap:8px; flex-wrap:wrap; padding:10px 20px 0; }
+  .chip { background:var(--panel2); border:1px solid #334155; border-radius:20px;
+          padding:4px 12px; font-size:12px; color:var(--muted); }
+  .chip b { color:var(--text); }
+  .ok { color:var(--green); } .err { color:var(--red); } .warn { color:var(--amber); }
+  main { padding:14px 20px 40px; display:grid; gap:14px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .kpi { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:12px 14px; }
+  .kpi .n { font-size:26px; font-weight:800; margin-top:2px; }
+  .kpi .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .grid2 { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; }
+  @media (max-width:1000px){ .grid2{ grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:12px 14px; }
+  .panel h3 { margin:0 0 8px; font-size:14px; }
+  #map { height:460px; border-radius:10px; background:#223; }
+  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+  .chartbox { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:10px 12px; }
+  .chartbox h3 { margin:0 0 6px; font-size:13px; }
+  .chartbox canvas { max-height:220px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #29374a; }
+  th { color:var(--muted); font-size:11px; text-transform:uppercase; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:700; }
+  .t-ok{background:#052e16;color:#4ade80} .t-err{background:#450a0a;color:#f87171}
+  .t-not_found{background:#422006;color:#fbbf24} .t-pending{background:#422006;color:#fbbf24}
+  .t-running{background:#172554;color:#60a5fa} .t-done{background:#052e16;color:#4ade80}
+  .t-built{background:#052e16;color:#4ade80} .t-failed{background:#450a0a;color:#f87171}
+  .t-seed{background:#334155;color:#cbd5e1} .t-query{background:#312e81;color:#a5b4fc}
+  .t-build{background:#1e3a2f;color:#34d399} .t-report{background:#3f1d38;color:#f0abfc}
+  select, button { background:var(--panel2); color:var(--text); border:1px solid #475569;
+                   border-radius:8px; padding:6px 10px; font-size:13px; }
+  .flex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .muted { color:var(--muted); font-size:12px; }
+  #activity { max-height:420px; overflow:auto; }
+  .cogimg { border:1px solid #334155; border-radius:10px; max-width:240px; height:auto; background:#000; }
+  .cogstats { overflow:auto; max-height:300px; }
+  #toast { position:fixed; bottom:16px; right:16px; background:#7f1d1d; color:#fecaca;
+           padding:10px 16px; border-radius:10px; display:none; font-size:13px; }
+</style>
+
+<body>
+<header>
+  <h1>Arda Link · Piosphere Ops</h1>
+  <span class="sub" id="envline"></span>
+  <span class="sub" id="uptime"></span>
+  <div style="margin-left:auto" class="flex">
+    <span class="muted">Auto-refresh 30s</span>
+    <button onclick="refreshAll()">Refresh now</button>
+  </div>
+</header>
+
+<div id="chips"></div>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid2">
+    <div class="panel">
+      <h3>Water points (live) · click a pin for details &amp; species rings</h3>
+      <div id="map"></div>
+    </div>
+    <div class="panel">
+      <h3>Recent activity</h3>
+      <div id="activity"></div>
+    </div>
+  </section>
+
+  <section class="charts">
+    <div class="chartbox"><h3>Queries per day (by kind)</h3><canvas id="chQueries"></canvas></div>
+    <div class="chartbox"><h3>Water points by source</h3><canvas id="chSources"></canvas></div>
+    <div class="chartbox"><h3>Builds by status</h3><canvas id="chBuilds"></canvas></div>
+    <div class="chartbox"><h3>Herder feedback</h3><canvas id="chReports"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <h3>COG explorer (satellite indices from R2)</h3>
+    <div class="flex">
+      <select id="cogSource" onchange="loadCog()"></select>
+      <select id="cogBand" onchange="loadCog()">
+        <option value="0">NDVI (greenness)</option>
+        <option value="1">NDRE (leaf nitrogen)</option>
+        <option value="2">SATVI (dry forage)</option>
+        <option value="3">BSI (bare soil)</option>
+        <option value="4">NDMI (moisture)</option>
+        <option value="5">NDWI (water)</option>
+        <option value="6">VCI (condition index)</option>
+        <option value="7">GSW (water recurrence)</option>
+      </select>
+      <span class="muted" id="cogMeta"></span>
+    </div>
+    <div class="flex" style="margin-top:10px">
+      <div><img id="cogImg" class="cogimg" alt="band preview" src=""></div>
+      <div class="cogstats"><table id="cogStats"></table></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+</head>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+'use strict';
+const KEY = new URLSearchParams(location.search).get('key') || '';
+function api(path) { return path + (KEY ? (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : ''); }
+async function getJSON(path) {
+  const r = await fetch(api(path));
+  if (!r.ok) throw new Error(path + ' -> ' + r.status);
+  return r.json();
+}
+function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : '—'; }
+function rel(iso) {
+  if (!iso) return '';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 5000); }
+
+let map = null, ringsLayer = null, charts = {};
+const STATUS_COLORS = { built:'#22c55e', done:'#22c55e', running:'#f59e0b', pending:'#f59e0b',
+                        failed:'#ef4444', seed:'#64748b' };
+
+function initMap() {
+  if (!window.L) { document.getElementById('map').textContent = 'Leaflet CDN unavailable — map disabled.'; return; }
+  map = L.map('map').setView([0.35, 37.7], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { attribution: '© OpenStreetMap', maxZoom: 17 }).addTo(map);
+}
+
+function renderHealth(h) {
+  const chips = document.getElementById('chips');
+  chips.innerHTML = '';
+  const add = (label, cls, text) => chips.insertAdjacentHTML('beforeend',
+    `<span class="chip">${esc(label)} <b class="${cls}">${esc(text)}</b></span>`);
+  add('DB', h.checks && h.checks.db === 'ok' ? 'ok' : 'err', (h.checks && h.checks.db) || 'unknown');
+  add('R2', h.checks && h.checks.r2 === 'ok' ? 'ok' : 'err', (h.checks && h.checks.r2) || 'unknown');
+  add('COGs in R2', 'ok', h.cog_count ?? 0);
+  add('Last build update', '', rel(h.last_build_update) || '—');
+  add('Last query', '', rel(h.last_query) || '—');
+  add('Deploy', '', (h.deploy_commit || '').slice(0, 7));
+  add('Env', '', h.environment || '');
+  document.getElementById('envline').textContent = 'instance ' + (h.instance || '') +
+    ' · generated ' + new Date().toLocaleTimeString();
+}
+
+function renderKPIs(s) {
+  const k = document.getElementById('kpis');
+  const ws = s.water_sources || {}, p = s.pastoralists || {}, b = s.builds || {},
+        q = s.queries || {}, gt = s.ground_truth || {}, w = s.weights || {};
+  const card = (label, n, extra) => `<div class="kpi"><div class="l">${esc(label)}</div><div class="n">${n ?? '—'}</div>${extra || ''}</div>`;
+  k.innerHTML =
+    card('Water points', ws.total, `<div class="muted">${ws.with_zones ?? 0} with rings · ${ws.zones_total ?? 0} rings</div>`) +
+    card('COGs built', (s.cogs && s.cogs.available) ?? 0) +
+    card('Herders', p.total, `<div class="muted">${p.onboarded ?? 0} onboarded</div>`) +
+    card('Queries 24h', q.today ?? 0, `<div class="muted">avg ${q.avg_latency_7d ?? '—'} ms · ${q.errors_7d ?? 0} err/7d</div>`) +
+    card('Builds', Object.values(b.by_status || {}).reduce((a, c) => a + c, 0),
+         `<div class="muted">${Object.entries(b.by_status || {}).map(([k2, v]) => k2 + ':' + v).join(' · ')}</div>`) +
+    card('Feedback', gt.total ?? 0, `<div class="muted">${gt.last_14d ?? 0} in 14d</div>`) +
+    card('Weights', w.records ?? 0, `<div class="muted">${w.herd_estimates ?? 0} herd est.</div>`) +
+    card('Active flows', s.active_flows ?? 0) +
+    card('Uptime', Math.round((s.uptime_seconds || 0) / 3600) + 'h');
+}
+
+
+function renderMap(gj) {
+  if (!map) return;
+  if (map._markers) map._markers.forEach(m => map.removeLayer(m));
+  map._markers = [];
+  const bySource = { 'satellite_gsw':'Water (GSW)', 'osm':'Water (OSM)', 'wpdx':'Water (WPDx)',
+                     'ilri':'Water (ILRI)', 'ground_truth':'Pinned by herder' };
+  gj.features.forEach(f => {
+    const p = f.properties, [lon, lat] = f.geometry.coordinates;
+    const color = STATUS_COLORS[p.build_status] || '#3b82f6';
+    const m = L.circleMarker([lat, lon], { radius: 7, color: '#0f172a', weight: 1,
+      fillColor: color, fillOpacity: 0.95 });
+    m.bindPopup(
+      `<b>${esc(p.ward || 'Unknown ward')}</b><br>` +
+      `<span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span><br>` +
+      `Status: <span class="tag t-${p.build_status}">${esc(p.build_status)}</span>` +
+      (p.build_progress ? ` (${p.build_progress}%)` : '') +
+      (p.has_cog ? `<br>✅ satellite COG built` : `<br>⏳ no COG yet`) +
+      `<br>Zones: ${p.zone_count} · conf ${p.confidence}<br>` +
+      `<span class="muted">${esc(fmtTime(p.created_at))}</span><br>` +
+      `<button onclick="showRings('${p.id}')">Species rings</button>` +
+      `<button onclick="pickCog('${p.id}')">View COG</button>`,
+      { minWidth: 200 });
+    m.on('click', () => showRings(p.id));
+    m.addTo(map);
+    map._markers.push(m);
+  });
+}
+
+async function showRings(id) {
+  try {
+    const z = await getJSON('/dashboard/api/zones/' + id);
+    if (ringsLayer) map.removeLayer(ringsLayer);
+    const style = { cattle: { color: '#3b82f6' }, shoat: { color: '#10b981' }, camel: { color: '#f97316' } };
+    ringsLayer = L.geoJSON(z, { style: f => ({ color: (style[f.properties.species] || {}).color,
+      weight: 2, fillOpacity: 0.08, dashArray: '4 4' }) }).addTo(map);
+    map.fitBounds(ringsLayer.getBounds(), { padding: [20, 20] });
+  } catch (e) { toast('Rings: ' + e.message); }
+}
+
+function renderActivity(a) {
+  const el = document.getElementById('activity');
+  const rows = (a.events || []).map(e => {
+    const t = e.type === 'query' ? `<span class="tag t-query">${esc(e.kind)}</span> <span class="tag t-${e.result}">${esc(e.result)}</span>` :
+              e.type === 'build' ? `<span class="tag t-build">build</span> <span class="tag t-${e.status}">${esc(e.status)}</span>` :
+              `<span class="tag t-report">${esc(e.report_type)}</span>`;
+    const what = e.type === 'query' ? (e.species || '') + (e.latency_ms != null ? ` · ${e.latency_ms}ms` : '') :
+                e.type === 'build' ? (e.stage || '') + (e.progress != null ? ` · ${e.progress}%` : '') :
+                esc(e.text || '');
+    return `<tr><td>${t}</td><td>${esc(what)}</td><td class="muted">${esc(fmtTime(e.at))}</td></tr>`;
+  }).join('');
+  el.innerHTML = `<table><thead><tr><th>Event</th><th>Detail</th><th>When</th></tr></thead><tbody>${rows || '<tr><td colspan=3 class="muted">No activity yet</td></tr>'}</tbody></table>`;
+}
+
+function chart(id, cfg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(el.getContext('2d'), cfg);
+}
+
+function renderCharts(s, ts) {
+  const palette = ['#3b82f6','#f97316','#10b981','#a855f7','#ef4444','#eab308','#14b8a6','#8b5cf6'];
+  const kinds = ts.kinds || [];
+  chart('chQueries', { type: 'line', data: { labels: ts.labels || [],
+      datasets: kinds.map((k, i) => ({ label: k, data: (ts.queries || []).map(d => d[k] || 0),
+        borderColor: palette[i % palette.length], backgroundColor: 'transparent', tension: 0.3, spanGaps: true })) },
+      options: { plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: { ticks: { color: '#94a3b8', maxRotation: 45 } }, y: { ticks: { color: '#94a3b8' } } } } });
+  const st = s.water_sources && s.water_sources.by_type ? s.water_sources.by_type : {};
+  chart('chSources', { type: 'pie', data: { labels: Object.keys(st),
+      datasets: [{ data: Object.values(st), backgroundColor: palette }] },
+      options: { plugins: { legend: { labels: { color: '#cbd5e1' } } } } });
+  const b = s.builds && s.builds.by_status ? s.builds.by_status : {};
+  chart('chBuilds', { type: 'bar', data: { labels: Object.keys(b),
+      datasets: [{ label: 'builds', data: Object.values(b), backgroundColor: ['#eab308','#3b82f6','#22c55e','#ef4444'] }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#94a3b8' } } } } });
+  const gt = s.ground_truth && s.ground_truth.by_type ? s.ground_truth.by_type : {};
+  chart('chReports', { type: 'bar', data: { labels: Object.keys(gt),
+      datasets: [{ label: 'reports', data: Object.values(gt), backgroundColor: '#a855f7' }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#94a3b8' } } } } });
+}
+
+
+
+let cogList = [];
+function pickCog(id) {
+  document.getElementById('cogSource').value = id;
+  loadCog();
+  document.getElementById('cogSource').scrollIntoView({ behavior: 'smooth' });
+}
+async function loadCog() {
+  const id = document.getElementById('cogSource').value;
+  const band = document.getElementById('cogBand').value;
+  if (!id) return;
+  document.getElementById('cogImg').src = api('/dashboard/api/cog/' + id + '/' + band + '.png');
+  try {
+    const st = await getJSON('/dashboard/api/cog/' + id + '/stats');
+    const el = document.getElementById('cogStats');
+    if (!st.available) { el.innerHTML = '<tr><td class="muted">COG not available</td></tr>'; return; }
+    el.innerHTML = '<thead><tr><th>Band</th><th>Mean</th><th>Min</th><th>Max</th><th>Std</th><th>Valid</th></tr></thead>' +
+      st.bands.map(b2 => `<tr><td>${esc(b2.band)}</td><td>${b2.mean ?? '—'}</td><td>${b2.min ?? '—'}</td>` +
+        `<td>${b2.max ?? '—'}</td><td>${b2.std ?? '—'}</td><td>${b2.valid_pixels ?? 0}/${b2.total_pixels ?? '—'}</td></tr>`).join('');
+    const src = cogList.find(f => f.properties.id === id);
+    document.getElementById('cogMeta').textContent = src
+      ? (src.properties.ward || '') + ' · ' + (src.properties.source_type || '') : '';
+  } catch (e) { toast('COG: ' + e.message); }
+}
+
+async function refreshAll() {
+  let s = {}, a = {}, ts = {}, h = {}, gj = { features: [] };
+  const done = (fn, name) => fn().then(v => (window['_' + name] = v)).catch(e => toast(name + ': ' + e.message));
+  await done(() => getJSON('/dashboard/api/health'), 'h');
+  await done(() => getJSON('/dashboard/api/summary'), 's');
+  await done(() => getJSON('/dashboard/api/water-sources'), 'w');
+  await done(() => getJSON('/dashboard/api/activity'), 'a');
+  await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
+  h = window._h || {}; s = window._s || {}; gj = window._w || { features: [] };
+  a = window._a || {}; ts = window._t || {};
+  renderHealth(h);
+  renderKPIs(s);
+  renderMap(gj);
+  renderActivity(a);
+  renderCharts(s, ts);
+  if (!cogList.length && gj.features.length) {
+    cogList = gj.features.filter(f => f.properties.has_cog);
+    const sel = document.getElementById('cogSource');
+    sel.innerHTML = cogList.map(f =>
+      `<option value="${esc(f.properties.id)}">${esc(f.properties.ward || '?')} (${esc(f.properties.source_type)})</option>`).join('') ||
+      '<option value="">No built COGs</option>';
+    if (cogList.length) loadCog();
+  }
+  document.getElementById('uptime').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+initMap();
+refreshAll();
+setInterval(refreshAll, 30000);
+</script>
+</body>
+</html>
+
+

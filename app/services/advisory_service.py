@@ -26,6 +26,32 @@ SPECIES_PLAIN = {
 
 
 def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
+    """Public entry: computes the advisory and logs the query for the dashboard.
+
+    Logging is fail-open (a DB hiccup never breaks the advisory reply)."""
+    from app.services import query_log
+
+    t = query_log.timer()
+    try:
+        res = _get_advisory_impl(req)
+    except Exception:
+        query_log.log_query(kind="advisory", lat=req.lat, lon=req.lon, species=req.species,
+                            result="error", latency_ms=t.ms())
+        raise
+    query_log.log_query(
+        kind="advisory",
+        lat=req.lat,
+        lon=req.lon,
+        species=req.species,
+        water_source_id=res.water_source_id,
+        result="ok" if res.found else "not_found",
+        latency_ms=t.ms(),
+        detail={"distance_km": res.distance_km} if res.distance_km else None,
+    )
+    return res
+
+
+def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
     candidates = water_reach.find_nearest_reachable_water(req.lon, req.lat, req.species, limit=1)
 
     if not candidates:
