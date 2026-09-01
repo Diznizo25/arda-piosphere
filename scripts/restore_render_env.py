@@ -35,6 +35,7 @@ KEYS = [
     "WHATSAPP_BUSINESS_ACCOUNT_ID", "WHATSAPP_VERIFY_TOKEN",
     "WHATSAPP_APP_SECRET", "WPDX_API_KEY",
     "APP_PUBLIC_BASE_URL",
+    "DASHBOARD_TOKEN",
     "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_MODEL",
     "AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION",
     # GDAL/vsis3 R2 access (the rasterio read path uses /vsis3/ + standard AWS
@@ -47,6 +48,7 @@ KEYS = [
 OVERRIDES = {
     "ENVIRONMENT": "production",
     "APP_PUBLIC_BASE_URL": "https://arda-piosphere.onrender.com",
+    "DASHBOARD_TOKEN": os.getenv("DASHBOARD_TOKEN", ""),
     "AZURE_OPENAI_MODEL": "gpt-5-mini",
     "AZURE_SPEECH_REGION": "southafricanorth",
     "AWS_ACCESS_KEY_ID": local.get("R2_ACCESS_KEY_ID", ""),
@@ -80,4 +82,10 @@ print("PUT status:", resp.status_code)
 if resp.status_code >= 400:
     print(resp.text)
     sys.exit(1)
+try:
+    created = sorted(e["envVar"]["key"] for e in resp.json())
+    print("PUT reported keys (%d): %s" % (len(created), ", ".join(created)))
+    print("PUT missing: %s" % ", ".join(k for k in KEYS if k not in created))
+except Exception:  # noqa: BLE001
+    print(resp.text[:500])
 print("Full env set restored on Render.")
