@@ -217,7 +217,11 @@ paths write to it fail-open so logging never breaks the herder experience.
 - **GitHub Actions** runs the satellite compute + COG build pipeline on
   schedule and on demand. Both workflows pin Python **3.11** (rasterio/osmium
   have no cp312 wheels), retry every stage, and never exit non-zero on a failed
-  build (they re-claim/retry the work instead).
+  build (they re-claim/retry the work instead). The two-week `refresh-indices`
+  refresh uses the **free GEE-Asset export path** (`gee_export_to_asset.py
+  --export-only --force` — the service account has no Drive/GCS storage quota,
+  so the old Drive export always failed), scopes the R2 transfer to the ward,
+  and reports its outcome to the dashboard activity feed.
 - Water-point builds are tracked in `water_point_builds` (requested → building
   → built) and can be checked over WhatsApp with `status`.
 
