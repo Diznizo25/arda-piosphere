@@ -4,6 +4,15 @@ name: refresh-indices
 # updated COGs + 8x overviews to R2, so advisories always reflect ~2-week-old
 # (or fresher) Sentinel-2 data.
 #
+# Pipeline (scripts/refresh_indices.py --ward <ward>):
+#   generate_piosphere_zones -> gee_export_to_asset.py --export-only --force
+#     (FREE GEE-Asset path; the service account has no Drive/GCS quota, so the
+#      old Drive export always fails with "Service accounts do not have storage
+#      quota") -> transfer_assets_to_r2.py --force --fresh -> build_overview_cogs.
+# The orchestrator always exits 0 (no GitHub failure emails); per-step problems
+# are logged, surfaced in the ops dashboard activity feed, and retried by the
+# next scheduled run.
+#
 # Setup (one time, in the repo Settings -> Secrets and variables -> Actions):
 #   DATABASE_URL            Supabase Postgres connection string
 #   SUPABASE_URL            project URL (https://<ref>.supabase.co)
@@ -11,7 +20,6 @@ name: refresh-indices
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_ENDPOINT_URL
 #   GEE_PROJECT_ID, GEE_SERVICE_ACCOUNT_EMAIL
 #   GEE_SERVICE_ACCOUNT_KEY  the service-account private-key JSON (as a single-line secret)
-#   GEE_EXPORT_DRIVE_FOLDER  Drive folder shared with the GEE service account (or a GCS bucket)
 
 on:
   schedule:
@@ -22,7 +30,9 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    # Nine water points x ~40 min transfers + GEE export + retries can exceed
+    # 6h; give the run headroom so a slow link never aborts mid-transfer.
+    timeout-minutes: 540
     steps:
       - uses: actions/checkout@v4
 
@@ -58,5 +68,3 @@ jobs:
           GEE_PROJECT_ID: ${{ secrets.GEE_PROJECT_ID }}
           GEE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GEE_SERVICE_ACCOUNT_EMAIL }}
           GEE_SERVICE_ACCOUNT_KEY_PATH: ./secrets/gee-service-account.json
-          GEE_EXPORT_DRIVE_FOLDER: ${{ secrets.GEE_EXPORT_DRIVE_FOLDER }}
-          GEE_EXPORT_GCS_BUCKET: ${{ secrets.GEE_EXPORT_GCS_BUCKET }}

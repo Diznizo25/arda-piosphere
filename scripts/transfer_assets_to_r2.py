@@ -388,7 +388,25 @@ def download_asset_to_r2(asset_id: str, fresh: bool = False) -> bool:
 
 
 
-def run(force: bool = False, asset_id: str | None = None, fresh: bool = False):
+def _scope_water_source_ids(ward: str | None, county: str | None) -> set[str] | None:
+    """Water source ids in the ward/county scope (None = no filter)."""
+    if not ward and not county:
+        return None
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select id::text as id from water_sources
+                where (%(ward)s::text is null or ward = %(ward)s)
+                  and (%(county)s::text is null or county = %(county)s)
+                """,
+                {"ward": ward, "county": county},
+            )
+            return {r["id"] for r in cur.fetchall()}
+
+
+def run(force: bool = False, asset_id: str | None = None, fresh: bool = False,
+        ward: str | None = None, county: str | None = None):
     init_earth_engine()
     assets = list_piosphere_assets()
     if asset_id:
@@ -398,6 +416,12 @@ def run(force: bool = False, asset_id: str | None = None, fresh: bool = False):
             log.warning(f"Asset {asset_id} not found in piosphere folder; nothing to do.")
             return
         assets = match
+    scope_ids = _scope_water_source_ids(ward, county)
+    if scope_ids is not None:
+        scoped = [a for a in assets if a.rsplit("/", 1)[-1] in scope_ids]
+        log.info(f"Scoped to ward={ward!r} county={county!r}: "
+                 f"{len(scoped)} of {len(assets)} assets")
+        assets = scoped
     log.info(f"Found {len(assets)} image assets in piosphere folder")
 
     ok, skipped, failed = 0, 0, 0
@@ -448,12 +472,15 @@ def main():
         help="Force re-download of all tiles (clears the tile cache first). "
              "Used by the 2-week refresh where the underlying GEE image changed.",
     )
+    parser.add_argument("--ward", help="Only transfer assets for water points in this ward")
+    parser.add_argument("--county", help="Only transfer assets for water points in this county")
     args = parser.parse_args()
 
     asset = args.asset
     if asset and "/" in asset:
         asset = asset  # full asset name passed through
-    run(force=args.force, asset_id=asset, fresh=args.fresh)
+    run(force=args.force, asset_id=asset, fresh=args.fresh,
+        ward=args.ward, county=args.county)
 
 
 if __name__ == "__main__":

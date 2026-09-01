@@ -85,6 +85,23 @@ def asset_exists(water_source_id: str) -> bool:
         return False
 
 
+def delete_asset(water_source_id: str) -> None:
+    """Delete the GEE asset so a scheduled refresh re-exports with fresh data.
+
+    R2 already holds the previous COG, so deleting the staging asset is safe —
+    if the new export fails, the old COG simply stays served until the next run.
+    """
+    import ee
+
+    asset_id = asset_id_for(water_source_id)
+    try:
+        ee.data.deleteAsset(asset_id)
+        log.info(f"Deleted previous asset {asset_id} (force refresh)")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"Could not delete asset {asset_id} ({e}); export may fail "
+                    f"if GEE refuses to overwrite it")
+
+
 def submit_asset_task(water_source_id: str, geom_geojson: str, as_of_date: str,
                       composite_window_days: int, vci_years_back: int):
     """Submit a GEE batch export of the index stack to a GEE Asset (free)."""
@@ -179,7 +196,7 @@ def poll_and_transfer(tasks: dict[str, object], poll_interval_s: int = 20,
 def run(ward: str | None, county: str | None, as_of_date: str,
         composite_window_days: int, vci_years_back: int, batch_size: int,
         timeout_s: int = 10800, water_source_id: str | None = None,
-        export_only: bool = False):
+        export_only: bool = False, force: bool = False):
     init_earth_engine()
 
     rows = fetch_scope(ward, county, water_source_id)
@@ -198,9 +215,14 @@ def run(ward: str | None, county: str | None, as_of_date: str,
         for row in batch:
             ws_id = str(row["water_source_id"])
             if asset_exists(ws_id):
-                log.info(f"Asset already exists for {ws_id[:8]} — skipping export")
-                skipped += 1
-                continue
+                if force:
+                    # Scheduled refresh: delete the old asset so this run exports
+                    # FRESH satellite data (asset_exists() would otherwise skip).
+                    delete_asset(ws_id)
+                else:
+                    log.info(f"Asset already exists for {ws_id[:8]} — skipping export")
+                    skipped += 1
+                    continue
             task = submit_asset_task(
                 ws_id, row["geom_geojson"], as_of_date,
                 composite_window_days, vci_years_back,
@@ -253,10 +275,13 @@ def main():
     parser.add_argument("--export-only", action="store_true",
                         help="Only create GEE assets; skip the R2 upload (the tiled "
                              "transfer script uploads to R2 afterwards).")
+    parser.add_argument("--force", action="store_true",
+                        help="Delete existing GEE assets first so a scheduled refresh "
+                             "re-exports with fresh satellite data.")
     args = parser.parse_args()
     run(args.ward, args.county, args.as_of_date, args.composite_window_days,
         args.vci_years_back, args.batch_size, args.timeout_s, args.water_source,
-        args.export_only)
+        args.export_only, args.force)
 
 
 if __name__ == "__main__":
