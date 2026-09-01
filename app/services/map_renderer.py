@@ -135,7 +135,7 @@ def _lonlat_to_px(lon: float, lat: float, west: float, north: float, mpp: float)
     return x, y
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=48)
 def _fetch_tile(z: int, x: int, y: int) -> Image.Image | None:
     url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -523,7 +523,7 @@ def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     no herder position is supplied. score = 3 (grass) or 2 (dry forage).
     """
     t = get_advisory_thresholds().vegetation
-    ndvi, satvi, bsi = arr[0], arr[2], arr[3]
+    ndvi, satvi, bsi = arr[0], arr[1], arr[2]
 
     good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
     classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
@@ -574,11 +574,11 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     """
     from app.services.raster_read import read_overview_array
 
-    res = read_overview_array(water_source_id)
+    res = read_overview_array(water_source_id, bands=[1, 3, 4], max_dim=512)
     if res is None:
         return None, None, None
     arr, transform = res
-    if arr.shape[0] < 4:
+    if arr.shape[0] < 3:
         return None, None, None
 
     import numpy as np
@@ -594,6 +594,8 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
 
     # Sample the classification into the IMG_SIZE viewport with an accurate
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
+    # Kept memory-slim: only a pair of 1-D coordinate vectors + two clipped
+    # int32 index arrays (no full-size float64 lattice).
     color_map = {
         0: (0, 0, 0, 0),
         1: (21, 128, 61, 110),
@@ -602,16 +604,14 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
         4: (245, 158, 11, 75),
     }
     h, w = classes.shape
-    iy, ix = np.mgrid[0:IMG_SIZE, 0:IMG_SIZE]
-    lon_img = _mercator_x_inv(west + ix * mpp)
-    lat_img = _mercator_y_inv(north - iy * mpp)
     c0, f0 = transform.c, transform.f
     a_, e_ = transform.a, transform.e
-    col = (lon_img - c0) / a_
-    row = (f0 - lat_img) / e_
-    col_i = np.clip(np.round(col).astype(int), 0, w - 1)
-    row_i = np.clip(np.round(row).astype(int), 0, h - 1)
-    in_bounds = (col >= 0) & (col <= w - 1) & (row >= 0) & (row <= h - 1)
+    lons = _mercator_x_inv(west + np.arange(IMG_SIZE, dtype=np.float32) * mpp)
+    lats = _mercator_y_inv(north - np.arange(IMG_SIZE, dtype=np.float32) * mpp)
+    col_i = np.clip(np.rint((lons[None, :] - c0) / a_).astype(np.int32), 0, w - 1)
+    row_i = np.clip(np.rint((f0 - lats[:, None]) / e_).astype(np.int32), 0, h - 1)
+    in_bounds = (((lons[None, :] - c0) / a_ >= 0) & ((lons[None, :] - c0) / a_ <= w - 1)
+                 & ((f0 - lats[:, None]) / e_ >= 0) & ((f0 - lats[:, None]) / e_ <= h - 1))
     sampled = classes[row_i, col_i]
     sampled[~in_bounds] = 0
 
@@ -628,13 +628,13 @@ def pasture_guidance(water_source_id: str, herder_lon: float, herder_lat: float)
     from app.services.raster_read import read_overview_array
 
     try:
-        res = read_overview_array(water_source_id)
+        res = read_overview_array(water_source_id, bands=[1, 3, 4], max_dim=512)
     except Exception:  # noqa: BLE001
         return None
     if res is None:
         return None
     arr, transform = res
-    if arr.shape[0] < 4:
+    if arr.shape[0] < 3:
         return None
     best, _ = _nearest_good_patch(arr, transform, herder_lon, herder_lat)
     if best is None:

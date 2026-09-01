@@ -34,7 +34,8 @@ def main() -> None:
     ws_mod.list_water_sources = lambda: [fake_ws]
     ws_mod.zones_for_water_source = lambda wid: fake_zones
 
-    # synthetic overview: (8, 64, 64) with realistic-ish values
+    # synthetic overview: (3, 64, 64) with realistic-ish values — the renderer
+    # reads only the forage bands (NDVI, SATVI, BSI) via read_overview_array.
     h = w = 64
     ndvi = np.full((h, w), 0.12)
     ndvi[20:44, 20:44] = 0.45          # a "green" patch
@@ -46,9 +47,7 @@ def main() -> None:
     bsi[20:44, 20:44] = 0.18
     bsi[10:20, 30:50] = 0.06
     bsi[30:40, 10:20] = 0.32           # high BSI -> bare
-    arr = np.stack([ndvi, np.zeros_like(ndvi), satvi, bsi,
-                    np.zeros_like(ndvi), np.zeros_like(ndvi),
-                    np.full((h, w), 30.0), np.full((h, w), 20.0)])
+    arr = np.stack([ndvi, satvi, bsi])
 
     class FakeTransform:
         c = 37.40
@@ -56,7 +55,7 @@ def main() -> None:
         a = 0.005
         e = -0.005
 
-    def fake_read(wsid):
+    def fake_read(wsid, *args, **kwargs):
         return arr, FakeTransform()
 
     from app.services import raster_read

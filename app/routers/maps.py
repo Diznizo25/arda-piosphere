@@ -17,7 +17,7 @@ router = APIRouter(prefix="/map", tags=["map"])
 CACHE_TTL_SECONDS = 3600  # rings only change when zones are regenerated
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=8)
 def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: float | None,
                    version: int, species: str | None, pasture: bool, lang: str) -> bytes:
     return render_rings_png(water_source_id, herder_lon, herder_lat,

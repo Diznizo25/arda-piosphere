@@ -15,6 +15,7 @@ decimated read of the full ~500MB COG when no overview object exists yet.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -123,9 +124,15 @@ def read_zone_stats(water_source_id: str, species_zone_geojson: str) -> ZoneStat
                     continue
                 with src:
                     is_overview = uri.endswith("_ov8.tif")
+                    h, w = src.height, src.width
                     if is_overview:
-                        out = src.read(masked=True)
-                        transform = src.transform
+                        factor = max(1, math.ceil(max(h, w) / 1024))
+                        out = src.read(
+                            out_shape=(src.count, max(1, h // factor), max(1, w // factor)),
+                            resampling=Resampling.average,
+                            masked=True,
+                        )
+                        transform = src.transform * src.transform.scale(factor)
                     else:
                         out_h = max(1, src.height // DECIMATE)
                         out_w = max(1, src.width // DECIMATE)
@@ -162,8 +169,14 @@ def _read_via_s3(water_source_id: str, geom) -> ZoneStats:
         data = obj["Body"].read()
         with MemoryFile(data) as memfile:
             with memfile.open() as src:
-                out = src.read(masked=True)
-                transform = src.transform
+                h, w = src.height, src.width
+                factor = max(1, math.ceil(max(h, w) / 1024))
+                out = src.read(
+                    out_shape=(src.count, max(1, h // factor), max(1, w // factor)),
+                    resampling=Resampling.average,
+                    masked=True,
+                )
+                transform = src.transform * src.transform.scale(factor)
         return _read_band_means(out, transform, geom)
     except Exception:  # noqa: BLE001  (no overview -> try full COG below)
         pass
@@ -189,11 +202,18 @@ def _read_via_s3(water_source_id: str, geom) -> ZoneStats:
     return _read_band_means(out, transform, geom)
 
 
-def read_overview_array(water_source_id: str) -> tuple[np.ndarray, object] | None:
+def read_overview_array(water_source_id: str, bands: list[int] | None = None,
+                        max_dim: int = 512) -> tuple[np.ndarray, object] | None:
     """Fetch the 8x overview COG for a water source and return (bands, transform).
 
     Returns None if no COG/overview exists (e.g. the point has not been built).
-    The band order is NDVI, NDRE, SATVI, BSI, NDMI, NDWI, VCI, GSW.
+    The band order is NDVI, NDRE, SATVI, BSI, NDMI, NDWI, VCI, GSW (all 8 bands
+    by default, rasterio 1-based indexes — pass `bands=[1,3,4]` for just
+    NDVI/SATVI/BSI).
+
+    Memory-safe: the read is decimated so the largest dimension never exceeds
+    `max_dim` (default 512), bounding RAM on small instances. The returned
+    transform is adjusted for the decimation so geolocation stays correct.
     """
     from app.config import get_settings
 
@@ -209,8 +229,18 @@ def read_overview_array(water_source_id: str) -> tuple[np.ndarray, object] | Non
     try:
         with MemoryFile(data) as memfile:
             with memfile.open() as src:
-                out = src.read()
-                transform = src.transform
+                count = len(bands) if bands else src.count
+                h, w = src.height, src.width
+                factor = max(1, math.ceil(max(h, w) / max_dim))
+                if factor == 1 and bands is None:
+                    out = src.read()
+                else:
+                    out = src.read(
+                        indexes=bands,
+                        out_shape=(count, max(1, h // factor), max(1, w // factor)),
+                        resampling=Resampling.average,
+                    )
+                transform = src.transform * src.transform.scale(factor)
         return out, transform
     except Exception:  # noqa: BLE001
         return None
