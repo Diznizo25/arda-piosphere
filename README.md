@@ -68,7 +68,13 @@ WhatsApp → capture herder feedback + PIN new water points → rebuild rings
 
 Onboarding walks a herder through **strict name validation**, **preferred
 language** (Swahili/English), **primary species**, and **mixed-herd
-composition**. After that, the message flow handles:
+composition** — then asks them to **confirm which water point their animals
+drink from**: the system presents the nearest **named** water points (from
+WPDx/OSM/GSW/ILRI/pinned data) as a numbered list + a numbered map + a
+WhatsApp interactive list, remembers the choice (`pastoralists.water_source_id`),
+and every map afterwards highlights **their** water point. If their water point
+isn't in the list, they're guided to **PIN** it (validated, then auto-built).
+After that, the message flow handles:
 
 | Trigger | What happens |
 | --- | --- |
@@ -122,7 +128,11 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
 - Big **bold fonts** (DejaVu/Arial fallback), a large place-name banner
   (ward · county), nearby water sources as teal landmark dots, scale bar and a
   clear north arrow — readable on a phone after WhatsApp downscaling.
-- `GET /map/{water_source_id}.png?lat=..&lon=..&species=..&pasture=1&lang=swa&v=..`
+- **Numbered water-point markers** (1..N) match the confirmation choice list;
+  the herder's **confirmed water point** gets a distinct "Maji yako" pin.
+- **Never blank:** when satellite data isn't built yet, the map shows a clear
+  amber "pasture data being prepared" notice + loading hatch instead of nothing.
+- `GET /map/{water_source_id}.png?lat=..&lon=..&species=..&pasture=1&lang=swa&confirm=..&numbered=..&v=..`
 
 ## Project layout
 
@@ -164,8 +174,9 @@ scripts/                      # ops + validation tooling (see below)
 ## Database
 
 Core tables: `water_sources`, `piosphere_zones` (species rings), `pastoralists`
-(+ `full_name`, `herd_composition`, `onboarded_at`), `ground_truth_reports`,
-`water_point_builds`, `conversation_state`, `weight_records`, `herd_estimates`.
+(+ `full_name`, `herd_composition`, `onboarded_at`, `water_source_id` — the
+herder's confirmed water point), `ground_truth_reports`, `water_point_builds`,
+`conversation_state`, `weight_records`, `herd_estimates`, `query_log`.
 Row-level security is enabled on all tables.
 
 ## Ops tooling (`scripts/`)

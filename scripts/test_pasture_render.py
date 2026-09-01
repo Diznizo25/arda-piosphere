@@ -74,6 +74,27 @@ def main() -> None:
     assert best is not None, "expected a best-pasture patch"
     print(f"pasture overlay OK best={best} note={note!r}")
 
+    # 4) numbered confirmation markers + confirmed-water highlight render
+    numbered = [
+        {"water_source_id": "a", "lon": 37.58, "lat": 0.36, "ward": "Ward A"},
+        {"water_source_id": "b", "lon": 37.62, "lat": 0.33, "ward": "Ward B"},
+        {"water_source_id": "c", "lon": 37.55, "lat": 0.31, "ward": "Ward C"},
+    ]
+    png2 = map_renderer.render_rings_png(
+        "x", herder_lon=37.58, herder_lat=0.35, species="camel", pasture=True,
+        lang="swa", confirm_source_id="b", numbered_sources=numbered,
+    )
+    assert png2[:8] == b"\x89PNG\r\n\x1a\n"
+    print(f"numbered + confirmed render OK ({len(png2)} bytes PNG)")
+
+    # 5) no-COG fallback: when read_overview_array returns None the map must
+    #    still render (never blank) with a "being prepared" notice
+    raster_read.read_overview_array = lambda wid, *a, **k: None
+    png3 = map_renderer.render_rings_png(
+        "x", herder_lon=37.58, herder_lat=0.35, species="camel", pasture=True, lang="swa")
+    assert png3[:8] == b"\x89PNG\r\n\x1a\n"
+    print(f"no-COG fallback render OK ({len(png3)} bytes PNG)")
+
 
 def _circle_geojson(lon, lat, radius_deg):
     import math

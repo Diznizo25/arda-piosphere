@@ -115,6 +115,39 @@ def send_quick_reply_buttons(to: str, body: str, buttons: list[tuple[str, str]])
     _post(payload)
 
 
+def send_interactive_list(to: str, body: str, button_text: str, rows: list[tuple[str, str]],
+                          footer: str | None = None, title: str | None = None) -> None:
+    """WhatsApp interactive LIST message (up to 10 rows) — used for the
+    "which water point do your animals drink from?" picker. rows: (id, title),
+    titles are truncated to ~24 chars and each row can carry a description
+    (we pass ward names + distances as row titles)."""
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": title or ""},
+            "body": {"text": body},
+            "action": {
+                "button": button_text,
+                "sections": [
+                    {
+                        "title": title or "Chagua",
+                        "rows": [
+                            {"id": rid, "title": rtitle[:24]}
+                            for rid, rtitle in rows[:10]
+                        ],
+                    }
+                ],
+            },
+        },
+    }
+    if footer:
+        payload["interactive"]["footer"] = {"text": footer}
+    _post(payload)
+
+
 def download_media(media_id: str) -> bytes | None:
     """Download a WhatsApp media object (e.g. a voice note) as raw bytes.
 

@@ -30,6 +30,12 @@ set last_known_location = st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)
 where phone_number = %(phone)s
 """
 
+SET_WATER_SOURCE_SQL = """
+update pastoralists
+set water_source_id = %(water_source_id)s
+where phone_number = %(phone)s
+"""
+
 
 @dataclass
 class Pastoralist:
@@ -41,6 +47,7 @@ class Pastoralist:
     full_name: str | None = None
     herd_composition: dict | None = None
     onboarded_at: object | None = None
+    water_source_id: str | None = None
 
     @property
     def is_onboarded(self) -> bool:
@@ -90,6 +97,7 @@ def _from_row(row) -> Pastoralist:
         full_name=row.get("full_name"),
         herd_composition=herd,
         onboarded_at=row.get("onboarded_at"),
+        water_source_id=str(row["water_source_id"]) if row.get("water_source_id") else None,
     )
 
 
@@ -106,6 +114,37 @@ def update_last_location(phone_number: str, lon: float, lat: float) -> None:
         with conn.cursor() as cur:
             cur.execute(UPDATE_LOCATION_SQL, {"phone": phone_number, "lon": lon, "lat": lat})
         conn.commit()
+
+
+def set_water_source(phone_number: str, water_source_id: str) -> None:
+    """Remember the water point the herder confirmed their animals drink from."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SET_WATER_SOURCE_SQL,
+                        {"phone": phone_number, "water_source_id": water_source_id})
+        conn.commit()
+
+
+def get_water_source(phone_number: str) -> dict | None:
+    """Return the herder's confirmed water point: {id, ward, county, lon, lat}."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select ws.id, ws.ward, ws.county, st_x(ws.geom) as lon, st_y(ws.geom) as lat
+                   from pastoralists p join water_sources ws on ws.id = p.water_source_id
+                   where p.phone_number = %(phone)s""",
+                {"phone": phone_number},
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "ward": row["ward"],
+        "county": row["county"],
+        "lon": float(row["lon"]),
+        "lat": float(row["lat"]),
+    }
 
 
 def get_last_location(phone_number: str) -> tuple[float, float] | None:

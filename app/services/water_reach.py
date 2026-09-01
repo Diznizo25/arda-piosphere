@@ -68,3 +68,43 @@ def find_nearest_reachable_water(lon: float, lat: float, species: str, limit: in
         )
         for r in rows
     ]
+
+
+NEARBY_SQL = """
+select
+    ws.id as water_source_id,
+    ws.ward,
+    ws.county,
+    ws.source_type,
+    st_x(ws.geom) as lon,
+    st_y(ws.geom) as lat,
+    st_distance(ws.geom::geography, st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography) as distance_m
+from water_sources ws
+order by distance_m asc
+limit %(limit)s
+"""
+
+
+def list_nearby_water_sources(lon: float, lat: float, limit: int = 10) -> list[dict]:
+    """Nearest water points to a location (any species), for the herder's
+    "which water point do your animals drink from?" confirmation list.
+
+    Returns [{water_source_id, ward, county, source_type, lon, lat,
+              distance_km}] — the exact named options we present to the herder.
+    """
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(NEARBY_SQL, {"lon": lon, "lat": lat, "limit": limit})
+            rows = cur.fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "water_source_id": str(r["water_source_id"]),
+            "ward": r["ward"],
+            "county": r["county"],
+            "source_type": r["source_type"],
+            "lon": float(r["lon"]),
+            "lat": float(r["lat"]),
+            "distance_km": round(float(r["distance_m"]) / 1000.0, 1),
+        })
+    return out

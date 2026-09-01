@@ -159,7 +159,9 @@ def _compute_zoom(lat: float, max_radius_km: float) -> int:
 
 def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                      herder_lat: float | None = None, species: str | None = None,
-                     pasture: bool = True, lang: str = "swa") -> bytes:
+                     pasture: bool = True, lang: str = "swa",
+                     confirm_source_id: str | None = None,
+                     numbered_sources: list[dict] | None = None) -> bytes:
     """Render the water point's rings -- and, when pasture=True, the actual
     satellite forage-quality layer -- to PNG bytes. Raises ValueError if the
     water source (or its zones) doesn't exist.
@@ -168,6 +170,11 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     (not the water point) and both are marked, so the map answers "where am I
     relative to the water?" instead of showing a far-away circle. `lang` is
     "swa" (default) or "eng" for labels and direction words.
+
+    `confirm_source_id` highlights the herder's CONFIRMED water point (a bigger
+    pin labelled "your water"); `numbered_sources` is a list of
+    {water_source_id, lon, lat, ward} dicts drawn as numbered 1..N markers so
+    the map matches a numbered choice list sent to the herder.
     """
     ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
     if ws is None:
@@ -199,12 +206,14 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     # Pasture-quality overlay (satellite forage classification) under the rings.
     best_pasture: tuple[float, float, int] | None = None
     pasture_note: str | None = None
+    pasture_available = False
     if pasture:
         pasture_img, best_pasture, pasture_note = _build_pasture_overlay(
             water_source_id, west, north, mpp, herder_lon, herder_lat
         )
         if pasture_img is not None:
             img = Image.alpha_composite(img.convert("RGBA"), pasture_img)
+            pasture_available = True
 
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -227,8 +236,22 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
             pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
             draw.polygon(pts, fill=style[0], outline=style[1], width=3)
 
+    # No satellite data yet: never show a blank map — draw a clear "data is
+    # being prepared" notice + a light loading hatch so it's obvious why the
+    # colours aren't there (and that it's temporary).
+    if pasture and not pasture_available:
+        _draw_no_cog_notice(draw, lang)
+
     wx, wy = _lonlat_to_px(lon, lat, west, north, mpp)
     _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.ward or "Maji")
+
+    # Numbered markers (1..N) so a numbered choice list matches the map.
+    if numbered_sources:
+        _draw_numbered_sources(draw, west, north, mpp, numbered_sources)
+
+    # Highlight the herder's CONFIRMED water point with a distinct label.
+    if confirm_source_id:
+        _draw_confirmed_source(draw, west, north, mpp, confirm_source_id, ws.id, lang)
 
     if herder_lon is not None and herder_lat is not None:
         hx, hy = _lonlat_to_px(herder_lon, herder_lat, west, north, mpp)
@@ -456,6 +479,85 @@ def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
             drawn += 1
             if drawn >= 6:
                 break
+
+
+def _draw_no_cog_notice(draw: ImageDraw.ImageDraw, lang: str = "swa") -> None:
+    """A map must never be blank: draw a light 'loading' hatch + a clear
+    banner explaining the satellite pasture layer is being prepared."""
+    # Subtle diagonal hatch over the whole viewport.
+    color = (245, 158, 11, 40)
+    for x in range(-IMG_SIZE, IMG_SIZE * 2, 48):
+        draw.line((x, 0, x + IMG_SIZE, IMG_SIZE), fill=color, width=2)
+    text = {
+        "swa": "Data ya malisho inaandaliwa kwa chanzo hiki - tazama tena baadaye",
+        "eng": "Pasture data is being prepared for this water point - check back soon",
+    }[lang]
+    font = _get_font(24)
+    tw = draw.textlength(text, font=font)
+    x0 = max(10, (IMG_SIZE - tw) / 2 - 20)
+    y0 = IMG_SIZE - 96
+    w = min(tw + 40, IMG_SIZE - 20)
+    h = 54
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=14,
+                           fill=(245, 158, 11, 240), outline=(255, 255, 255, 230), width=3)
+    draw.text((x0 + 20, y0 + 9), text, fill=(20, 20, 20), font=font)
+
+
+def _draw_numbered_sources(draw: ImageDraw.ImageDraw, west: float, north: float,
+                           mpp: float, sources: list[dict]) -> None:
+    """Draw water-point markers numbered 1..N (matching the numbered choice
+    list sent to the herder) so the map 'tells instantly' which is which."""
+    font_big = _get_font(22)
+    font_small = _get_font(16)
+    for i, s in enumerate(sources, start=1):
+        px_, py_ = _lonlat_to_px(s["lon"], s["lat"], west, north, mpp)
+        if not (0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE):
+            continue
+        r = 13
+        draw.ellipse((px_ - r, py_ - r, px_ + r, py_ + r), fill=(37, 99, 235, 255),
+                     outline=(255, 255, 255, 255), width=3)
+        num = str(i)
+        tw = draw.textlength(num, font=font_big)
+        draw.text((px_ - tw / 2, py_ - 13), num, fill=(255, 255, 255), font=font_big)
+        label = s.get("ward") or "Maji"
+        lw = draw.textlength(label, font=font_small)
+        bx0 = px_ - lw / 2 - 5
+        by0 = py_ + r + 4
+        draw.rounded_rectangle((bx0, by0, bx0 + lw + 10, by0 + 24), radius=4,
+                               fill=(255, 255, 255, 230))
+        draw.text((px_ - lw / 2, by0 + 3), label, fill=(20, 20, 20), font=font_small)
+
+
+def _draw_confirmed_source(draw: ImageDraw.ImageDraw, west: float, north: float,
+                           mpp: float, confirm_source_id: str, main_source_id: str,
+                           lang: str = "swa") -> None:
+    """Highlight the herder's confirmed water point with a distinct 'your
+    water' star-pin + label (only when it is not the main red pin)."""
+    if confirm_source_id == main_source_id:
+        return  # the main red pin already marks it
+    try:
+        ws = next((w for w in water_sources.list_water_sources() if w.id == confirm_source_id), None)
+    except Exception:  # noqa: BLE001
+        return
+    if ws is None:
+        return
+    px_, py_ = _lonlat_to_px(ws.lon, ws.lat, west, north, mpp)
+    if not (0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE):
+        return
+    # A star-pin in teal, distinct from the red water pin.
+    r = 12
+    draw.ellipse((px_ - r, py_ - r, px_ + r, py_ + r), fill=(14, 116, 144, 255),
+                 outline=(255, 255, 255, 255), width=3)
+    draw.polygon([(px_ - 5, py_ + r - 3), (px_ + 5, py_ + r - 3), (px_, py_ + r + 10)],
+                 fill=(14, 116, 144, 255))
+    label = {"swa": "Maji yako", "eng": "Your water"}[lang]
+    font = _get_font(20)
+    tw = draw.textlength(label, font=font)
+    bx0 = px_ - tw / 2 - 8
+    by0 = py_ + r + 14
+    draw.rounded_rectangle((bx0, by0, bx0 + tw + 16, by0 + 32), radius=6,
+                           fill=(255, 255, 255, 235), outline=(40, 40, 40, 180), width=1)
+    draw.text((px_ - tw / 2, by0 + 5), label, fill=(14, 116, 144), font=font)
 
 
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,

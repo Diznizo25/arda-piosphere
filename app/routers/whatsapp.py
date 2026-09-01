@@ -38,6 +38,8 @@ from app.services.pastoralists import (
     upsert_pastoralist,
     update_last_location,
     get_last_location,
+    set_water_source,
+    get_water_source,
     delete_pastoralist,
     set_voice_replies,
 )
@@ -58,6 +60,8 @@ LANGUAGE_KEYWORDS = {
 
 MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
+WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
+
 PIN_KEYWORDS = ["pin", "register", "ongeza", "andika", "new water", "regist"]
 
 ASK_SPECIES_TEXT = {
@@ -76,6 +80,53 @@ VOICE_ERR_MSG = {
     "swahili": "Samahani, sikuelewa ujumbe wako wa sauti. Jaribu kuandika ujumbe au tuma eneo lako (location).",
     "english": "Sorry, I could not understand your voice note. Please type a message or share your location.",
 }
+
+ASK_CONFIRM_WATER = {
+    "swahili": "💧 {name}, unaona chanzo cha maji wanyama wako wanakunywa kutoka? Chagua namba ya chanzo "
+               "kutoka kwenye orodha (ramani imewekwa alama namba 1-{n}):\n\n{list}\n\n"
+               "★ Kama hakipo, tuma 'hakuna' nikusaidie kuliandikisha kipya.",
+    "english": "💧 {name}, can you see the water point your animals drink from? Pick its number from the "
+               "list (the map marks them 1-{n}):\n\n{list}\n\n"
+               "★ If it's not there, send 'none' and I'll help you register it new.",
+}
+
+ASK_CONFIRM_WATER_RETRY = {
+    "swahili": "Tuma namba ya chanzo cha maji (k.m. '2'), au 'hakuna' ikiwa hakipo kwenye orodha.",
+    "english": "Send the number of your water point (e.g. '2'), or 'none' if it's not in the list.",
+}
+
+WATER_CONFIRMED = {
+    "swahili": "Sawa! Nimekumbuka chanzo chako cha maji: {name}. 🎯\n"
+               "Sasa nitakupa ramani ya malisho na duara za wanyama wako.",
+    "english": "Got it! I've remembered your water point: {name}. 🎯\n"
+               "Now I'll show you the pasture map with your animals' rings.",
+}
+
+WATER_CONFIRM_SKIP = {
+    "swahili": "Sawa, tutabainisha chanzo chako baadaye. Tuma eneo lako (location) au 'map' wakati wowote.",
+    "english": "Okay, we'll pin down your water point later. Send your location or 'map' anytime.",
+}
+
+SOURCE_TYPE_LABEL = {
+    "satellite_gsw": "Maji (GSW)",
+    "osm": "Maji (OSM)",
+    "wpdx": "Maji (WPDx)",
+    "ilri": "Maji (ILRI)",
+    "ground_truth": "Chanzo kilichothibitishwa",
+}
+
+
+def _source_label(nearby: dict, lang: str = "swahili") -> str:
+    """Human label for a nearby water option: ward name when present, else a
+    source-type label (so a herder can still recognise it)."""
+    if nearby.get("ward"):
+        return nearby["ward"]
+    if lang == "swahili":
+        return SOURCE_TYPE_LABEL.get(nearby.get("source_type"), "Maji")
+    return {
+        "satellite_gsw": "Water (GSW)", "osm": "Water (OSM)", "wpdx": "Water (WPDx)",
+        "ilri": "Water (ILRI)", "ground_truth": "Confirmed water point",
+    }.get(nearby.get("source_type"), "Water")
 
 VOICE_TOO_LONG_MSG = {
     "swahili": "Ujumbe wa sauti ni mrefu sana. Tuma ujumbe mfupi (chini ya dakika moja) au andika ujumbe.",
@@ -271,7 +322,8 @@ def _handle_message(message: dict) -> None:
     elif msg_type == "text":
         _handle_text(phone, pastoralist, message["text"]["body"])
     elif msg_type == "interactive":
-        reply = message["interactive"].get("button_reply", {})
+        inter = message["interactive"]
+        reply = inter.get("button_reply") or inter.get("list_reply") or {}
         _handle_text(phone, pastoralist, reply.get("id", ""))
     elif msg_type == "audio":
         _handle_audio(phone, pastoralist, message.get("audio", {}))
@@ -355,6 +407,18 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
 
     if result.found:
         _send_reply(phone, pastoralist, result.message, voice=pastoralist.voice_replies)
+        # Remember the herder: if they haven't confirmed their water point yet,
+        # nudge them to (their future maps then personalise to THEIR water point).
+        if pastoralist.is_onboarded and not pastoralist.water_source_id:
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": "💧 Je, unaweza kunithibitishia chanzo chako cha maji? Tuma 'maji' "
+                               "nikuonyeshe orodha ya vyanzo karibu nawe.",
+                    "english": "💧 Can you confirm your water point? Send 'water' and I'll show "
+                               "you the list of sources near you.",
+                }[pastoralist.preferred_language],
+            )
         return
 
     # No known water point reaches this location -> offer to register a new one.
@@ -421,6 +485,11 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
                 voice=voice,
             )
             return
+
+    # Water-point confirmation / info (remembered water source).
+    if any(k in text_lower for k in WATER_KEYWORDS):
+        _handle_water_request(phone, pastoralist)
+        return
 
     # Map request: send the rings for the nearest reachable water point.
     if any(k in text_lower for k in MAP_KEYWORDS):
@@ -498,6 +567,28 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     _show_menu(phone, pastoralist)
 
 
+def _handle_water_request(phone: str, pastoralist) -> None:
+    """'maji'/'water': show the herder's remembered water point, or run the
+    confirmation flow (named nearby list + numbered map) if not confirmed yet."""
+    if pastoralist.water_source_id:
+        try:
+            ws = get_water_source(phone)
+        except Exception:  # noqa: BLE001
+            ws = None
+        if ws:
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": f"Chanzo chako cha maji kimeandikishwa: {ws['ward'] or 'Maji'} "
+                               f"({ws['county']}).\nTuma eneo lako (location) au 'map' kuona taarifa zake.",
+                    "english": f"Your registered water point: {ws['ward'] or 'Water'} "
+                               f"({ws['county']}).\nSend your location or 'map' to see its info.",
+                }[pastoralist.preferred_language],
+            )
+            return
+    _ask_confirm_water(phone, pastoralist)
+
+
 def _handle_map_request(phone: str, pastoralist) -> None:
     """Send a map of the species rings for the nearest reachable water point."""
     settings = get_settings()
@@ -527,16 +618,31 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         return
 
     lon, lat = loc
-    candidates = water_reach.find_nearest_reachable_water(lon, lat, pastoralist.primary_species, limit=1)
-    if not candidates:
-        whatsapp_client.send_text(phone, NEW_WATER_POINT_OFFER[pastoralist.preferred_language])
-        return
-
-    water_source_id = candidates[0].water_source_id
     species = pastoralist.primary_species or "camel"
+
+    # Prefer the herder's CONFIRMED water point when they are still within its
+    # ring (they told us where their animals drink); otherwise fall back to the
+    # nearest reachable point. This keeps every map about THEIR water point.
+    confirmed_id = pastoralist.water_source_id
+    water_source_id = None
+    if confirmed_id:
+        try:
+            reachable = water_reach.find_nearest_reachable_water(lon, lat, species, limit=20)
+            if any(c.water_source_id == confirmed_id for c in reachable):
+                water_source_id = confirmed_id
+        except Exception:  # noqa: BLE001
+            log.exception("confirmed water reach check failed")
+    if water_source_id is None:
+        candidates = water_reach.find_nearest_reachable_water(lon, lat, species, limit=1)
+        if not candidates:
+            whatsapp_client.send_text(phone, NEW_WATER_POINT_OFFER[pastoralist.preferred_language])
+            return
+        water_source_id = candidates[0].water_source_id
+
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
-           f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}&v=4")
+           f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
+           f"&confirm={confirmed_id}&v=5")
 
     # Concrete, herder-friendly caption: where they are, water direction +
     # distance, and pasture direction + distance (when the COG is available).
@@ -693,6 +799,13 @@ def _finish_pin_registration(phone: str, pastoralist, water_type: str) -> None:
         return
 
     build_tracker.start_build(ws.id, phone, pastoralist.preferred_language)
+    # The newly pinned point IS where their animals drink — remember it so the
+    # system personalises their maps/advisories from now on.
+    try:
+        set_water_source(phone, ws.id)
+        pastoralist.water_source_id = ws.id
+    except Exception:  # noqa: BLE001
+        log.exception("failed to set pinned point as confirmed water source (non-fatal)")
     conversation.clear_state(phone)
     _send_reply(
         phone,
@@ -827,6 +940,11 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         whatsapp_client.send_text(phone, registration.WELCOME.format(name="").strip())
         return
 
+    if state == "onboarding.water":
+        # The herder is confirming which water point their animals drink from.
+        _handle_confirm_water_reply(phone, pastoralist, text)
+        return
+
     if state == "onboarding.name":
         if not registration.is_valid_name(text or ""):
             whatsapp_client.send_text(
@@ -936,10 +1054,152 @@ def _finish_onboarding(phone: str, pastoralist, data: dict) -> None:
     whatsapp_client.send_text(
         phone, registration.ONBOARDING_DONE[pastoralist.preferred_language].format(name=name)
     )
+    # Step 2 of registration: ask the herder to CONFIRM which water point their
+    # animals drink from (named options + a numbered map). This lets the system
+    # remember them and personalise every map/advisory afterwards.
     if get_last_location(phone):
+        _ask_confirm_water(phone, pastoralist)
+    else:
         whatsapp_client.send_text(
-            phone, registration.NO_WATER_GUIDANCE[pastoralist.preferred_language].format(name=name)
+            phone,
+            {
+                "swahili": "Tuma eneo lako (location) ili nikupatie taarifa za maji na malisho.",
+                "english": "Send your location so I can give you water and pasture info.",
+            }[pastoralist.preferred_language],
         )
+
+
+def _ask_confirm_water(phone: str, pastoralist) -> None:
+    """Present the nearest NAMED water points (numbered on a map + a WhatsApp
+    list) and ask the herder which one their animals drink from."""
+    loc = get_last_location(phone)
+    if not loc:
+        return
+    lon, lat = loc
+    try:
+        nearby = water_reach.list_nearby_water_sources(lon, lat, limit=10)
+    except Exception:  # noqa: BLE001
+        log.exception("nearby water list failed")
+        nearby = []
+    if not nearby:
+        conversation.set_state(phone, "onboarding.water", {"nearby": []})
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Hatuna chanzo cha maji kinachojulikana karibu na eneo lako. "
+                           "Tuma eneo lako hasa pale wanyama wako wanakunywa, kisha tuma 'PIN' "
+                           "kuliandikisha kipya.",
+                "english": "We don't have a known water point near you. Share your location "
+                           "exactly where your animals drink, then send 'PIN' to register it new.",
+            }[pastoralist.preferred_language],
+        )
+        return
+
+    conversation.set_state(phone, "onboarding.water",
+                           {"nearby": [n["water_source_id"] for n in nearby]})
+    lang = pastoralist.preferred_language
+    name = pastoralist.first_name or ""
+    lines = [f"{i + 1}. {_source_label(n, lang)} — {n['distance_km']:.1f} km"
+             for i, n in enumerate(nearby)]
+    whatsapp_client.send_text(
+        phone,
+        ASK_CONFIRM_WATER[lang].format(name=name, n=len(nearby), list="\n".join(lines)),
+    )
+    # Numbered map: nearest source's rings + numbered markers 1..N, so the map
+    # "tells instantly" which number matches which water point.
+    _send_confirmation_map(phone, pastoralist, nearby, lon, lat)
+    # Interactive WhatsApp list (native picker) — same ids, no numbers needed.
+    try:
+        whatsapp_client.send_interactive_list(
+            phone,
+            ASK_CONFIRM_WATER_RETRY[lang],
+            "Chagua chanzo",
+            [("wp:" + n["water_source_id"],
+              f"{_source_label(n, lang)} ({n['distance_km']:.1f} km)")
+             for n in nearby]
+            + [("wp:none", "Hakipo kwenye orodha" if lang == "swahili" else "Not in the list")],
+            footer=ASK_CONFIRM_WATER_RETRY[lang][:60],
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("interactive list failed (falling back to numbered reply)")
+
+
+def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
+                           lon: float, lat: float) -> None:
+    """Render + send the numbered confirmation map (nearest source's rings +
+    numbered water-point markers)."""
+    settings = get_settings()
+    if not settings.app_public_base_url:
+        return
+    nearest = nearby[0]
+    numbered = ",".join(n["water_source_id"] for n in nearby[:10])
+    species = pastoralist.primary_species or "camel"
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+    url = (f"{settings.app_public_base_url.rstrip('/')}/map/{nearest['water_source_id']}.png"
+           f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
+           f"&numbered={numbered}&v=5")
+    try:
+        whatsapp_client.send_image_bytes_url(
+            phone, url,
+            caption={
+                "swahili": "Ramani ya chanzo cha karibu zaidi. Tuma namba ya chanzo chako cha maji "
+                           "au chagua kutoka kwenye orodha.",
+                "english": "Map of the nearest water source. Send the number of your water "
+                           "point or pick it from the list.",
+            }[pastoralist.preferred_language],
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("confirmation map send failed (non-fatal)")
+
+
+def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bool:
+    """Handle the herder's reply to the water-point confirmation. Returns True
+    when handled (flow continues or completes), False to fall through."""
+    t = (text or "").strip().lower()
+    _, data = conversation.get_state(phone)
+    nearby_ids: list = data.get("nearby") or []
+    if t.startswith("wp:"):
+        ws_id = t[3:]
+        if ws_id == "none":
+            conversation.clear_state(phone)
+            whatsapp_client.send_text(phone, WATER_CONFIRM_SKIP[pastoralist.preferred_language])
+            return True
+        if ws_id in nearby_ids:
+            _confirm_water_source(phone, pastoralist, ws_id)
+            return True
+        whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language])
+        return True
+
+    idx = _parse_int(t)
+    if idx is not None and 1 <= idx <= len(nearby_ids):
+        _confirm_water_source(phone, pastoralist, nearby_ids[idx - 1])
+        return True
+
+    if any(k in t for k in ("none", "hakuna", "sipati", "sio", "siyo", "la", "hapana", "not")):
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, WATER_CONFIRM_SKIP[pastoralist.preferred_language])
+        return True
+    return False
+
+
+def _confirm_water_source(phone: str, pastoralist, ws_id: str) -> None:
+    """Remember the confirmed water point and send its personalised map."""
+    try:
+        set_water_source(phone, ws_id)
+        pastoralist.water_source_id = ws_id
+    except Exception:  # noqa: BLE001
+        log.exception("failed to save confirmed water source (non-fatal)")
+    conversation.clear_state(phone)
+    # Refresh the herder record so the personalised map uses their species.
+    fresh = get_pastoralist(phone)
+    if fresh is not None:
+        pastoralist = fresh
+    ws = next((w for w in water_sources.list_water_sources() if w.id == ws_id), None)
+    name = ws.ward if ws else "Maji"
+    whatsapp_client.send_text(
+        phone, WATER_CONFIRMED[pastoralist.preferred_language].format(name=name)
+    )
+    _handle_map_request(phone, pastoralist)
 
 
 def _parse_int(text: str | None) -> int | None:
