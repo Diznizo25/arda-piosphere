@@ -69,11 +69,15 @@ WhatsApp → capture herder feedback + PIN new water points → rebuild rings
 Onboarding walks a herder through **strict name validation**, **preferred
 language** (Swahili/English), **primary species**, and **mixed-herd
 composition** — then asks them to **confirm which water point their animals
-drink from**: the system presents the nearest **named** water points (from
-WPDx/OSM/GSW/ILRI/pinned data) as a numbered list + a numbered map + a
-WhatsApp interactive list, remembers the choice (`pastoralists.water_source_id`),
-and every map afterwards highlights **their** water point. If their water point
-isn't in the list, they're guided to **PIN** it (validated, then auto-built).
+drink from**: the system presents the nearest **named** water points as a
+numbered list (local name · type · distance · compass direction) + a numbered
+map + a WhatsApp interactive list, remembers the choice
+(`pastoralists.water_source_id`), and every map afterwards highlights **their**
+water point. Names come from OSM/WPDx at import time, are backfilled for
+existing points, and herders **name their own water point** when they PIN it
+("Oldonyiro borehole", "Ewaso river", ...) — a pastoralist identifies a water
+point by its local name, not a ward. If their water point isn't in the list,
+they're guided to **PIN** it (validated, then auto-built).
 After that, the message flow handles:
 
 | Trigger | What happens |

@@ -243,7 +243,7 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
         _draw_no_cog_notice(draw, lang)
 
     wx, wy = _lonlat_to_px(lon, lat, west, north, mpp)
-    _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.ward or "Maji")
+    _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.name or ws.ward or "Maji")
 
     # Numbered markers (1..N) so a numbered choice list matches the map.
     if numbered_sources:
@@ -283,8 +283,9 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                 fill=(22, 101, 52, 240),
             )
 
-    _draw_place_banner(draw, f"{ws.ward or 'Maji'}  -  {ws.county or ''}".strip())
-    _draw_legend(draw, zones, ward=ws.ward, county=ws.county, pasture_note=pasture_note, lang=lang)
+    _draw_place_banner(draw, f"{ws.name or ws.ward or 'Maji'}  -  {ws.county or ''}".strip())
+    _draw_legend(draw, zones, ward=ws.name or ws.ward, county=ws.county,
+                 pasture_note=pasture_note, lang=lang)
     _draw_scale_bar(draw, mpp)
     _draw_compass(draw, lang=lang)
 
@@ -469,7 +470,7 @@ def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
         if 0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE:
             draw.ellipse((px_ - 7, py_ - 7, px_ + 7, py_ + 7),
                          fill=(14, 116, 144, 255), outline=(255, 255, 255, 255), width=2)
-            label = ws.ward or "Maji"
+            label = ws.name or ws.ward or "Maji"
             tw = draw.textlength(label, font=font)
             bx0 = px_ - tw / 2 - 5
             by0 = py_ + 10
@@ -519,7 +520,7 @@ def _draw_numbered_sources(draw: ImageDraw.ImageDraw, west: float, north: float,
         num = str(i)
         tw = draw.textlength(num, font=font_big)
         draw.text((px_ - tw / 2, py_ - 13), num, fill=(255, 255, 255), font=font_big)
-        label = s.get("ward") or "Maji"
+        label = s.get("name") or s.get("ward") or "Maji"
         lw = draw.textlength(label, font=font_small)
         bx0 = px_ - lw / 2 - 5
         by0 = py_ + r + 4

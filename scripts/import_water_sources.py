@@ -61,6 +61,7 @@ class WaterPointRecord:
     source_type: SourceType
     source_ref: str | None
     confidence: float
+    name: str | None = None
 
 
 def load_boundary(path: Path) -> Polygon | MultiPolygon:
@@ -127,6 +128,7 @@ def fetch_osm_water_points(geom: Polygon | MultiPolygon) -> list[WaterPointRecor
                 source_type="osm",
                 source_ref=f"{el['type']}/{el['id']}",
                 confidence=0.55,  # OSM: community-mapped, unverified by default
+                name=(el.get("tags") or {}).get("name"),
             )
         )
     log.info(f"OSM: {len(records)} water points inside boundary")
@@ -174,6 +176,7 @@ def fetch_wpdx_water_points(geom: Polygon | MultiPolygon) -> list[WaterPointReco
                 source_type="wpdx",
                 source_ref=row.get("wpd_id") or row.get("row_id"),
                 confidence=confidence,
+                name=row.get("water_point_name") or row.get("name"),
             )
         )
     log.info(f"WPDx: {len(records)} water points inside boundary")
@@ -200,6 +203,7 @@ def upsert_water_sources(records: list[WaterPointRecord], ward: str | None, coun
             "geom": f"SRID=4326;POINT({r.lon} {r.lat})",
             "source_type": r.source_type,
             "source_ref": r.source_ref,
+            "name": r.name,
             "ward": ward,
             "county": county,
             "confidence": r.confidence,

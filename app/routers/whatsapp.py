@@ -115,10 +115,31 @@ SOURCE_TYPE_LABEL = {
     "ground_truth": "Chanzo kilichothibitishwa",
 }
 
+_PINNED_TYPE_SWA = {"borehole": "kisima (borehole)", "well": "kisima cha kuchimba",
+                    "river": "mto", "spring": "chemchem", "dam": "bwawa", "tap": "mfereji"}
+
+
+def _water_type_swa(nearby: dict, lang: str = "swahili") -> str:
+    """Human type label for a nearby water option (kisima/mto/...) so points
+    with the same ward are still distinguishable."""
+    t = nearby.get("water_type")
+    if t:
+        if lang == "swahili":
+            return _PINNED_TYPE_SWA.get(t, t)
+        return {"borehole": "borehole", "well": "well", "river": "river",
+                "spring": "spring", "dam": "dam", "tap": "tap"}.get(t, t)
+    return {
+        "satellite_gsw": "GSW", "osm": "OSM", "wpdx": "WPDx",
+        "ilri": "ILRI", "ground_truth": "water",
+    }.get(nearby.get("source_type"), "water")
+
 
 def _source_label(nearby: dict, lang: str = "swahili") -> str:
-    """Human label for a nearby water option: ward name when present, else a
-    source-type label (so a herder can still recognise it)."""
+    """Human label for a nearby water option: the LOCAL NAME when we have one
+    (that's how a pastoralist identifies a water point), else the ward, else a
+    source-type label."""
+    if nearby.get("name"):
+        return nearby["name"]
     if nearby.get("ward"):
         return nearby["ward"]
     if lang == "swahili":
@@ -576,12 +597,13 @@ def _handle_water_request(phone: str, pastoralist) -> None:
         except Exception:  # noqa: BLE001
             ws = None
         if ws:
+            label = ws["name"] or ws["ward"] or "Maji"
             whatsapp_client.send_text(
                 phone,
                 {
-                    "swahili": f"Chanzo chako cha maji kimeandikishwa: {ws['ward'] or 'Maji'} "
+                    "swahili": f"Chanzo chako cha maji kimeandikishwa: {label} "
                                f"({ws['county']}).\nTuma eneo lako (location) au 'map' kuona taarifa zake.",
-                    "english": f"Your registered water point: {ws['ward'] or 'Water'} "
+                    "english": f"Your registered water point: {label} "
                                f"({ws['county']}).\nSend your location or 'map' to see its info.",
                 }[pastoralist.preferred_language],
             )
@@ -674,11 +696,11 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         phone,
         url,
         caption={
-            "swahili": (f"Ramani yako{(' - ' + (ws.ward or '')) if ws else ''}."
+            "swahili": (f"Ramani yako{(' - ' + (ws.label if ws else '')) if ws else ''}."
                         f" Bluu = WEWE HAPA, nyekundu = maji."
                         f"{water_bit}{pasture_bit}"
                         f" Jina la eneo liko juu ya ramani; mwelekeo chini ya ramani."),
-            "english": (f"Your map{(' - ' + (ws.ward or '')) if ws else ''}."
+            "english": (f"Your map{(' - ' + (ws.label if ws else '')) if ws else ''}."
                         f" Blue = YOU ARE HERE, red = water."
                         f"{water_bit}{pasture_bit}"
                         f" Place name is at the top; direction is at the bottom."),
@@ -750,7 +772,7 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
     )
 
 
-def _finish_pin_registration(phone: str, pastoralist, water_type: str) -> None:
+def _finish_pin_registration(phone: str, pastoralist, water_type: str, name: str | None = None) -> None:
     """Create the validated water source, its species rings, and start the build."""
     loc = get_last_location(phone)
     if loc is None:
@@ -784,7 +806,7 @@ def _finish_pin_registration(phone: str, pastoralist, water_type: str) -> None:
     try:
         ws = water_sources.create_water_source(
             lon=lon, lat=lat, source_type="ground_truth",
-            source_ref=f"whatsapp:{water_type}:{phone}", confidence=confidence,
+            source_ref=f"whatsapp:{water_type}:{phone}", name=name, confidence=confidence,
         )
     except Exception:  # noqa: BLE001
         log.exception(f"Failed to register water point for {phone}")
@@ -1099,7 +1121,11 @@ def _ask_confirm_water(phone: str, pastoralist) -> None:
                            {"nearby": [n["water_source_id"] for n in nearby]})
     lang = pastoralist.preferred_language
     name = pastoralist.first_name or ""
-    lines = [f"{i + 1}. {_source_label(n, lang)} — {n['distance_km']:.1f} km"
+    # A pastoralist identifies a water point by its LOCAL NAME (e.g. "Oldonyiro
+    # borehole") — ward + km alone is not enough. Show name, type, distance AND
+    # compass direction so nearby points are distinguishable.
+    lines = [f"{i + 1}. {_source_label(n, lang)} — {_water_type_swa(n, lang)}, "
+             f"{n['distance_km']:.1f} km {n.get('direction_swa', '')}"
              for i, n in enumerate(nearby)]
     whatsapp_client.send_text(
         phone,
@@ -1115,7 +1141,7 @@ def _ask_confirm_water(phone: str, pastoralist) -> None:
             ASK_CONFIRM_WATER_RETRY[lang],
             "Chagua chanzo",
             [("wp:" + n["water_source_id"],
-              f"{_source_label(n, lang)} ({n['distance_km']:.1f} km)")
+              f"{_source_label(n, lang)} ({n['distance_km']:.1f} km {n.get('direction_swa', '')})")
              for n in nearby]
             + [("wp:none", "Hakipo kwenye orodha" if lang == "swahili" else "Not in the list")],
             footer=ASK_CONFIRM_WATER_RETRY[lang][:60],
@@ -1195,7 +1221,7 @@ def _confirm_water_source(phone: str, pastoralist, ws_id: str) -> None:
     if fresh is not None:
         pastoralist = fresh
     ws = next((w for w in water_sources.list_water_sources() if w.id == ws_id), None)
-    name = ws.ward if ws else "Maji"
+    name = ws.label if ws else "Maji"
     whatsapp_client.send_text(
         phone, WATER_CONFIRMED[pastoralist.preferred_language].format(name=name)
     )
@@ -1442,4 +1468,27 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
                 }[lang],
             )
             return
-        _finish_pin_registration(phone, pastoralist, water_type)
+        # Ask the herder to NAME it — a pastoralist identifies a water point by
+        # its local name ("Oldonyiro borehole"), not a ward. We store the name
+        # so they can recognise it in every future list/map.
+        conversation.set_state(phone, "pin.name", {**data, "water_type": water_type})
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Chaguo lako limepokelewa. Jina la chanzo hiki ni nini? "
+                           "(k.m. 'Kisima cha Oldonyiro', 'Mto Ewaso') — au tuma 'ruka' "
+                           "kama hujui jina.",
+                "english": "Got it. What is this water point called? "
+                           "(e.g. 'Oldonyiro borehole', 'Ewaso river') — or send 'skip' "
+                           "if you don't know a name.",
+            }[lang],
+        )
+
+    elif state == "pin.name":
+        name = None
+        if not any(k in t for k in ("ruka", "skip", "sijui", "la", "hapana", "none")):
+            candidate = (text or "").strip().title()
+            # Accept a real name only (2+ letters, no digits-only, not a command).
+            if len(candidate) >= 2 and not any(ch.isdigit() for ch in candidate):
+                name = candidate[:60]
+        _finish_pin_registration(phone, pastoralist, data.get("water_type", "well"), name)

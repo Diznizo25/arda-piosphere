@@ -9,13 +9,16 @@ from app.services import pastoralists, water_reach  # noqa: E402
 
 
 def main() -> None:
-    # 1) nearby named list (the confirmation options)
+    # 1) nearby named list (the confirmation options) — must carry name, type,
+    #    distance AND compass direction so points are distinguishable.
     nearby = water_reach.list_nearby_water_sources(37.58, 0.35, limit=10)
     print(f"nearby water sources: {len(nearby)}")
     for n in nearby[:4]:
-        print("  ", n["ward"], f"{n['distance_km']} km", n["source_type"])
+        print("  ", n.get("name") or n.get("ward"), n["distance_km"], n["direction_swa"])
     assert nearby, "expected at least one nearby water source"
     assert "water_source_id" in nearby[0] and "distance_km" in nearby[0]
+    assert "direction_swa" in nearby[0] and nearby[0]["direction_swa"]
+    assert "name" in nearby[0] or "ward" in nearby[0]
 
     # 2) remember a herder's confirmed water point (use a test phone)
     phone = "+000-water-test"

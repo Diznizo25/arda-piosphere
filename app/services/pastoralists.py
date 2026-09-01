@@ -126,11 +126,11 @@ def set_water_source(phone_number: str, water_source_id: str) -> None:
 
 
 def get_water_source(phone_number: str) -> dict | None:
-    """Return the herder's confirmed water point: {id, ward, county, lon, lat}."""
+    """Return the herder's confirmed water point: {id, name, ward, county, lon, lat}."""
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """select ws.id, ws.ward, ws.county, st_x(ws.geom) as lon, st_y(ws.geom) as lat
+                """select ws.id, ws.name, ws.ward, ws.county, st_x(ws.geom) as lon, st_y(ws.geom) as lat
                    from pastoralists p join water_sources ws on ws.id = p.water_source_id
                    where p.phone_number = %(phone)s""",
                 {"phone": phone_number},
@@ -140,6 +140,7 @@ def get_water_source(phone_number: str) -> dict | None:
         return None
     return {
         "id": str(row["id"]),
+        "name": row["name"],
         "ward": row["ward"],
         "county": row["county"],
         "lon": float(row["lon"]),

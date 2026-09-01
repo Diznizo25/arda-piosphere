@@ -23,7 +23,8 @@ def main() -> None:
     print("mercator scalar+array OK")
 
     # 2) mock the DB + COG and render the pasture map end-to-end
-    fake_ws = types.SimpleNamespace(id="x", lon=37.5725, lat=0.3525, ward="Isiolo", county="Isiolo")
+    fake_ws = types.SimpleNamespace(id="x", lon=37.5725, lat=0.3525, name="Isiolo town water",
+                                    ward="Isiolo", county="Isiolo")
     import json as _json
 
     fake_zones = [
