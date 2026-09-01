@@ -157,7 +157,7 @@ def water_sources_geojson() -> dict:
             with conn.cursor() as cur:
                 cur.execute("""
                     select ws.id, st_x(ws.geom) as lon, st_y(ws.geom) as lat,
-                           ws.source_type, ws.source_ref, ws.ward, ws.county,
+                           ws.source_type, ws.source_ref, ws.name, ws.ward, ws.county,
                            ws.confidence, ws.last_confirmed, ws.created_at,
                            (select count(*) from piosphere_zones pz
                              where pz.water_source_id = ws.id) as zone_count,
@@ -182,6 +182,7 @@ def water_sources_geojson() -> dict:
             "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
             "properties": {
                 "id": wid,
+                "name": r["name"],
                 "source_type": r["source_type"],
                 "ward": r["ward"],
                 "county": r["county"],

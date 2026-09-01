@@ -199,8 +199,9 @@ function renderMap(gj) {
     const m = L.circleMarker([lat, lon], { radius: 7, color: '#0f172a', weight: 1,
       fillColor: color, fillOpacity: 0.95 });
     m.bindPopup(
-      `<b>${esc(p.ward || 'Unknown ward')}</b><br>` +
-      `<span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span><br>` +
+      `<b>${esc(p.name || p.ward || 'Unknown')}</b>` +
+      (p.name && p.ward ? ` <span class="muted">(${esc(p.ward)})</span>` : '') +
+      `<br><span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span><br>` +
       `Status: <span class="tag t-${p.build_status}">${esc(p.build_status)}</span>` +
       (p.build_progress ? ` (${p.build_progress}%)` : '') +
       (p.has_cog ? `<br>✅ satellite COG built` : `<br>⏳ no COG yet`) +
@@ -290,7 +291,7 @@ async function loadCog() {
         `<td>${b2.max ?? '—'}</td><td>${b2.std ?? '—'}</td><td>${b2.valid_pixels ?? 0}/${b2.total_pixels ?? '—'}</td></tr>`).join('');
     const src = cogList.find(f => f.properties.id === id);
     document.getElementById('cogMeta').textContent = src
-      ? (src.properties.ward || '') + ' · ' + (src.properties.source_type || '') : '';
+      ? (src.properties.name || src.properties.ward || '') + ' · ' + (src.properties.source_type || '') : '';
   } catch (e) { toast('COG: ' + e.message); }
 }
 
@@ -313,7 +314,7 @@ async function refreshAll() {
     cogList = gj.features.filter(f => f.properties.has_cog);
     const sel = document.getElementById('cogSource');
     sel.innerHTML = cogList.map(f =>
-      `<option value="${esc(f.properties.id)}">${esc(f.properties.ward || '?')} (${esc(f.properties.source_type)})</option>`).join('') ||
+      `<option value="${esc(f.properties.id)}">${esc(f.properties.name || f.properties.ward || '?')} (${esc(f.properties.source_type)})</option>`).join('') ||
       '<option value="">No built COGs</option>';
     if (cogList.length) loadCog();
   }
