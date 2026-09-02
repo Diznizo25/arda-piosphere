@@ -92,7 +92,11 @@ After that, the message flow handles:
 | `services` / menu | Quick-reply services menu (with flow escape hatches) |
 
 Every guided flow has escape hatches (`cancel`, `menu`, `start`), and
-`conversation_state` keeps multi-step flows resumable.
+`conversation_state` keeps multi-step flows resumable. The water-point
+confirmation can be re-shown anytime (`orodha`/`list` re-sends a fresh list +
+numbered map), `hakuna`/`none` clears it and guides to PIN registration, and
+flow states older than 24h **self-heal** (a stale list never traps the herder —
+sending any message re-asks with fresh options).
 
 ## The satellite pipeline
 
