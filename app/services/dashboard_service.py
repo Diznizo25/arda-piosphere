@@ -229,15 +229,30 @@ def activity(limit: int = 25) -> dict:
             with conn.cursor() as cur:
                 cur.execute("""
                     select 'query' as ev_type, kind, phone, species, result,
-                           latency_ms, water_source_id, created_at
+                           latency_ms, water_source_id, created_at, detail
                     from query_log
-                    order by created_at desc limit 15
+                    order by created_at desc limit 25
                 """)
                 for r in cur.fetchall():
+                    detail_text = ""
+                    det = r["detail"]
+                    if det:
+                        try:
+                            import json as _json
+                            det = _json.loads(det) if isinstance(det, str) else det
+                            if det.get("event") == "inbound":
+                                detail_text = f"in {det.get('type', '')}: {det.get('text', '')}"[:80]
+                            elif det.get("pipeline"):
+                                detail_text = f"{det.get('scope', '')}"[:80]
+                            elif det.get("error"):
+                                detail_text = str(det.get("error"))[:80]
+                        except Exception:  # noqa: BLE001
+                            detail_text = str(det)[:80]
                     events.append({"type": "query", "kind": r["kind"], "phone": r["phone"],
                                    "species": r["species"], "result": r["result"],
                                    "latency_ms": r["latency_ms"],
                                    "water_source_id": str(r["water_source_id"]) if r["water_source_id"] else None,
+                                   "detail_text": detail_text,
                                    "at": _iso(r["created_at"])})
                 cur.execute("""
                     select 'build' as ev_type, status, stage, progress, error,

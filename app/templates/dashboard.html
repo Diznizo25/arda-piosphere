@@ -233,9 +233,12 @@ function renderActivity(a) {
     const t = e.type === 'query' ? `<span class="tag t-query">${esc(e.kind)}</span> <span class="tag t-${e.result}">${esc(e.result)}</span>` :
               e.type === 'build' ? `<span class="tag t-build">build</span> <span class="tag t-${e.status}">${esc(e.status)}</span>` :
               `<span class="tag t-report">${esc(e.report_type)}</span>`;
-    const what = e.type === 'query' ? (e.species || '') + (e.latency_ms != null ? ` · ${e.latency_ms}ms` : '') :
-                e.type === 'build' ? (e.stage || '') + (e.progress != null ? ` · ${e.progress}%` : '') :
-                esc(e.text || '');
+    const what = e.type === 'query'
+      ? ((e.kind === 'other' ? (e.detail_text || '') : (e.species || ''))
+         + (e.phone ? ` · ${esc(e.phone)}` : '')
+         + (e.latency_ms != null ? ` · ${e.latency_ms}ms` : ''))
+      : e.type === 'build' ? (e.stage || '') + (e.progress != null ? ` · ${e.progress}%` : '')
+        : esc(e.text || '');
     return `<tr><td>${t}</td><td>${esc(what)}</td><td class="muted">${esc(fmtTime(e.at))}</td></tr>`;
   }).join('');
   el.innerHTML = `<table><thead><tr><th>Event</th><th>Detail</th><th>When</th></tr></thead><tbody>${rows || '<tr><td colspan=3 class="muted">No activity yet</td></tr>'}</tbody></table>`;

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import sys
 import threading
 
 from fastapi import APIRouter, Request, Response, HTTPException
@@ -317,14 +318,60 @@ async def receive_webhook(request: Request):
         for change in entry.get("changes", []):
             value = change.get("value", {})
             for message in value.get("messages", []):
-                _handle_message(message)
+                # Crash-isolate per message: one bad message must NEVER turn into
+                # a 500 (Meta retries, then stops delivering — a silent bot). We
+                # log the failure to the dashboard feed and keep going.
+                try:
+                    _handle_message(message)
+                except Exception:  # noqa: BLE001
+                    log.exception("webhook handler crashed for a message")
+                    try:
+                        from app.services import query_log
+
+                        query_log.log_query(
+                            kind="other",
+                            phone=message.get("from"),
+                            result="error",
+                            detail={"event": "webhook_crash",
+                                    "type": message.get("type"),
+                                    "error": repr(sys.exc_info()[1])[:200]},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
     return {"status": "ok"}
+
+
+def _log_inbound(message: dict) -> None:
+    """Record every inbound message in query_log so the ops dashboard shows live
+    WhatsApp traffic (and we can diagnose 'not replying' instantly). Fail-open."""
+    try:
+        from app.services import query_log
+
+        msg_type = message.get("type")
+        snippet = ""
+        if msg_type == "text":
+            snippet = (message.get("text") or {}).get("body", "")[:80]
+        elif msg_type == "location":
+            snippet = "location"
+        elif msg_type == "interactive":
+            snippet = "interactive"
+        elif msg_type == "audio":
+            snippet = "audio"
+        query_log.log_query(
+            kind="other",
+            phone=message.get("from"),
+            result="ok",
+            detail={"event": "inbound", "type": msg_type, "text": snippet},
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _handle_message(message: dict) -> None:
     phone = message["from"]
     msg_type = message.get("type")
+    _log_inbound(message)
 
     pastoralist = get_pastoralist(phone) or upsert_pastoralist(phone)
 
