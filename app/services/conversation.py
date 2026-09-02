@@ -57,3 +57,16 @@ def clear_state(phone: str) -> None:
         with conn.cursor() as cur:
             cur.execute(CLEAR_SQL, {"phone": phone})
         conn.commit()
+
+
+def state_age_seconds(phone: str) -> int | None:
+    """Age of the conversation_state row in seconds (None if no row)."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select extract(epoch from (now() - updated_at))::int as age
+                   from conversation_state where phone_number = %(phone)s""",
+                {"phone": phone},
+            )
+            row = cur.fetchone()
+    return row["age"] if row else None

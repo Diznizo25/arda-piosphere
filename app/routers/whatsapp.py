@@ -92,8 +92,16 @@ ASK_CONFIRM_WATER = {
 }
 
 ASK_CONFIRM_WATER_RETRY = {
-    "swahili": "Tuma namba ya chanzo cha maji (k.m. '2'), au 'hakuna' ikiwa hakipo kwenye orodha.",
-    "english": "Send the number of your water point (e.g. '2'), or 'none' if it's not in the list.",
+    "swahili": "Chagua chanzo kwa:\n"
+               "• Namba ya chanzo (k.m. '2')\n"
+               "• 'orodha' kuona orodha + ramani tena\n"
+               "• 'hakuna' kama chanzo chako hakipo kwenye orodha\n"
+               "• 'menu' kwa huduma nyingine / 'cancel' kuacha",
+    "english": "Choose your water point by:\n"
+               "• sending its number (e.g. '2')\n"
+               "• sending 'list' to see the list + map again\n"
+               "• sending 'none' if your water point isn't in the list\n"
+               "• sending 'menu' for other services / 'cancel' to stop",
 }
 
 WATER_CONFIRMED = {
@@ -104,8 +112,14 @@ WATER_CONFIRMED = {
 }
 
 WATER_CONFIRM_SKIP = {
-    "swahili": "Sawa, tutabainisha chanzo chako baadaye. Tuma eneo lako (location) au 'map' wakati wowote.",
-    "english": "Okay, we'll pin down your water point later. Send your location or 'map' anytime.",
+    "swahili": "Sawa. Kama chanzo chako hakipo kwenye orodha, unaweza kukisajili sasa:\n"
+               "1. Tuma eneo lako (location) pale wanyama wako wanakunywa.\n"
+               "2. Tuma 'PIN' nikuulize aina yake na jina lake.\n\n"
+               "Au tuma 'menu' kuona huduma nyingine.",
+    "english": "Okay. If your water point isn't in the list, you can register it now:\n"
+               "1. Share your location where your animals drink.\n"
+               "2. Send 'PIN' and I'll ask its type and name.\n\n"
+               "Or send 'menu' to see other services.",
 }
 
 SOURCE_TYPE_LABEL = {
@@ -384,7 +398,12 @@ def _handle_message(message: dict) -> None:
         if state and state.startswith("pin."):
             _handle_active_flow(phone, pastoralist, None)
         elif state and state.startswith("onboarding."):
-            _handle_active_flow(phone, pastoralist, None)
+            if state == "onboarding.water":
+                # A new location means the nearby list is stale: re-ask with a
+                # FRESH list based on where they are now.
+                _ask_confirm_water(phone, pastoralist)
+            else:
+                _handle_active_flow(phone, pastoralist, None)
         else:
             _handle_location(phone, pastoralist, location)
     elif msg_type == "text":
@@ -1151,12 +1170,14 @@ def _finish_onboarding(phone: str, pastoralist, data: dict) -> None:
         )
 
 
-def _ask_confirm_water(phone: str, pastoralist) -> None:
+def _ask_confirm_water(phone: str, pastoralist) -> bool:
     """Present the nearest NAMED water points (numbered on a map + a WhatsApp
-    list) and ask the herder which one their animals drink from."""
+    list) and ask the herder which one their animals drink from.
+
+    Returns False when there's no location to query (callers must reply then)."""
     loc = get_last_location(phone)
     if not loc:
-        return
+        return False
     lon, lat = loc
     try:
         nearby = water_reach.list_nearby_water_sources(lon, lat, limit=10)
@@ -1175,10 +1196,11 @@ def _ask_confirm_water(phone: str, pastoralist) -> None:
                            "exactly where your animals drink, then send 'PIN' to register it new.",
             }[pastoralist.preferred_language],
         )
-        return
+        return True
 
     conversation.set_state(phone, "onboarding.water",
-                           {"nearby": [n["water_source_id"] for n in nearby]})
+                           {"nearby": [n["water_source_id"] for n in nearby],
+                            "asked_at": _now_iso()})
     lang = pastoralist.preferred_language
     name = pastoralist.first_name or ""
     # A pastoralist identifies a water point by its LOCAL NAME (e.g. "Oldonyiro
@@ -1208,6 +1230,7 @@ def _ask_confirm_water(phone: str, pastoralist) -> None:
         )
     except Exception:  # noqa: BLE001
         log.exception("interactive list failed (falling back to numbered reply)")
+    return True
 
 
 def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
@@ -1238,12 +1261,44 @@ def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
         log.exception("confirmation map send failed (non-fatal)")
 
 
+def _flow_stale(data: dict, hours: int = 24) -> bool:
+    """True when the flow state data is older than `hours` (self-heal stuck
+    conversations from a previous session)."""
+    asked = data.get("asked_at")
+    if not asked:
+        return False
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(str(asked).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > hours * 3600
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bool:
     """Handle the herder's reply to the water-point confirmation. Returns True
-    when handled (flow continues or completes), False to fall through."""
+    when handled (flow continues or completes), False to fall through.
+
+    Escape hatches so the herder is NEVER trapped in this flow:
+      'orodha'/'list'/'tena'  -> re-show a FRESH list + map (new nearby query)
+      'menu'/'cancel' etc     -> cleared by _handle_active_flow's escape hatch
+      'hakuna'/'none'         -> clear + guide them to PIN their own water point
+    """
     t = (text or "").strip().lower()
     _, data = conversation.get_state(phone)
     nearby_ids: list = data.get("nearby") or []
+    # Self-heal: a day-old list should never trap the herder — re-ask fresh.
+    if _flow_stale(data) and not t.startswith("wp:"):
+        _ask_confirm_water(phone, pastoralist)
+        return True
+    if not data.get("asked_at") and not t.startswith("wp:"):
+        # State set before we recorded asked_at — fall back to the DB row age.
+        age = conversation.state_age_seconds(phone)
+        if age is not None and age > 24 * 3600:
+            _ask_confirm_water(phone, pastoralist)
+            return True
     if t.startswith("wp:"):
         ws_id = t[3:]
         if ws_id == "none":
@@ -1261,7 +1316,16 @@ def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bo
         _confirm_water_source(phone, pastoralist, nearby_ids[idx - 1])
         return True
 
-    if any(k in t for k in ("none", "hakuna", "sipati", "sio", "siyo", "la", "hapana", "not")):
+    # 'show the list again' — re-fetch a FRESH nearby list (e.g. stale/old data
+    # from a previous day) and re-send the numbered list + map + picker.
+    if any(k in t for k in ("orodha", "list", "tena", "onyesha", "update", "sasisha",
+                            "fresh", "njia", "chaguo", "options")):
+        if not _ask_confirm_water(phone, pastoralist):
+            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language])
+        return True
+
+    if any(k in t for k in ("none", "hakuna", "sipati", "sio", "siyo", "la", "hapana",
+                            "not", "cancel", "ghairi", "skip", "ruka", "acha", "futa")):
         conversation.clear_state(phone)
         whatsapp_client.send_text(phone, WATER_CONFIRM_SKIP[pastoralist.preferred_language])
         return True
