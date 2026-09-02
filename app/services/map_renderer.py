@@ -740,63 +740,66 @@ def _draw_confirmed_source(draw: ImageDraw.ImageDraw, west: float, north: float,
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,
                  county: str | None = None, pasture_note: str | None = None,
                  lang: str = "swa") -> None:
-    font = _get_font(17)
-    line_h = 26
+    font = _get_font(15)
+    small = _get_font(13)
+    line_h = 20
     x0, y0 = 16, 76
     items = [(zone["species"], RING_STYLE[zone["species"]][1])
              for zone in sorted(zones, key=lambda z: z["radius_km"])]
 
     pasture_rows = []
     if pasture_note:
-        pasture_rows = [
-            ("Pasture layer", None),
-            ("  green = grass", (21, 128, 61, 255)),
-            ("  olive = dry forage", (132, 204, 22, 255)),
-            ("  red = bare", (220, 38, 38, 255)),
-            ("  yellow = unclear", (245, 158, 11, 255)),
-            (f"  {pasture_note}", None),
-        ]
+        if lang == "swa":
+            pasture_rows = [
+                ("Rangi ya malisho (ndani ya duara):", None),
+                ("  green=nyasi  olive=nyasi kavu", (21, 128, 61)),
+                ("  red=ntupo  yellow=haielewiki", (220, 38, 38)),
+                (f"  {pasture_note}", None),
+            ]
+        else:
+            pasture_rows = [
+                ("Pasture colours (inside rings):", None),
+                ("  green=grass  olive=dry forage", (21, 128, 61)),
+                ("  red=bare  yellow=unclear", (220, 38, 38)),
+                (f"  {pasture_note}", None),
+            ]
 
     # Water-point marker colour key (colour = what kind of water it is).
     if lang == "swa":
-        water_rows = [("Maji: rangi ya alama = aina", None),
-                      ("  blue = mto", (59, 130, 246)),
-                      ("  orange = kisima (bore)", (234, 88, 12)),
-                      ("  teal = kisima", (5, 150, 105)),
-                      ("  green = chemchemi", (34, 197, 94)),
-                      ("  cyan = bwawa", (6, 182, 212))]
+        water_rows = [("Maji ya karibu: buluu=mto", (59, 130, 246)),
+                      ("  chungwa=bore  teal=kisima", (234, 88, 12)),
+                      ("  kijani=chemchemi  cyan=bwawa", (34, 197, 94))]
     else:
-        water_rows = [("Water markers: colour = type", None),
-                      ("  blue = river", (59, 130, 246)),
-                      ("  orange = borehole", (234, 88, 12)),
-                      ("  teal = well", (5, 150, 105)),
-                      ("  green = spring", (34, 197, 94)),
-                      ("  cyan = pan/dam", (6, 182, 212))]
+        water_rows = [("Water near you: blue=river", (59, 130, 246)),
+                      ("  orange=borehole  teal=well", (234, 88, 12)),
+                      ("  green=spring  cyan=pan", (34, 197, 94))]
 
     header = f"{ward or 'Water source'} - {county}" if county else (ward or "Water source")
-    header_h = 22
-    box_w = 280
+    header_h = 20
+    box_w = 240
     rows_n = len(items) + len(pasture_rows) + len(water_rows)
-    box_h = header_h + rows_n * line_h + 14
+    box_h = header_h + rows_n * line_h + 10
     draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 225))
-    draw.text((x0 + 12, y0 + 5), header, fill=(20, 20, 20), font=font)
+    draw.text((x0 + 10, y0 + 4), header, fill=(20, 20, 20), font=font)
 
-    cy = y0 + header_h + 10
+    cy = y0 + header_h + 8
     for species, color in items:
-        draw.ellipse((x0 + 12, cy - 5, x0 + 24, cy + 7), fill=color)
-        draw.text((x0 + 32, cy - 9), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
+        draw.ellipse((x0 + 10, cy - 5, x0 + 21, cy + 6), fill=color)
+        draw.text((x0 + 27, cy - 7), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
         cy += line_h
 
     for label, color in pasture_rows:
         if color:
-            draw.rectangle((x0 + 12, cy - 7, x0 + 24, cy + 5), fill=color)
-        draw.text((x0 + 32, cy - 9), label, fill=(40, 40, 40), font=font)
+            draw.rectangle((x0 + 10, cy - 6, x0 + 21, cy + 5), fill=color)
+        f = font if not color else small
+        draw.text((x0 + 27, cy - 7), label, fill=(40, 40, 40), font=f)
         cy += line_h
 
     for label, color in water_rows:
         if color:
-            draw.ellipse((x0 + 12, cy - 6, x0 + 24, cy + 6), fill=color)
-        draw.text((x0 + 32, cy - 9), label, fill=(40, 40, 40), font=font)
+            draw.ellipse((x0 + 10, cy - 6, x0 + 21, cy + 5), fill=color)
+        f = font if not color else small
+        draw.text((x0 + 27, cy - 7), label, fill=(40, 40, 40), font=f)
         cy += line_h
 
 

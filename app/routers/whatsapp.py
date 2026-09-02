@@ -789,7 +789,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&confirm={confirmed_id}&v=6")
+           f"&confirm={confirmed_id}&v=7")
 
     # Concrete, herder-friendly caption: where they are, water direction +
     # distance, and pasture direction + distance (when the COG is available).
@@ -1299,7 +1299,7 @@ def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{nearest['water_source_id']}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&numbered={numbered}&v=6")
+           f"&numbered={numbered}&v=7")
     try:
         whatsapp_client.send_image_bytes_url(
             phone, url,
