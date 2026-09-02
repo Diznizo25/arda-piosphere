@@ -787,6 +787,16 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         water_source_id = candidates[0].water_source_id
 
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+    # 'Where am I?' in words: nearest named landmark to the herder's location.
+    try:
+        from app.services.map_renderer import _herder_place_label
+
+        here_place = _herder_place_label(lon, lat)
+        place_bit = (f" Wewe uko karibu na {here_place}."
+                     if here_place and pastoralist.preferred_language == "swahili"
+                     else f" You are near {here_place}." if here_place else "")
+    except Exception:  # noqa: BLE001
+        place_bit = ""
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
            f"&confirm={confirmed_id}&v=7")
@@ -823,13 +833,13 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         caption={
             "swahili": (f"Ramani yako{(' - ' + (ws.label if ws else '')) if ws else ''}."
                         f" Bluu = WEWE HAPA, nyekundu = maji yako."
-                        f"{water_bit}{pasture_bit}"
+                        f"{place_bit}{water_bit}{pasture_bit}"
                         f" Majina ya miji na mto yameandikwa kwenye ramani. "
                         f"Duara za maji: buluu=mto, chungwa=kisima (borehole), "
                         f"teal=kisima cha kuchimba, kijani=chemchemi, rangi ya maji=bwawa."),
             "english": (f"Your map{(' - ' + (ws.label if ws else '')) if ws else ''}."
                         f" Blue = YOU ARE HERE, red = your water."
-                        f"{water_bit}{pasture_bit}"
+                        f"{place_bit}{water_bit}{pasture_bit}"
                         f" Towns and rivers are labelled on the map. "
                         f"Water markers: blue=river, orange=borehole, teal=well, "
                         f"green=spring, cyan=pan."),

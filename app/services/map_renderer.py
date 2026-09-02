@@ -178,6 +178,16 @@ def _nearest_landmark(lon: float, lat: float, kind_filter: tuple = (),
     return best
 
 
+def _herder_place_label(lon: float, lat: float) -> str | None:
+    """The nearest named place to a location (used for the 'Wewe hapa'
+    pin, so a herder sees 'Wewe hapa (Isiolo)')."""
+    lm = _nearest_landmark(lon, lat,
+                           ("city", "town", "village", "hamlet", "market"), cap_km=15)
+    if lm is None:
+        lm = _nearest_landmark(lon, lat, ("river",), cap_km=10)
+    return lm["name"] if lm else None
+
+
 def _water_label(ws: dict, lang: str = "swa") -> str:
     """A water point's map label: local name when known, else '<type> karibu na
     <landmark>' so even unnamed points mean something to the herder. A river
@@ -353,7 +363,9 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     if herder_lon is not None and herder_lat is not None:
         hx, hy = _lonlat_to_px(herder_lon, herder_lat, west, north, mpp)
         draw.line((hx, hy, wx, wy), fill=(30, 64, 175, 220), width=4)
-        _draw_pin(draw, hx, hy, fill=(37, 99, 235, 255), label=_UI[lang]["here"])
+        here_place = _herder_place_label(herder_lon, herder_lat)
+        here_label = f"{_UI[lang]['here']} ({here_place})" if here_place else _UI[lang]["here"]
+        _draw_pin(draw, hx, hy, fill=(37, 99, 235, 255), label=here_label)
         dist_km = _haversine_km(herder_lat, herder_lon, lat, lon)
         dist_txt = f"{dist_km:.1f} km" if dist_km >= 1 else f"{dist_km * 1000:.0f} m"
         w_bearing = _bearing_deg(herder_lat, herder_lon, lat, lon)
