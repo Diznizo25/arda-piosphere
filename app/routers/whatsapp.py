@@ -167,7 +167,11 @@ SOURCE_TYPE_LABEL = {
 }
 
 _PINNED_TYPE_SWA = {"borehole": "kisima (borehole)", "well": "kisima cha kuchimba",
-                    "river": "mto", "spring": "chemchem", "dam": "bwawa", "tap": "mfereji"}
+                    "river": "mto", "spring": "chemchemi", "dam": "bwawa (lami)",
+                    "pan": "bwawa", "tap": "mfereji", "lake": "ziwa"}
+_EN_TYPE_SWA = {"borehole": "borehole", "well": "well", "river": "river",
+                "spring": "spring", "dam": "dam", "pan": "water pan",
+                "tap": "tap", "lake": "lake"}
 
 
 def _water_type_swa(nearby: dict, lang: str = "swahili") -> str:
@@ -177,28 +181,27 @@ def _water_type_swa(nearby: dict, lang: str = "swahili") -> str:
     if t:
         if lang == "swahili":
             return _PINNED_TYPE_SWA.get(t, t)
-        return {"borehole": "borehole", "well": "well", "river": "river",
-                "spring": "spring", "dam": "dam", "tap": "tap"}.get(t, t)
-    return {
-        "satellite_gsw": "GSW", "osm": "OSM", "wpdx": "WPDx",
-        "ilri": "ILRI", "ground_truth": "water",
-    }.get(nearby.get("source_type"), "water")
+        return _EN_TYPE_SWA.get(t, t)
+    return "maji" if lang == "swahili" else "water"
 
 
 def _source_label(nearby: dict, lang: str = "swahili") -> str:
     """Human label for a nearby water option: the LOCAL NAME when we have one
-    (that's how a pastoralist identifies a water point), else the ward, else a
-    source-type label."""
+    (that's how a pastoralist identifies a water point), else a landmark-based
+    description like 'Kisima karibu na Burat', else the ward."""
     if nearby.get("name"):
         return nearby["name"]
+    try:
+        from app.services.map_renderer import _water_label
+
+        lbl = _water_label(nearby, "swa" if lang == "swahili" else "eng")
+        if "karibu na" in lbl or " near " in lbl:
+            return lbl
+    except Exception:  # noqa: BLE001
+        pass
     if nearby.get("ward"):
         return nearby["ward"]
-    if lang == "swahili":
-        return SOURCE_TYPE_LABEL.get(nearby.get("source_type"), "Maji")
-    return {
-        "satellite_gsw": "Water (GSW)", "osm": "Water (OSM)", "wpdx": "Water (WPDx)",
-        "ilri": "Water (ILRI)", "ground_truth": "Confirmed water point",
-    }.get(nearby.get("source_type"), "Water")
+    return "Maji" if lang == "swahili" else "Water"
 
 VOICE_TOO_LONG_MSG = {
     "swahili": "Ujumbe wa sauti ni mrefu sana. Tuma ujumbe mfupi (chini ya dakika moja) au andika ujumbe.",
@@ -786,7 +789,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&confirm={confirmed_id}&v=5")
+           f"&confirm={confirmed_id}&v=6")
 
     # Concrete, herder-friendly caption: where they are, water direction +
     # distance, and pasture direction + distance (when the COG is available).
@@ -819,13 +822,17 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         url,
         caption={
             "swahili": (f"Ramani yako{(' - ' + (ws.label if ws else '')) if ws else ''}."
-                        f" Bluu = WEWE HAPA, nyekundu = maji."
+                        f" Bluu = WEWE HAPA, nyekundu = maji yako."
                         f"{water_bit}{pasture_bit}"
-                        f" Jina la eneo liko juu ya ramani; mwelekeo chini ya ramani."),
+                        f" Majina ya miji na mto yameandikwa kwenye ramani. "
+                        f"Duara za maji: buluu=mto, chungwa=kisima (borehole), "
+                        f"teal=kisima cha kuchimba, kijani=chemchemi, rangi ya maji=bwawa."),
             "english": (f"Your map{(' - ' + (ws.label if ws else '')) if ws else ''}."
-                        f" Blue = YOU ARE HERE, red = water."
+                        f" Blue = YOU ARE HERE, red = your water."
                         f"{water_bit}{pasture_bit}"
-                        f" Place name is at the top; direction is at the bottom."),
+                        f" Towns and rivers are labelled on the map. "
+                        f"Water markers: blue=river, orange=borehole, teal=well, "
+                        f"green=spring, cyan=pan."),
         }[pastoralist.preferred_language],
     )
 
@@ -928,7 +935,8 @@ def _finish_pin_registration(phone: str, pastoralist, water_type: str, name: str
     try:
         ws = water_sources.create_water_source(
             lon=lon, lat=lat, source_type="ground_truth",
-            source_ref=f"whatsapp:{water_type}:{phone}", name=name, confidence=confidence,
+            source_ref=f"whatsapp:{water_type}:{phone}", name=name,
+            water_type=water_type, confidence=confidence,
         )
     except Exception:  # noqa: BLE001
         log.exception(f"Failed to register water point for {phone}")
@@ -1291,7 +1299,7 @@ def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{nearest['water_source_id']}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&numbered={numbered}&v=5")
+           f"&numbered={numbered}&v=6")
     try:
         whatsapp_client.send_image_bytes_url(
             phone, url,

@@ -16,18 +16,19 @@ from app.db import get_pg_connection
 log = logging.getLogger(__name__)
 
 INSERT_WATER_SOURCE_SQL = """
-insert into water_sources (geom, source_type, source_ref, name, ward, county, confidence, last_confirmed)
+insert into water_sources (geom, source_type, source_ref, name, water_type, ward, county, confidence, last_confirmed)
 values (
     st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326),
     %(source_type)s,
     %(source_ref)s,
     %(name)s,
+    %(water_type)s,
     %(ward)s,
     %(county)s,
     %(confidence)s,
     now()
 )
-returning id, st_x(geom) as lon, st_y(geom) as lat, source_type, source_ref, name, ward, county, confidence, last_confirmed
+returning id, st_x(geom) as lon, st_y(geom) as lat, source_type, source_ref, name, water_type, ward, county, confidence, last_confirmed
 """
 
 INSERT_ZONE_SQL = """
@@ -40,7 +41,8 @@ values (%(water_source_id)s, %(species)s, %(radius_km)s,
 
 LIST_WATER_SOURCES_SQL = """
 select ws.id, st_x(ws.geom) as lon, st_y(ws.geom) as lat,
-       ws.source_type, ws.source_ref, ws.name, ws.ward, ws.county, ws.confidence, ws.last_confirmed,
+       ws.source_type, ws.source_ref, ws.name, ws.water_type, ws.ward, ws.county,
+       ws.confidence, ws.last_confirmed,
        (select count(*) from piosphere_zones pz where pz.water_source_id = ws.id) as zone_count
 from water_sources ws
 order by ws.created_at desc
@@ -62,6 +64,7 @@ class WaterSource:
     source_type: str
     source_ref: str | None
     name: str | None = None
+    water_type: str | None = None
     ward: str | None = None
     county: str = "Isiolo"
     confidence: float = 0.5
@@ -80,6 +83,7 @@ def create_water_source(
     source_type: str = "ground_truth",
     source_ref: str | None = None,
     name: str | None = None,
+    water_type: str | None = None,
     ward: str | None = None,
     county: str = "Isiolo",
     confidence: float = 0.5,
@@ -93,8 +97,8 @@ def create_water_source(
                 INSERT_WATER_SOURCE_SQL,
                 {
                     "lon": lon, "lat": lat, "source_type": source_type,
-                    "source_ref": source_ref, "name": name, "ward": ward,
-                    "county": county, "confidence": confidence,
+                    "source_ref": source_ref, "name": name, "water_type": water_type,
+                    "ward": ward, "county": county, "confidence": confidence,
                 },
             )
             row = cur.fetchone()
@@ -142,6 +146,7 @@ def list_water_sources() -> list[WaterSource]:
             source_type=r["source_type"],
             source_ref=r["source_ref"],
             name=r["name"],
+            water_type=r["water_type"],
             ward=r["ward"],
             county=r["county"],
             confidence=float(r["confidence"]),

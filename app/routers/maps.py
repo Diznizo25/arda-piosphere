@@ -29,7 +29,8 @@ def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: f
             by_id = {w.id: w for w in water_sources.list_water_sources()}
             numbered_sources = [
                 {"water_source_id": wid, "lon": by_id[wid].lon, "lat": by_id[wid].lat,
-                 "name": by_id[wid].name, "ward": by_id[wid].ward}
+                 "name": by_id[wid].name, "water_type": by_id[wid].water_type,
+                 "ward": by_id[wid].ward}
                 for wid in numbered_ids if wid in by_id
             ]
         except Exception:  # noqa: BLE001

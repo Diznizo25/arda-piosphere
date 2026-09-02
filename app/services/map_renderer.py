@@ -17,8 +17,10 @@ Pastoralist-first design decisions:
     that pastoralists use, not abstract "NE" abbreviations.
   * The best-pasture arrow points at the NEAREST walkable good patch, not a
     far-away global centroid.
-  * Other nearby water sources are drawn as small landmark dots with names, so
-    the map is anchored by familiar places even at wide (camel) zoom.
+  * Other nearby water sources are drawn as type-coloured markers (blue=river,
+    orange=borehole, teal=well, green=spring, cyan=pan) with local names, and
+    named landmarks (towns/villages/rivers/markets) are labelled, so the map is
+    anchored by familiar places even at wide (camel) zoom.
 
 Everything is pure PIL + stdlib math (Web Mercator is a closed-form transform,
 no projection library needed). Fallback: if the tile server is unreachable the
@@ -115,6 +117,99 @@ def _get_font(size: int, bold: bool = True) -> ImageFont.ImageFont:
             font = ImageFont.load_default()
     _FONT_CACHE[key] = font
     return font
+
+
+# --- landmarks (named places/herders recognise) ------------------------------
+LMARK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "config", "landmarks.geojson")
+_LMARK_CACHE: list[dict] | None = None
+
+# Water-point type -> (marker colour, short Swahili word)
+WATER_TYPE_SWA = {
+    "river": "Mto", "borehole": "Kisima", "well": "Kisima", "spring": "Chemchemi",
+    "pan": "Bwawa", "dam": "Bwawa", "lake": "Ziwa", "tap": "Mfereji",
+}
+WATER_TYPE_COLOR = {
+    "river": (59, 130, 246), "borehole": (234, 88, 12), "well": (5, 150, 105),
+    "spring": (34, 197, 94), "pan": (6, 182, 212), "dam": (6, 182, 212),
+    "lake": (6, 182, 212), "tap": (168, 85, 247),
+}
+
+
+def _load_landmarks() -> list[dict]:
+    """Named landmarks (towns/villages/rivers/peaks/markets) from the gazetteer
+    built by scripts/build_landmarks.py. [] when unavailable."""
+    global _LMARK_CACHE
+    if _LMARK_CACHE is not None:
+        return _LMARK_CACHE
+    try:
+        with open(LMARK_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        feats = []
+        for ft in data.get("features", []):
+            props = ft.get("properties", {})
+            coord = ft.get("geometry", {}).get("coordinates")
+            if not props.get("name") or not coord:
+                continue
+            feats.append({"name": str(props["name"])[:60],
+                          "kind": str(props.get("kind", "place")),
+                          "lon": float(coord[0]), "lat": float(coord[1])})
+        _LMARK_CACHE = feats
+    except Exception:  # noqa: BLE001
+        _LMARK_CACHE = []
+    return _LMARK_CACHE
+
+
+def _nearest_landmark(lon: float, lat: float, kind_filter: tuple = (),
+                      cap_km: float = 25) -> dict | None:
+    """Nearest gazetteer landmark within `cap_km`. kind_filter restricts kinds
+    ("" = any)."""
+    best = None
+    best_d = None
+    for lm in _load_landmarks():
+        if kind_filter and lm["kind"] not in kind_filter:
+            continue
+        d = _haversine_km(lat, lon, lm["lat"], lm["lon"])
+        if best_d is None or d < best_d:
+            best_d = d
+            best = lm
+    if best is None or best_d is None or best_d > cap_km:
+        return None
+    return best
+
+
+def _water_label(ws: dict, lang: str = "swa") -> str:
+    """A water point's map label: local name when known, else '<type> karibu na
+    <landmark>' so even unnamed points mean something to the herder. A river
+    point is described by the nearest named river; wells/boreholes by the
+    nearest town/village (rivers only when remote)."""
+    name = ws.get("name")
+    if name:
+        return name
+    wtype = ws.get("water_type")
+    lon, lat = ws.get("lon", 0), ws.get("lat", 0)
+    if wtype == "river":
+        lm = _nearest_landmark(lon, lat, ("river",), cap_km=18)
+    else:
+        lm = _nearest_landmark(lon, lat,
+                               ("city", "town", "village", "hamlet", "market"), cap_km=20)
+        if lm is None:
+            lm = _nearest_landmark(lon, lat, ("river",), cap_km=10)
+        if lm is None:
+            lm = _nearest_landmark(lon, lat, (), cap_km=25)
+    if lang == "swa":
+        type_word = WATER_TYPE_SWA.get(wtype or "") if wtype else "Maji"
+        if type_word is None:
+            type_word = "Maji"
+    else:
+        type_word = (wtype or "water").replace("_", " ")
+    if wtype and lm:
+        near = "karibu na" if lang == "swa" else "near"
+        return f"{type_word} {near} {lm['name']}"
+    if lm:
+        near = "karibu na" if lang == "swa" else "near"
+        return f"Maji {near} {lm['name']}"
+    return type_word
 
 
 def _mercator_x(lon):
@@ -218,8 +313,10 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Other nearby water sources as familiar landmark dots (under the rings).
-    _draw_nearby_water(draw, west, north, mpp, exclude=water_source_id)
+    # Other nearby water sources as coloured type markers + landmark labels, so
+    # the map is anchored by familiar places even at wide (camel) zoom.
+    _draw_nearby_water(draw, west, north, mpp, exclude=water_source_id, lang=lang)
+    _draw_landmark_labels(draw, west, north, mpp, lang, center_lon=lon, center_lat=lat)
 
     # Draw rings outer -> inner so the smallest stays on top.
     for zone in sorted(zones, key=lambda z: -z["radius_km"]):
@@ -247,7 +344,7 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
 
     # Numbered markers (1..N) so a numbered choice list matches the map.
     if numbered_sources:
-        _draw_numbered_sources(draw, west, north, mpp, numbered_sources)
+        _draw_numbered_sources(draw, west, north, mpp, numbered_sources, lang=lang)
 
     # Highlight the herder's CONFIRMED water point with a distinct label.
     if confirm_source_id:
@@ -453,10 +550,27 @@ def _build_base_map(zoom: int, center_x: float, center_y: float, mpp: float) -> 
     return img
 
 
+def _draw_label_plate(draw: ImageDraw.ImageDraw, x: float, y: float, text: str,
+                      font, text_color, fill=(255, 255, 255, 230)) -> None:
+    """White rounded label plate under text, centred on (x,y) top-left anchor."""
+    tw = draw.textlength(text, font=font)
+    bx0 = x - tw / 2 - 6
+    by0 = y
+    draw.rounded_rectangle((bx0, by0, bx0 + tw + 12, by0 + font.size + 8), radius=4,
+                           fill=fill, outline=(255, 255, 255, 255), width=1)
+    draw.text((x - tw / 2, by0 + 3), text, fill=text_color, font=font)
+
+
+def _type_color(ws) -> tuple:
+    wt = getattr(ws, "water_type", None) or (ws.get("water_type") if isinstance(ws, dict) else None)
+    return WATER_TYPE_COLOR.get(wt or "", (14, 116, 144))
+
+
 def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
-                       mpp: float, exclude: str) -> None:
-    """Draw other nearby water sources as teal landmark dots with names, so the
-    map is anchored by familiar places even at wide (camel) zoom."""
+                       mpp: float, exclude: str, lang: str = "swa") -> None:
+    """Draw other nearby water sources as coloured markers (colour = type:
+    blue=river, orange=borehole, teal=well, green=spring, cyan=pan) with a
+    label: the local name, or '<type> karibu na <landmark>' when unnamed."""
     try:
         sources = water_sources.list_water_sources()
     except Exception:  # noqa: BLE001
@@ -468,18 +582,79 @@ def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
             continue
         px_, py_ = _lonlat_to_px(ws.lon, ws.lat, west, north, mpp)
         if 0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE:
+            color = _type_color(ws)
             draw.ellipse((px_ - 7, py_ - 7, px_ + 7, py_ + 7),
-                         fill=(14, 116, 144, 255), outline=(255, 255, 255, 255), width=2)
-            label = ws.name or ws.ward or "Maji"
+                         fill=color, outline=(255, 255, 255, 255), width=2)
+            label = _water_label({"name": ws.name, "water_type": ws.water_type,
+                                  "lon": ws.lon, "lat": ws.lat}, lang)
             tw = draw.textlength(label, font=font)
-            bx0 = px_ - tw / 2 - 5
-            by0 = py_ + 10
-            draw.rounded_rectangle((bx0, by0, bx0 + tw + 10, by0 + 24), radius=4,
-                                   fill=(255, 255, 255, 215))
-            draw.text((px_ - tw / 2, by0 + 3), label, fill=(14, 116, 144), font=font)
+            if tw > 300:
+                label = label[:40]
+                tw = draw.textlength(label, font=font)
+            _draw_label_plate(draw, px_, py_ + 10, label, font, text_color=color)
             drawn += 1
             if drawn >= 6:
                 break
+
+
+def _draw_landmark_labels(draw: ImageDraw.ImageDraw, west: float, north: float,
+                          mpp: float, lang: str = "swa",
+                          center_lon: float | None = None,
+                          center_lat: float | None = None) -> None:
+    """Draw the named places a herder recognises (towns, villages, the river,
+    markets...) as bold labels on the map, so the base map means something even
+    at wide zoom. Landmarks come from config/landmarks.geojson.
+
+    Prioritises: importance (town > village > river), then closeness to the map
+    centre; draws each distinct name at most once (river ways repeat a name)."""
+    landmarks = _load_landmarks()
+    if not landmarks:
+        return
+    rank = {"city": 0, "town": 1, "village": 2, "market": 3, "river": 4,
+            "hamlet": 5, "peak": 6}
+    # filter to the viewport
+    in_view = []
+    for lm in landmarks:
+        px_, py_ = _lonlat_to_px(lm["lon"], lm["lat"], west, north, mpp)
+        if -90 < px_ < IMG_SIZE + 90 and -90 < py_ < IMG_SIZE + 90:
+            d_center = 0.0
+            if center_lon is not None and center_lat is not None:
+                d_center = _haversine_km(center_lat, center_lon, lm["lat"], lm["lon"])
+            in_view.append((rank.get(lm["kind"], 9), lm, px_, py_, d_center))
+    in_view.sort(key=lambda t: (t[0], t[4]))
+    # dedupe by name (keep the first, highest-rank/nearest occurrence)
+    seen: set[str] = set()
+    chosen = []
+    for _, lm, px_, py_, _d in in_view:
+        key = lm["name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        chosen.append((lm, px_, py_))
+        if len(chosen) >= 9:
+            break
+    font = _get_font(20)
+    for lm, px_, py_ in chosen:
+        kind = lm["kind"]
+        if kind == "river":
+            # river name in blue, with a small wave marker
+            text_color = (29, 78, 216)
+            fill = (239, 246, 255, 230)
+            draw.ellipse((px_ - 5, py_ - 5, px_ + 5, py_ + 5),
+                         fill=text_color, outline=(255, 255, 255, 255), width=2)
+        elif kind in ("city", "town"):
+            text_color = (30, 41, 59)
+            fill = (255, 255, 255, 240)
+            draw.rectangle((px_ - 5, py_ - 5, px_ + 5, py_ + 5),
+                           fill=(30, 41, 59, 255), outline=(255, 255, 255, 255), width=2)
+        else:
+            text_color = (51, 65, 85)
+            fill = (255, 255, 255, 230)
+            draw.ellipse((px_ - 4, py_ - 4, px_ + 4, py_ + 4),
+                         fill=(71, 85, 105, 255), outline=(255, 255, 255, 255), width=2)
+        _draw_label_plate(draw, px_, py_ + 8, lm["name"], font,
+                          text_color=text_color, fill=fill)
+
 
 
 def _draw_no_cog_notice(draw: ImageDraw.ImageDraw, lang: str = "swa") -> None:
@@ -505,7 +680,7 @@ def _draw_no_cog_notice(draw: ImageDraw.ImageDraw, lang: str = "swa") -> None:
 
 
 def _draw_numbered_sources(draw: ImageDraw.ImageDraw, west: float, north: float,
-                           mpp: float, sources: list[dict]) -> None:
+                           mpp: float, sources: list[dict], lang: str = "swa") -> None:
     """Draw water-point markers numbered 1..N (matching the numbered choice
     list sent to the herder) so the map 'tells instantly' which is which."""
     font_big = _get_font(22)
@@ -515,18 +690,19 @@ def _draw_numbered_sources(draw: ImageDraw.ImageDraw, west: float, north: float,
         if not (0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE):
             continue
         r = 13
-        draw.ellipse((px_ - r, py_ - r, px_ + r, py_ + r), fill=(37, 99, 235, 255),
+        color = WATER_TYPE_COLOR.get(s.get("water_type") or "", (37, 99, 235))
+        draw.ellipse((px_ - r, py_ - r, px_ + r, py_ + r), fill=color,
                      outline=(255, 255, 255, 255), width=3)
         num = str(i)
         tw = draw.textlength(num, font=font_big)
         draw.text((px_ - tw / 2, py_ - 13), num, fill=(255, 255, 255), font=font_big)
-        label = s.get("name") or s.get("ward") or "Maji"
+        label = _water_label(s, lang)
         lw = draw.textlength(label, font=font_small)
-        bx0 = px_ - lw / 2 - 5
-        by0 = py_ + r + 4
-        draw.rounded_rectangle((bx0, by0, bx0 + lw + 10, by0 + 24), radius=4,
-                               fill=(255, 255, 255, 230))
-        draw.text((px_ - lw / 2, by0 + 3), label, fill=(20, 20, 20), font=font_small)
+        if lw > 300:
+            label = label[:40]
+            lw = draw.textlength(label, font=font_small)
+        _draw_label_plate(draw, px_, py_ + r + 4, label, font_small,
+                          text_color=(20, 20, 20))
 
 
 def _draw_confirmed_source(draw: ImageDraw.ImageDraw, west: float, north: float,
@@ -581,10 +757,27 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
             (f"  {pasture_note}", None),
         ]
 
+    # Water-point marker colour key (colour = what kind of water it is).
+    if lang == "swa":
+        water_rows = [("Maji: rangi ya alama = aina", None),
+                      ("  blue = mto", (59, 130, 246)),
+                      ("  orange = kisima (bore)", (234, 88, 12)),
+                      ("  teal = kisima", (5, 150, 105)),
+                      ("  green = chemchemi", (34, 197, 94)),
+                      ("  cyan = bwawa", (6, 182, 212))]
+    else:
+        water_rows = [("Water markers: colour = type", None),
+                      ("  blue = river", (59, 130, 246)),
+                      ("  orange = borehole", (234, 88, 12)),
+                      ("  teal = well", (5, 150, 105)),
+                      ("  green = spring", (34, 197, 94)),
+                      ("  cyan = pan/dam", (6, 182, 212))]
+
     header = f"{ward or 'Water source'} - {county}" if county else (ward or "Water source")
     header_h = 22
-    box_w = 236
-    box_h = header_h + len(items) * line_h + len(pasture_rows) * line_h + 14
+    box_w = 280
+    rows_n = len(items) + len(pasture_rows) + len(water_rows)
+    box_h = header_h + rows_n * line_h + 14
     draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 225))
     draw.text((x0 + 12, y0 + 5), header, fill=(20, 20, 20), font=font)
 
@@ -597,6 +790,12 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
     for label, color in pasture_rows:
         if color:
             draw.rectangle((x0 + 12, cy - 7, x0 + 24, cy + 5), fill=color)
+        draw.text((x0 + 32, cy - 9), label, fill=(40, 40, 40), font=font)
+        cy += line_h
+
+    for label, color in water_rows:
+        if color:
+            draw.ellipse((x0 + 12, cy - 6, x0 + 24, cy + 6), fill=color)
         draw.text((x0 + 32, cy - 9), label, fill=(40, 40, 40), font=font)
         cy += line_h
 

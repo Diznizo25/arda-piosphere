@@ -134,7 +134,10 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   the closest good pixel — not a far-away global centroid) and a big
   bottom-center banner: `Malisho bora: Kaskazini-Mashariki · 3.2 km`.
 - Big **bold fonts** (DejaVu/Arial fallback), a large place-name banner
-  (ward · county), nearby water sources as teal landmark dots, scale bar and a
+  (ward · county), **landmark labels** (towns/villages/rivers/markets from a
+  committed OSM gazetteer), nearby water sources as **type-coloured markers**
+  (blue=river, orange=borehole, teal=well, green=spring, cyan=pan) with local
+  names — or "Kisima karibu na <village>" for unnamed points — scale bar and a
   clear north arrow — readable on a phone after WhatsApp downscaling.
 - **Numbered water-point markers** (1..N) match the confirmation choice list;
   the herder's **confirmed water point** gets a distinct "Maji yako" pin.

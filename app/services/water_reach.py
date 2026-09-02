@@ -74,6 +74,7 @@ NEARBY_SQL = """
 select
     ws.id as water_source_id,
     ws.name,
+    ws.water_type,
     ws.ward,
     ws.county,
     ws.source_type,
@@ -110,19 +111,19 @@ def list_nearby_water_sources(lon: float, lat: float, limit: int = 10) -> list[d
     out = []
     for r in rows:
         ref = r["source_ref"] or ""
-        water_type = None
-        if ref.startswith("whatsapp:"):
+        water_type = r["water_type"]
+        if not water_type and ref.startswith("whatsapp:"):
             parts = ref.split(":")
             water_type = parts[1] if len(parts) > 1 else None
         bearing = _bearing_deg(lat, lon, float(r["lat"]), float(r["lon"]))
         out.append({
             "water_source_id": str(r["water_source_id"]),
             "name": r["name"],
+            "water_type": water_type,
             "ward": r["ward"],
             "county": r["county"],
             "source_type": r["source_type"],
             "source_ref": ref,
-            "water_type": water_type,
             "lon": float(r["lon"]),
             "lat": float(r["lat"]),
             "distance_km": round(float(r["distance_m"]) / 1000.0, 1),
