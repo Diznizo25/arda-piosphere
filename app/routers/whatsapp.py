@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import sys
 import threading
 import time
@@ -233,6 +234,41 @@ AGE_KEYWORDS = {
 }
 DONE_KEYWORDS = ["done", "stop", "isha", "kumaliza", "finish", "maliza"]
 ANOTHER_KEYWORDS = ["another", "nyingine", "tena", "more", "zaidi"]
+
+# --- flow escape / back / cancel (a herder is NEVER trapped) ------------------
+# Whole-word matches only (no substring surprises): any of these clears the
+# active guided flow and brings the herder back to the services menu.
+FLOW_EXIT_WORDS = {
+    "menu", "huduma", "services", "msaada", "help", "home", "nyumbani",
+    "cancel", "ghairi", "sitisha", "batilisha", "kufuta", "futa",
+    "exit", "ondoka", "quit", "acha", "simama", "stop", "isha",
+    "kumaliza", "maliza", "baadaye",
+}
+# 'back' words step back one step INSIDE a service (weight/pin); everywhere
+# else they exit to the menu.
+BACK_WORDS = {"back", "rudi", "nyuma", "kurudi"}
+
+FLOW_EXIT_MSG = {
+    "swahili": "Sawa, umerudi kwenye menyu kuu. Unaweza kuchagua huduma nyingine "
+               "au kutuma 'cancel' wakati wowote kuacha.",
+    "english": "Okay — you are back at the main menu. Pick another service, or "
+               "send 'cancel' any time to quit.",
+}
+FLOW_HINT = {
+    "swahili": "\n\n_· 'menu' = huduma  ·  'rudi' = nyuma  ·  'cancel' = kuacha_",
+    "english": "\n\n_· 'menu' = services  ·  'back' = go back  ·  'cancel' = quit_",
+}
+
+
+def _words(text: str | None) -> set[str]:
+    """Lower-cased whole-word tokens from a message (no substring traps)."""
+    return {w for w in re.split(r"[^a-z0-9]+", (text or "").lower()) if w}
+
+
+def _hint(lang: str) -> str:
+    """Append to any guided-flow question so the herder always knows they can
+    leave: 'menu' services · 'back' back · 'cancel' quit."""
+    return FLOW_HINT["swahili" if lang == "swahili" else "english"]
 
 WEIGHT_MSG = {
     "swahili": "PIMA UZITO WA MNYAMA 🐄\n\nChagua aina ya mnyama:",
@@ -955,13 +991,15 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
         }[pastoralist.preferred_language]
 
     conversation.set_state(phone, "pin.confirm", {"lon": lon, "lat": lat})
+    hint = _hint(pastoralist.preferred_language)
     whatsapp_client.send_quick_reply_buttons(
         phone,
         f"{nearby_note}\n\n"
         + {
             "swahili": "Je, eneo hili ni chanzo cha maji hasa? Chagua aina yake:",
             "english": "Is this really a water source? Choose its type:",
-        }[pastoralist.preferred_language],
+        }[pastoralist.preferred_language]
+        + hint,
         [
             ("type:borehole", "Kisima (borehole)"),
             ("type:well", "Kisima cha kuchimba"),
@@ -1095,21 +1133,37 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
         return False
 
     t = (text or "").strip().lower()
+    words = _words(text)
+    lang = pastoralist.preferred_language
 
-    # Universal escape hatches: menu/help clears the flow and shows the menu.
-    if any(k in t for k in MENU_KEYWORDS):
+    # --- Universal escapes (run for EVERY guided flow) ----------------------
+    # 1) 'back'/'rudi': inside a multi-step service, step back one question;
+    #    elsewhere it returns to the menu.
+    if words & BACK_WORDS:
+        if state == "pin.name":
+            # Let the herder change the water type they chose.
+            conversation.set_state(phone, "pin.confirm",
+                                   {"lon": data.get("lon"), "lat": data.get("lat")})
+            whatsapp_client.send_text(phone, ASK_PIN_TYPE[lang] + _hint(lang))
+            return True
+        if state.startswith("weight.") and state not in ("weight.species", "weight.idle"):
+            conversation.set_state(phone, "weight.species", {})
+            whatsapp_client.send_text(phone, WEIGHT_MSG[lang] + _hint(lang))
+            whatsapp_client.send_quick_reply_buttons(
+                phone, WEIGHT_MSG[lang] + _hint(lang), WEIGHT_ANIMAL_BUTTONS)
+            return True
+        # Onboarding / water-confirm / menu-level: back = home (menu).
         conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, FLOW_EXIT_MSG[lang])
         _show_menu(phone, pastoralist)
         return True
-    if t in ("done", "isha", "stop", "kumaliza", "cancel", "ghairi", "futa"):
+
+    # 2) CANCEL / MENU anywhere: clear the flow, show the menu. The herder can
+    #    always exit, from any step of any service, in any language.
+    if words & FLOW_EXIT_WORDS:
         conversation.clear_state(phone)
-        whatsapp_client.send_text(
-            phone,
-            {
-                "swahili": "Sawa, nimeacha mchakato huu. Tuma 'menu' kuona huduma zote.",
-                "english": "Okay, I left that process. Send 'menu' to see all services.",
-            }[pastoralist.preferred_language],
-        )
+        whatsapp_client.send_text(phone, FLOW_EXIT_MSG[lang])
+        _show_menu(phone, pastoralist)
         return True
 
     # If the herder names another service mid-flow, jump to it (don't trap them).
@@ -1165,7 +1219,7 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         # The herder is confirming which water point their animals drink from.
         # If the reply isn't a valid choice, RE-ASK (never reply silently).
         if not _handle_confirm_water_reply(phone, pastoralist, text):
-            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[lang])
+            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[lang] + _hint(lang))
         return
 
     if state == "onboarding.name":
@@ -1177,7 +1231,7 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
                                "Jina lako ni nani?",
                     "english": "Sorry, please type your real name (letters only). "
                                "What is your name?",
-                }[lang],
+                }[lang] + _hint(lang),
             )
             return
         name = text.strip().title()
@@ -1185,7 +1239,8 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         data["name"] = name
         data["composition"] = {}
         conversation.set_state(phone, "onboarding.language", data)
-        whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=name))
+        whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=name)
+                                 + _hint(lang))
 
     elif state == "onboarding.language":
         for language, keys in LANGUAGE_KEYWORDS.items():
@@ -1195,46 +1250,55 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
                 data["language"] = language
                 break
         else:
-            whatsapp_client.send_text(phone, registration.ASK_LANGUAGE[lang].format(name=data.get("name", "")))
+            whatsapp_client.send_text(
+                phone, registration.ASK_LANGUAGE[lang].format(name=data.get("name", "")) + _hint(lang))
             return
         conversation.set_state(phone, "onboarding.animals", data)
         whatsapp_client.send_quick_reply_buttons(
-            phone, registration.ASK_ANIMALS[pastoralist.preferred_language], registration.ANIMAL_BUTTONS
+            phone, registration.ASK_ANIMALS[pastoralist.preferred_language] + _hint(pastoralist.preferred_language),
+            registration.ANIMAL_BUTTONS,
         )
 
     elif state == "onboarding.animals":
         species = registration.detect_species(t)
         if species is None:
-            whatsapp_client.send_text(phone, registration.ASK_ANIMALS[pastoralist.preferred_language])
+            whatsapp_client.send_text(phone, registration.ASK_ANIMALS[pastoralist.preferred_language]
+                                     + _hint(pastoralist.preferred_language))
             return
         data["species"] = species
         conversation.set_state(phone, "onboarding.count", data)
-        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language]
+                                 + _hint(pastoralist.preferred_language))
 
     elif state == "onboarding.more_type":
         species = registration.detect_species(t)
         if species is None:
-            whatsapp_client.send_text(phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language])
+            whatsapp_client.send_text(phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language]
+                                     + _hint(pastoralist.preferred_language))
             return
         data["species"] = species
         conversation.set_state(phone, "onboarding.count", data)
-        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+        whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language]
+                                 + _hint(pastoralist.preferred_language))
 
     elif state == "onboarding.more":
         if any(k in t for k in ("yes", "ndiyo", "ndio", "ndiyo!", "sawa", "naam", "yes_more")):
             conversation.set_state(phone, "onboarding.more_type", data)
             whatsapp_client.send_quick_reply_buttons(
-                phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language], registration.ANIMAL_BUTTONS
+                phone, registration.ASK_MORE_TYPE[pastoralist.preferred_language]
+                + _hint(pastoralist.preferred_language), registration.ANIMAL_BUTTONS
             )
             return
         if any(k in t for k in ("no", "hapana", "no_more", "kumaliza", "la", "siyo")):
             # No more animals -> finish onboarding.
             _finish_onboarding(phone, pastoralist, data)
             return
-        whatsapp_client.send_text(phone, registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language])
+        whatsapp_client.send_text(phone, registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language]
+                                 + _hint(pastoralist.preferred_language))
         whatsapp_client.send_quick_reply_buttons(
             phone,
-            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language],
+            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language]
+            + _hint(pastoralist.preferred_language),
             [("yes_more", "Ndiyo, nyingine"), ("no_more", "Hapana, kumaliza")],
         )
         return
@@ -1242,7 +1306,8 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
     elif state == "onboarding.count":
         count = _parse_int(t)
         if count is None or count < 1:
-            whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language])
+            whatsapp_client.send_text(phone, registration.ASK_COUNT[pastoralist.preferred_language]
+                                     + _hint(pastoralist.preferred_language))
             return
         species = data.get("species", "cattle")
         composition: dict = dict(data.get("composition") or {})
@@ -1255,11 +1320,11 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
         conversation.set_state(phone, "onboarding.more", data)
         whatsapp_client.send_text(
             phone,
-            registration.ADDED_ANIMAL[lang].format(species_label=label, count=count),
+            registration.ADDED_ANIMAL[lang].format(species_label=label, count=count) + _hint(lang),
         )
         whatsapp_client.send_quick_reply_buttons(
             phone,
-            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language],
+            registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language] + _hint(pastoralist.preferred_language),
             [("yes_more", "Ndiyo, nyingine"), ("no_more", "Hapana, kumaliza")],
         )
 
@@ -1346,7 +1411,8 @@ def _ask_confirm_water(phone: str, pastoralist) -> bool:
              for i, n in enumerate(nearby)]
     whatsapp_client.send_text(
         phone,
-        ASK_CONFIRM_WATER[lang].format(name=name, n=len(nearby), list="\n".join(lines)),
+        ASK_CONFIRM_WATER[lang].format(name=name, n=len(nearby), list="\n".join(lines))
+        + _hint(lang),
     )
     # Numbered map: nearest source's rings + numbered markers 1..N, so the map
     # "tells instantly" which number matches which water point.
@@ -1458,7 +1524,8 @@ def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bo
         if ws_id in nearby_ids:
             _confirm_water_source(phone, pastoralist, ws_id)
             return True
-        whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language])
+        whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language]
+                                 + _hint(pastoralist.preferred_language))
         return True
 
     idx = _parse_int(t)
@@ -1471,7 +1538,8 @@ def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bo
     if any(k in t for k in ("orodha", "list", "tena", "onyesha", "update", "sasisha",
                             "fresh", "njia", "chaguo", "options")):
         if not _ask_confirm_water(phone, pastoralist):
-            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language])
+            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[pastoralist.preferred_language]
+                                     + _hint(pastoralist.preferred_language))
         return True
 
     if any(k in t for k in ("none", "hakuna", "sipati", "sio", "siyo", "la", "hapana",
@@ -1518,8 +1586,9 @@ def _parse_int(text: str | None) -> int | None:
 
 def _start_weight_flow(phone: str, pastoralist) -> None:
     conversation.set_state(phone, "weight.species", {})
-    whatsapp_client.send_text(phone, WEIGHT_MSG[pastoralist.preferred_language])
-    whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[pastoralist.preferred_language],
+    lang = pastoralist.preferred_language
+    whatsapp_client.send_text(phone, WEIGHT_MSG[lang] + _hint(lang))
+    whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang] + _hint(lang),
                                              WEIGHT_ANIMAL_BUTTONS)
 
 
@@ -1534,18 +1603,19 @@ def _handle_weight_step(phone: str, pastoralist, state: str, data: dict, text: s
             {
                 "swahili": "Sawa! Kama unahitaji kupima tena, tuma 'uzito' wakati wowote.",
                 "english": "Okay! If you want to measure again, send 'weight' anytime.",
-            }[lang],
+            }[lang] + _hint(lang),
         )
         return
 
     if state == "weight.species":
         species = _weight_species_from_text(t)
         if species is None:
-            whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
+            whatsapp_client.send_text(phone, WEIGHT_MSG[lang] + _hint(lang))
             return
         data["species"] = species
         conversation.set_state(phone, "weight.age", data)
-        whatsapp_client.send_quick_reply_buttons(phone, ASK_AGE[lang], WEIGHT_AGE_BUTTONS)
+        whatsapp_client.send_quick_reply_buttons(phone, ASK_AGE[lang] + _hint(lang),
+                                                 WEIGHT_AGE_BUTTONS)
 
     elif state == "weight.age":
         age = None
@@ -1554,22 +1624,22 @@ def _handle_weight_step(phone: str, pastoralist, state: str, data: dict, text: s
                 age = a
                 break
         if age is None:
-            whatsapp_client.send_text(phone, ASK_AGE[lang])
+            whatsapp_client.send_text(phone, ASK_AGE[lang] + _hint(lang))
             return
         data["age"] = age
         conversation.set_state(phone, "weight.girth", data)
         guide = weight_service.measurement_guide(lang)
-        whatsapp_client.send_text(phone, ASK_GIRTH[lang].format(guide=guide))
+        whatsapp_client.send_text(phone, ASK_GIRTH[lang].format(guide=guide) + _hint(lang))
 
     elif state == "weight.girth":
         girth = _parse_float(text)
         species = data.get("species", "cattle")
         if girth is None:
-            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error="si namba"))
+            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error="si namba") + _hint(lang))
             return
         ok, err = weight_service.validate_girth(species, girth)
         if not ok:
-            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error=err or ""))
+            whatsapp_client.send_text(phone, GIRTH_INVALID[lang].format(error=err or "") + _hint(lang))
             return
         est = weight_service.estimate_weight(species, girth, data.get("age", "adult"))
         try:
@@ -1590,26 +1660,28 @@ def _handle_weight_step(phone: str, pastoralist, state: str, data: dict, text: s
     elif state == "weight.idle":
         if any(k in t for k in WEIGHT_KEYWORDS):
             conversation.set_state(phone, "weight.species", {})
-            whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
-            whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang], WEIGHT_ANIMAL_BUTTONS)
+            whatsapp_client.send_text(phone, WEIGHT_MSG[lang] + _hint(lang))
+            whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang] + _hint(lang),
+                                                     WEIGHT_ANIMAL_BUTTONS)
             return
         if any(k in t for k in HERD_KEYWORDS):
             conversation.set_state(phone, "weight.herd_count", {**data, "samples": []})
-            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang] + _hint(lang))
             return
-        whatsapp_client.send_text(phone, WEIGHT_MSG[lang])
-        whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang], WEIGHT_ANIMAL_BUTTONS)
+        whatsapp_client.send_text(phone, WEIGHT_MSG[lang] + _hint(lang))
+        whatsapp_client.send_quick_reply_buttons(phone, WEIGHT_MSG[lang] + _hint(lang),
+                                                 WEIGHT_ANIMAL_BUTTONS)
         conversation.set_state(phone, "weight.species", {})
 
     elif state == "weight.herd_count":
         count = _parse_int(text)
         if count is None or count < 1:
-            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+            whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang] + _hint(lang))
             return
         data["herd_count"] = count
         data["samples"] = []
         conversation.set_state(phone, "weight.sample", data)
-        whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3))
+        whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3) + _hint(lang))
 
     elif state == "weight.sample":
         species = data.get("species", "cattle")
@@ -1620,14 +1692,14 @@ def _handle_weight_step(phone: str, pastoralist, state: str, data: dict, text: s
             if ok:
                 samples.append(n)
         if not numbers:
-            whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3))
+            whatsapp_client.send_text(phone, ASK_SAMPLE[lang].format(sample=3) + _hint(lang))
             return
         data["samples"] = samples
         if len(samples) >= 3:
             _finish_herd_estimate(phone, pastoralist, data)
             return
         conversation.set_state(phone, "weight.sample", data)
-        whatsapp_client.send_text(phone, SAMPLE_PARTIAL[lang].format(count=len(samples)))
+        whatsapp_client.send_text(phone, SAMPLE_PARTIAL[lang].format(count=len(samples)) + _hint(lang))
 
 
 def _finish_herd_estimate(phone: str, pastoralist, data: dict) -> None:
@@ -1712,6 +1784,12 @@ def _species_label(species: str, lang: str) -> str:
 
 # --- pin flow ----------------------------------------------------------------
 
+ASK_PIN_TYPE = {
+    "swahili": "Chagua aina ya chanzo cha maji: borehole, kisima cha kuchimba, "
+               "mto, bwawa, au chemchemi.",
+    "english": "Choose the water type: borehole, well, river, pan, or spring.",
+}
+
 def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str | None) -> None:
     lang = pastoralist.preferred_language
     t = (text or "").strip().lower()
@@ -1734,13 +1812,7 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
             elif any(w in t for w in ["spring", "chemchemi"]):
                 water_type = "spring"
         if water_type is None:
-            whatsapp_client.send_text(
-                phone,
-                {
-                    "swahili": "Chagua aina ya chanzo cha maji: borehole, kisima cha kuchimba, mto, bwawa, au chemchemi.",
-                    "english": "Choose the water type: borehole, well, river, pan, or spring.",
-                }[lang],
-            )
+            whatsapp_client.send_text(phone, ASK_PIN_TYPE[lang] + _hint(lang))
             return
         # Ask the herder to NAME it — a pastoralist identifies a water point by
         # its local name ("Oldonyiro borehole"), not a ward. We store the name
@@ -1755,7 +1827,7 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
                 "english": "Got it. What is this water point called? "
                            "(e.g. 'Oldonyiro borehole', 'Ewaso river') — or send 'skip' "
                            "if you don't know a name.",
-            }[lang],
+            }[lang] + _hint(lang),
         )
 
     elif state == "pin.name":
