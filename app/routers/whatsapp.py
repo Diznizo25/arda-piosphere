@@ -387,7 +387,11 @@ async def receive_webhook(request: Request):
 
 
 def _handle_message_guarded(message: dict) -> None:
-    """Run one message, serialised per phone + crash-isolated. Never raises."""
+    """Run one message, serialised per phone + crash-isolated. Never raises.
+
+    A crash must NEVER leave the herder silently stuck: we log it AND send a
+    plain "try again" reply (any message with its own reply semantics below can
+    override it by handling itself)."""
     phone = message.get("from") or ""
     with _phone_lock(phone):
         try:
@@ -407,6 +411,28 @@ def _handle_message_guarded(message: dict) -> None:
                 )
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                # Fail-open fallback so the herder knows the message arrived and
+                # can simply retry (never a black hole).
+                lang = None
+                try:
+                    from app.services.pastoralists import get_pastoralist
+
+                    p = get_pastoralist(phone)
+                    lang = p.preferred_language if p else None
+                except Exception:  # noqa: BLE001
+                    lang = None
+                whatsapp_client.send_text(
+                    phone,
+                    {
+                        "swahili": "Pole, kulikuwa na tatizo kidogo. Tuma ujumbe wako "
+                                   "tena (k.m. eneo lako au 'menu').",
+                        "english": "Sorry, something went wrong for a moment. Please "
+                                   "send your message again (your location or 'menu').",
+                    }.get(lang, "Sorry, something went wrong. Please try again."),
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("failed to send crash fallback reply")
 
 
 def _log_inbound(message: dict) -> None:
@@ -1338,6 +1364,13 @@ def _flow_stale(data: dict, hours: int = 24) -> bool:
         return (datetime.now(timezone.utc) - dt).total_seconds() > hours * 3600
     except Exception:  # noqa: BLE001
         return False
+
+
+def _now_iso() -> str:
+    """UTC timestamp used for flow-state staleness (`asked_at`)."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _handle_confirm_water_reply(phone: str, pastoralist, text: str | None) -> bool:

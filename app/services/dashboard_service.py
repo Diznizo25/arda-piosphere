@@ -495,5 +495,3 @@ def _iso(v) -> str | None:
     if isinstance(v, str):
         return v
     return v.isoformat(timespec="seconds") if hasattr(v, "isoformat") else str(v)
-
-    return out

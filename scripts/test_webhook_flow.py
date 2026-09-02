@@ -60,6 +60,33 @@ def main() -> None:
     )
     SENT.clear()
     asked = []
+    # NOTE: keep the REAL _ask_confirm_water on the confirm-first path so a
+    # NameError/latent bug inside it fails this test (regression: _now_iso was
+    # undefined and the herder got NO reply — logged crash only).
+    nearby_fake = [{
+        "water_source_id": f"w{i}", "name": f"Point {i}", "water_type": "well",
+        "ward": "Oldonyiro", "county": "Isiolo", "lon": 37.5 + i * 0.01,
+        "lat": 0.30, "distance_km": float(i), "direction_swa": "Kaskazini",
+    } for i in range(1, 4)]
+    real_ask = whatsapp._ask_confirm_water
+    whatsapp.get_last_location = lambda phone: (37.58, 0.35)
+    whatsapp.water_reach.list_nearby_water_sources = lambda lon, lat, limit=10: nearby_fake
+    whatsapp.whatsapp_client.send_text = lambda to, body: SENT.append(("text", body[:80]))
+    whatsapp.whatsapp_client.send_image_bytes_url = lambda to, url, caption=None: \
+        SENT.append(("image", str(url)[:80]))
+    whatsapp.whatsapp_client.send_interactive_list = lambda *a, **k: SENT.append(("list", "rows"))
+    whatsapp._send_confirmation_map = lambda *a, **k: SENT.append(("map", "sent"))
+    try:
+        ok = real_ask(herder.phone_number, herder)
+        assert ok is True, "confirm ask should succeed"
+        assert any(s[0] == "text" for s in SENT), "list text must be sent"
+        print("confirm-ask real path (no crash, list text sent): OK")
+    except Exception as e:  # noqa: BLE001
+        raise AssertionError(f"confirm-ask crashed: {e!r}") from e
+    finally:
+        whatsapp._ask_confirm_water = real_ask
+
+    SENT.clear()
     whatsapp._ask_confirm_water = lambda phone, p: (asked.append(1), True)[1]
     whatsapp._handle_location(herder.phone_number, herder,
                               {"latitude": 0.35, "longitude": 37.58})
