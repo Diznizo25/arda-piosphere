@@ -14,6 +14,8 @@ import hmac
 import logging
 import sys
 import threading
+import time
+from collections import deque
 
 from fastapi import APIRouter, Request, Response, HTTPException
 
@@ -47,6 +49,40 @@ from app.services.pastoralists import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
+
+# --- webhook delivery robustness ---------------------------------------------
+# Meta redelivers webhooks when our response is slow or a delivery is retried.
+# A herder must NEVER receive duplicates, so we (a) ACK Meta immediately and
+# process asynchronously in a background thread, and (b) de-duplicate by the
+# WhatsApp message id for a short window.
+_PROCESSED: deque[tuple[float, str]] = deque(maxlen=600)
+_PROCESSED_LOCK = threading.Lock()
+_DEDUP_WINDOW_S = 600
+_PHONE_LOCKS: dict[str, threading.Lock] = {}
+_PHONE_LOCKS_GUARD = threading.Lock()
+
+
+def _already_processed(msg_id: str) -> bool:
+    """True if this exact message id was seen within the dedup window."""
+    now = time.time()
+    with _PROCESSED_LOCK:
+        while _PROCESSED and now - _PROCESSED[0][0] > _DEDUP_WINDOW_S:
+            _PROCESSED.popleft()
+        for ts, mid in _PROCESSED:
+            if mid == msg_id:
+                return True
+        _PROCESSED.append((now, msg_id))
+        return False
+
+
+def _phone_lock(phone: str) -> threading.Lock:
+    with _PHONE_LOCKS_GUARD:
+        lock = _PHONE_LOCKS.get(phone)
+        if lock is None:
+            lock = threading.Lock()
+            _PHONE_LOCKS[phone] = lock
+        return lock
+
 
 SPECIES_KEYWORDS = {
     "cattle": ["cattle", "cow", "ng'ombe", "ngombe", "loon"],
@@ -83,11 +119,11 @@ VOICE_ERR_MSG = {
 }
 
 ASK_CONFIRM_WATER = {
-    "swahili": "💧 {name}, unaona chanzo cha maji wanyama wako wanakunywa kutoka? Chagua namba ya chanzo "
-               "kutoka kwenye orodha (ramani imewekwa alama namba 1-{n}):\n\n{list}\n\n"
+    "swahili": "💧 {name}, bado hujathibitisha chanzo chako cha maji. Ili nipe taarifa sahihi, "
+               "chagua chanzo ambacho wanyama wako wanakunywa kutoka (namba 1-{n}):\n\n{list}\n\n"
                "★ Kama hakipo, tuma 'hakuna' nikusaidie kuliandikisha kipya.",
-    "english": "💧 {name}, can you see the water point your animals drink from? Pick its number from the "
-               "list (the map marks them 1-{n}):\n\n{list}\n\n"
+    "english": "💧 {name}, you haven't confirmed your water point yet. So I give you the right "
+               "info, choose the water point your animals drink from (numbers 1-{n}):\n\n{list}\n\n"
                "★ If it's not there, send 'none' and I'll help you register it new.",
 }
 
@@ -332,28 +368,42 @@ async def receive_webhook(request: Request):
         for change in entry.get("changes", []):
             value = change.get("value", {})
             for message in value.get("messages", []):
-                # Crash-isolate per message: one bad message must NEVER turn into
-                # a 500 (Meta retries, then stops delivering — a silent bot). We
-                # log the failure to the dashboard feed and keep going.
-                try:
-                    _handle_message(message)
-                except Exception:  # noqa: BLE001
-                    log.exception("webhook handler crashed for a message")
-                    try:
-                        from app.services import query_log
-
-                        query_log.log_query(
-                            kind="other",
-                            phone=message.get("from"),
-                            result="error",
-                            detail={"event": "webhook_crash",
-                                    "type": message.get("type"),
-                                    "error": repr(sys.exc_info()[1])[:200]},
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
+                msg_id = message.get("id") or ""
+                # De-duplicate Meta redeliveries of the same message.
+                if msg_id and _already_processed(msg_id):
+                    continue
+                # ACK Meta immediately; process asynchronously so a slow reply
+                # (COG read, map render) never triggers a Meta retry = duplicate.
+                threading.Thread(
+                    target=_handle_message_guarded,
+                    args=(message,),
+                    daemon=True,
+                ).start()
 
     return {"status": "ok"}
+
+
+def _handle_message_guarded(message: dict) -> None:
+    """Run one message, serialised per phone + crash-isolated. Never raises."""
+    phone = message.get("from") or ""
+    with _phone_lock(phone):
+        try:
+            _handle_message(message)
+        except Exception:  # noqa: BLE001
+            log.exception("webhook handler crashed for a message")
+            try:
+                from app.services import query_log
+
+                query_log.log_query(
+                    kind="other",
+                    phone=phone,
+                    result="error",
+                    detail={"event": "webhook_crash",
+                            "type": message.get("type"),
+                            "error": repr(sys.exc_info()[1])[:200]},
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _log_inbound(message: dict) -> None:
@@ -488,24 +538,19 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
         )
         return
 
+    # A herder who hasn't confirmed their water point yet should confirm it FIRST:
+    # an advisory only makes sense once we know which water point is THEIRS
+    # (otherwise we'd describe a random nearby source as if it were their water).
+    if pastoralist.is_onboarded and not pastoralist.water_source_id:
+        _ask_confirm_water(phone, pastoralist)
+        return
+
     req = AdvisoryRequest(lat=lat, lon=lon, species=pastoralist.primary_species,
                            language=pastoralist.preferred_language)
     result = get_advisory(req)
 
     if result.found:
         _send_reply(phone, pastoralist, result.message, voice=pastoralist.voice_replies)
-        # Remember the herder: if they haven't confirmed their water point yet,
-        # nudge them to (their future maps then personalise to THEIR water point).
-        if pastoralist.is_onboarded and not pastoralist.water_source_id:
-            whatsapp_client.send_text(
-                phone,
-                {
-                    "swahili": "💧 Je, unaweza kunithibitishia chanzo chako cha maji? Tuma 'maji' "
-                               "nikuonyeshe orodha ya vyanzo karibu nawe.",
-                    "english": "💧 Can you confirm your water point? Send 'water' and I'll show "
-                               "you the list of sources near you.",
-                }[pastoralist.preferred_language],
-            )
         return
 
     # No known water point reaches this location -> offer to register a new one.
