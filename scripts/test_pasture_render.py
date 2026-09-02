@@ -88,6 +88,35 @@ def main() -> None:
     assert png2[:8] == b"\x89PNG\r\n\x1a\n"
     print(f"numbered + confirmed render OK ({len(png2)} bytes PNG)")
 
+    # 4b) FIT view (options map): must zoom so herder + ALL numbered markers are
+    #     on screen even when the markers are far away (no rings/pasture).
+    far = [{"water_source_id": f"w{i}", "lon": 37.24, "lat": 0.57,
+            "name": f"Far {i}", "water_type": "well", "ward": "W"} for i in range(1, 6)]
+    far_pts = [dict(lon=p["lon"], lat=p["lat"]) for p in far] + [dict(lon=37.58, lat=0.35)]
+    fx = np.asarray([p["lon"] for p in far_pts])
+    fy = np.asarray([p["lat"] for p in far_pts])
+    fmx = fx * 20037508.34 / 180.0
+    fmy = 20037508.34 / 180.0 * (180.0 / np.pi
+                                 * np.log(np.tan(np.pi / 4 + np.radians(fy) / 2)))
+    png4 = map_renderer.render_rings_png(
+        "x", herder_lon=37.58, herder_lat=0.35, species="camel", pasture=False,
+        lang="swa", numbered_sources=far, fit_view=True)
+    assert png4[:8] == b"\x89PNG\r\n\x1a\n"
+    # replicate viewport and assert every marker is on screen
+    span_m = max(float(fmx.max() - fmx.min()), float(fmy.max() - fmy.min()))
+    mpp_t = max(span_m / (map_renderer.IMG_SIZE - 130), 5.0)
+    lat_ref = float(np.mean(fy))
+    zoom = max(6, min(14, int(np.floor(np.log2(
+        156543.03392 * np.cos(np.radians(lat_ref)) / mpp_t)))))
+    mpp = 156543.03392 * np.cos(np.radians(lat_ref)) / (2 ** zoom)
+    west = float((fmx.min() + fmx.max()) / 2) - map_renderer.IMG_SIZE / 2 * mpp
+    north = float((fmy.min() + fmy.max()) / 2) + map_renderer.IMG_SIZE / 2 * mpp
+    for p in far_pts:
+        x, y = map_renderer._lonlat_to_px(p["lon"], p["lat"], west, north, mpp)
+        assert 25 <= x <= map_renderer.IMG_SIZE - 25, f"far marker off-screen x={x}"
+        assert 25 <= y <= map_renderer.IMG_SIZE - 25, f"far marker off-screen y={y}"
+    print(f"fit overview render OK ({len(png4)} bytes PNG, all markers on-screen)")
+
     # 5) no-COG fallback: when read_overview_array returns None the map must
     #    still render (never blank) with a "being prepared" notice
     raster_read.read_overview_array = lambda wid, *a, **k: None

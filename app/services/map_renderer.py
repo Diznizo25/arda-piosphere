@@ -67,12 +67,14 @@ _UI = {
         "water": "hadi maji",
         "best": "Malisho bora",
         "pasture": "malisho bora",
+        "choose_water": "Chagua chanzo chako cha maji",
     },
     "eng": {
         "here": "You are here",
         "water": "to water",
         "best": "Best pasture",
         "pasture": "best pasture",
+        "choose_water": "Choose your water point",
     },
 }
 
@@ -266,7 +268,8 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                      herder_lat: float | None = None, species: str | None = None,
                      pasture: bool = True, lang: str = "swa",
                      confirm_source_id: str | None = None,
-                     numbered_sources: list[dict] | None = None) -> bytes:
+                     numbered_sources: list[dict] | None = None,
+                     fit_view: bool = False) -> bytes:
     """Render the water point's rings -- and, when pasture=True, the actual
     satellite forage-quality layer -- to PNG bytes. Raises ValueError if the
     water source (or its zones) doesn't exist.
@@ -280,6 +283,12 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     pin labelled "your water"); `numbered_sources` is a list of
     {water_source_id, lon, lat, ward} dicts drawn as numbered 1..N markers so
     the map matches a numbered choice list sent to the herder.
+
+    `fit_view=True` (used by the water-point confirmation flow) zooms OUT to
+    fit the herder + every numbered marker on screen and skips the rings +
+    pasture overlay. A herder whose nearest registered water points are tens of
+    kilometres away then SEES the numbered options on the map (like pins on a
+    Google map) instead of empty blank land with the options off-screen.
     """
     ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
     if ws is None:
@@ -292,17 +301,50 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     c_lat = herder_lat if herder_lat is not None else lat
     c_lon = herder_lon if herder_lon is not None else lon
 
-    # Zoom so the HERDER'S species ring fits (more local + accurate); default
-    # to the widest ring when no species is known.
-    if species and any(z["species"] == species for z in zones):
-        max_radius_km = max(z["radius_km"] for z in zones if z["species"] == species)
+    # "fit" overview mode (confirmation flow): zoom out so the herder and ALL
+    # the numbered water-point options fit on screen. Otherwise zoom so the
+    # herder's species ring fits (more local + accurate).
+    fit_points = []
+    if fit_view and numbered_sources:
+        fit_points = [dict(lon=n["lon"], lat=n["lat"]) for n in numbered_sources]
+        if herder_lon is not None and herder_lat is not None:
+            fit_points.append(dict(lon=herder_lon, lat=herder_lat))
+        else:
+            fit_points.append(dict(lon=lon, lat=lat))
+
+    if fit_points:
+        fxs = np.asarray([p["lon"] for p in fit_points], dtype=float)
+        fys = np.asarray([p["lat"] for p in fit_points], dtype=float)
+        fmx = fxs * 20037508.34 / 180.0
+        fmy = 20037508.34 / 180.0 * (180.0 / math.pi
+                                     * np.log(np.tan(math.pi / 4 + np.radians(fys) / 2)))
+        span_m = max(float(fmx.max() - fmx.min()), float(fmy.max() - fmy.min()))
+        usable_px = IMG_SIZE - 130  # ~65px margin each side so labels fit
+        mpp_target = max(span_m / usable_px, 5.0)
+        lat_ref = float(np.mean(fys))
+        # FLOOR (not ceil): floor keeps mpp >= target so the span always fits
+        # inside the usable pixels; ceil can zoom one step PAST the target and
+        # push the outermost markers off the edges.
+        zoom = max(6, min(14, int(math.floor(
+            math.log2(156543.03392 * math.cos(math.radians(lat_ref)) / mpp_target)))))
+        mpp = 156543.03392 * math.cos(math.radians(lat_ref)) / (2 ** zoom)
+        # Centre on the bbox MIDPOINT (the arithmetic mean skews towards the
+        # cluster of points and pushes outliers like the herder off-screen).
+        center_x = float((fmx.min() + fmx.max()) / 2)
+        center_y = float((fmy.min() + fmy.max()) / 2)
+        c_lon = center_x * 180.0 / 20037508.34
+        c_lat = float(np.mean(fys))
+        center_x, center_y = _mercator_x(c_lon), _mercator_y(c_lat)
     else:
-        max_radius_km = max(z["radius_km"] for z in zones)
+        # Zoom so the HERDER'S species ring fits; default to the widest ring.
+        if species and any(z["species"] == species for z in zones):
+            max_radius_km = max(z["radius_km"] for z in zones if z["species"] == species)
+        else:
+            max_radius_km = max(z["radius_km"] for z in zones)
+        zoom = _compute_zoom(c_lat, max_radius_km)
+        mpp = 156543.03392 * math.cos(math.radians(c_lat)) / (2 ** zoom)
+        center_x, center_y = _mercator_x(c_lon), _mercator_y(c_lat)
 
-    zoom = _compute_zoom(c_lat, max_radius_km)
-    mpp = 156543.03392 * math.cos(math.radians(c_lat)) / (2 ** zoom)
-
-    center_x, center_y = _mercator_x(c_lon), _mercator_y(c_lat)
     half = IMG_SIZE / 2 * mpp
     west, north = center_x - half, center_y + half
 
@@ -312,7 +354,7 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     best_pasture: tuple[float, float, int] | None = None
     pasture_note: str | None = None
     pasture_available = False
-    if pasture:
+    if pasture and not fit_points:
         pasture_img, best_pasture, pasture_note = _build_pasture_overlay(
             water_source_id, west, north, mpp, herder_lon, herder_lat
         )
@@ -326,31 +368,34 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     # Other nearby water sources as coloured type markers + landmark labels, so
     # the map is anchored by familiar places even at wide (camel) zoom.
     _draw_nearby_water(draw, west, north, mpp, exclude=water_source_id, lang=lang)
-    _draw_landmark_labels(draw, west, north, mpp, lang, center_lon=lon, center_lat=lat)
+    _draw_landmark_labels(draw, west, north, mpp, lang, center_lon=c_lon, center_lat=c_lat)
 
-    # Draw rings outer -> inner so the smallest stays on top.
-    for zone in sorted(zones, key=lambda z: -z["radius_km"]):
-        geom = shape(json.loads(zone["geojson"]))
-        geom = geom.simplify(tolerance=0.0004, preserve_topology=True)
-        style = RING_STYLE[zone["species"]]
-        if geom.geom_type == "Polygon":
-            rings_ = [geom.exterior.coords]
-        elif geom.geom_type == "MultiPolygon":
-            rings_ = [p.exterior.coords for p in geom.geoms]
-        else:
-            continue
-        for ring in rings_:
-            pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
-            draw.polygon(pts, fill=style[0], outline=style[1], width=3)
+    # Draw rings outer -> inner so the smallest stays on top (not in fit/overview
+    # mode — there the numbered markers ARE the content).
+    if not fit_points:
+        for zone in sorted(zones, key=lambda z: -z["radius_km"]):
+            geom = shape(json.loads(zone["geojson"]))
+            geom = geom.simplify(tolerance=0.0004, preserve_topology=True)
+            style = RING_STYLE[zone["species"]]
+            if geom.geom_type == "Polygon":
+                rings_ = [geom.exterior.coords]
+            elif geom.geom_type == "MultiPolygon":
+                rings_ = [p.exterior.coords for p in geom.geoms]
+            else:
+                continue
+            for ring in rings_:
+                pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
+                draw.polygon(pts, fill=style[0], outline=style[1], width=3)
 
-    # No satellite data yet: never show a blank map — draw a clear "data is
-    # being prepared" notice + a light loading hatch so it's obvious why the
-    # colours aren't there (and that it's temporary).
-    if pasture and not pasture_available:
-        _draw_no_cog_notice(draw, lang)
+        # No satellite data yet: never show a blank map — draw a clear "data is
+        # being prepared" notice + a light loading hatch so it's obvious why the
+        # colours aren't there (and that it's temporary).
+        if pasture and not pasture_available:
+            _draw_no_cog_notice(draw, lang)
 
     wx, wy = _lonlat_to_px(lon, lat, west, north, mpp)
-    _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.name or ws.ward or "Maji")
+    if not fit_points:
+        _draw_pin(draw, wx, wy, fill=(220, 38, 38, 255), label=ws.name or ws.ward or "Maji")
 
     # Numbered markers (1..N) so a numbered choice list matches the map.
     if numbered_sources:
@@ -392,9 +437,16 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                 fill=(22, 101, 52, 240),
             )
 
-    _draw_place_banner(draw, f"{ws.name or ws.ward or 'Maji'}  -  {ws.county or ''}".strip())
-    _draw_legend(draw, zones, ward=ws.name or ws.ward, county=ws.county,
-                 pasture_note=pasture_note, lang=lang)
+    if fit_points:
+        banner_text = _UI[lang]["choose_water"]
+    else:
+        banner_text = f"{ws.name or ws.ward or 'Maji'}  -  {ws.county or ''}".strip()
+    _draw_place_banner(draw, banner_text)
+    _draw_legend(draw, [] if fit_points else zones,
+                 ward=None if fit_points else (ws.name or ws.ward),
+                 county=None if fit_points else ws.county,
+                 pasture_note=None if fit_points else pasture_note,
+                 lang=lang)
     _draw_scale_bar(draw, mpp)
     _draw_compass(draw, lang=lang)
 

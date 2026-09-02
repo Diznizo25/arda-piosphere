@@ -808,7 +808,35 @@ def _handle_map_request(phone: str, pastoralist) -> None:
     if water_source_id is None:
         candidates = water_reach.find_nearest_reachable_water(lon, lat, species, limit=1)
         if not candidates:
-            whatsapp_client.send_text(phone, NEW_WATER_POINT_OFFER[pastoralist.preferred_language])
+            # Honest + useful: nothing within grazing reach, but SHOW the closest
+            # registered water points (with a zoomable live map) so the herder can
+            # orient and register their own if it really isn't there.
+            lang_key2 = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+            try:
+                nearest_reg = water_reach.list_nearby_water_sources(lon, lat, limit=3)
+                reg_txt = ""
+                for n in nearest_reg:
+                    reg_txt += (f"  • {_source_label(n, pastoralist.preferred_language)} — "
+                                f"{n['distance_km']:.0f} km {n.get('direction_swa', '')}\n")
+            except Exception:  # noqa: BLE001
+                reg_txt = ""
+            base = (f"{settings.app_public_base_url.rstrip('/')}/mapview/"
+                    f"?lat={lat}&lon={lon}&species={species}&lang={lang_key2}")
+            whatsapp_client.send_text(
+                phone,
+                {
+                    "swahili": f"Eneo lako haliko ndani ya upeo (kilomita) wa chanzo chochote "
+                               f"kilichosajiliwa.\nVyanzo vilivyosajiliwa vilivyo karibu:\n{reg_txt}"
+                               f"Fungua ramani (piga zoom kama Google Maps):\n{base}\n\n"
+                               f"Ikiwa unakunywa maji hapa hasa, tuma eneo lako pale "
+                               f"wanyama wako wanakunywa kisha tuma 'PIN'.",
+                    "english": f"Your location is not within grazing reach of any "
+                               f"registered water point.\nClosest registered:\n{reg_txt}"
+                               f"Open the map (zoom like Google Maps):\n{base}\n\n"
+                               f"If you DO water your animals here, share the exact "
+                               f"spot and send 'PIN' to register it.",
+                }[pastoralist.preferred_language],
+            )
             return
         water_source_id = candidates[0].water_source_id
 
@@ -825,7 +853,10 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         place_bit = ""
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&confirm={confirmed_id}&v=7")
+           f"&confirm={confirmed_id}&v=8")
+    # Google-Maps-style zoomable link (tap to open + pinch to zoom).
+    live_url = (f"{settings.app_public_base_url.rstrip('/')}/mapview/?lat={lat}&lon={lon}"
+                f"&species={species}&id={water_source_id}&lang={lang_key}")
 
     # Concrete, herder-friendly caption: where they are, water direction +
     # distance, and pasture direction + distance (when the COG is available).
@@ -862,13 +893,15 @@ def _handle_map_request(phone: str, pastoralist) -> None:
                         f"{place_bit}{water_bit}{pasture_bit}"
                         f" Majina ya miji na mto yameandikwa kwenye ramani. "
                         f"Duara za maji: buluu=mto, chungwa=kisima (borehole), "
-                        f"teal=kisima cha kuchimba, kijani=chemchemi, rangi ya maji=bwawa."),
+                        f"teal=kisima cha kuchimba, kijani=chemchemi, rangi ya maji=bwawa. "
+                        f"Fungua na piga zoom kama Google Maps: {live_url}"),
             "english": (f"Your map{(' - ' + (ws.label if ws else '')) if ws else ''}."
                         f" Blue = YOU ARE HERE, red = your water."
                         f"{place_bit}{water_bit}{pasture_bit}"
                         f" Towns and rivers are labelled on the map. "
                         f"Water markers: blue=river, orange=borehole, teal=well, "
-                        f"green=spring, cyan=pan."),
+                        f"green=spring, cyan=pan. "
+                        f"Tap to open & zoom like Google Maps: {live_url}"),
         }[pastoralist.preferred_language],
     )
 
@@ -1273,16 +1306,29 @@ def _ask_confirm_water(phone: str, pastoralist) -> bool:
     except Exception:  # noqa: BLE001
         log.exception("nearby water list failed")
         nearby = []
+    # A water point farther than ANY species' piosphere ring (cattle 7 / shoat
+    # 11 / camel 25 km) can never be reached by the herd, so offering it as
+    # "your water" only confuses. Show only what is actually within reach.
+    try:
+        from app.config import get_species_rings
+
+        reach_cap_km = max(get_species_rings().radii_km.values()) + 1.0
+    except Exception:  # noqa: BLE001
+        reach_cap_km = 26.0
+    nearby = [n for n in nearby if float(n["distance_km"]) <= reach_cap_km]
     if not nearby:
         conversation.set_state(phone, "onboarding.water", {"nearby": []})
         whatsapp_client.send_text(
             phone,
             {
-                "swahili": "Hatuna chanzo cha maji kinachojulikana karibu na eneo lako. "
-                           "Tuma eneo lako hasa pale wanyama wako wanakunywa, kisha tuma 'PIN' "
-                           "kuliandikisha kipya.",
-                "english": "We don't have a known water point near you. Share your location "
-                           "exactly where your animals drink, then send 'PIN' to register it new.",
+                "swahili": "Hakuna chanzo cha maji kilichosajiliwa karibu nawe (ndani ya "
+                           f"{reach_cap_km:.0f} km) ambacho wanyama wako wanaweza kufikia. "
+                           "Tuma eneo lako (location) pale wanyama wako wanakunywa hasa, "
+                           "kisha tuma 'PIN' nikusajilie chanzo chako.",
+                "english": "There is no registered water point within "
+                           f"{reach_cap_km:.0f} km of you that your animals can reach. "
+                           "Share your location exactly where your animals drink, "
+                           "then send 'PIN' to register your water point.",
             }[pastoralist.preferred_language],
         )
         return True
@@ -1324,8 +1370,10 @@ def _ask_confirm_water(phone: str, pastoralist) -> bool:
 
 def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
                            lon: float, lat: float) -> None:
-    """Render + send the numbered confirmation map (nearest source's rings +
-    numbered water-point markers)."""
+    """Render + send the numbered confirmation map: an "options" overview that
+    fits the herder AND every numbered water-point marker on screen (like pins
+    on a Google map), instead of rings zoomed around a water point that may be
+    tens of kilometres away (off-screen -> blank/unreadable map)."""
     settings = get_settings()
     if not settings.app_public_base_url:
         return
@@ -1334,16 +1382,22 @@ def _send_confirmation_map(phone: str, pastoralist, nearby: list[dict],
     species = pastoralist.primary_species or "camel"
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{nearest['water_source_id']}.png"
-           f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&numbered={numbered}&v=7")
+           f"?lat={lat}&lon={lon}&species={species}&pasture=0&lang={lang_key}"
+           f"&numbered={numbered}&fit=1&v=8")
+    live_url = (f"{settings.app_public_base_url.rstrip('/')}/mapview/?lat={lat}&lon={lon}"
+                f"&species={species}&numbered={numbered}&lang={lang_key}")
     try:
         whatsapp_client.send_image_bytes_url(
             phone, url,
             caption={
-                "swahili": "Ramani ya chanzo cha karibu zaidi. Tuma namba ya chanzo chako cha maji "
-                           "au chagua kutoka kwenye orodha.",
-                "english": "Map of the nearest water source. Send the number of your water "
-                           "point or pick it from the list.",
+                "swahili": "Ramani inaonyesha wewe (bluu) na vyanzo vya maji vya karibu "
+                           "(namba 1,2,3… zinazolingana na orodha hapo juu). "
+                           f"Tuma namba ya chanzo chako cha maji. "
+                           f"Fungua na piga zoom kama Google Maps: {live_url}",
+                "english": "The map shows you (blue) and the nearby water points "
+                           "(numbers 1,2,3… matching the list above). "
+                           f"Send the number of your water point. "
+                           f"Tap to open & zoom like Google Maps: {live_url}",
             }[pastoralist.preferred_language],
         )
     except Exception:  # noqa: BLE001

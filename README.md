@@ -141,9 +141,17 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   clear north arrow — readable on a phone after WhatsApp downscaling.
 - **Numbered water-point markers** (1..N) match the confirmation choice list;
   the herder's **confirmed water point** gets a distinct "Maji yako" pin.
+- **Confirmation "options" map** (`fit=1`): zooms out so the herder AND every
+  numbered water point fit on screen (no rings) — a herder whose nearest
+  registered points are far away still SEES them, instead of empty land.
+- **Interactive Google-Maps-style live map** (`GET /mapview/?lat=..&lon=..&...`):
+  a mobile, zoomable Leaflet page (OpenStreetMap) with the herder pin, all
+  nearby water points (type-coloured + numbered), and the piosphere rings.
+  The link is sent inside WhatsApp captions ("tap to open & zoom").
 - **Never blank:** when satellite data isn't built yet, the map shows a clear
   amber "pasture data being prepared" notice + loading hatch instead of nothing.
-- `GET /map/{water_source_id}.png?lat=..&lon=..&species=..&pasture=1&lang=swa&confirm=..&numbered=..&v=..`
+- `GET /map/{water_source_id}.png?lat=..&lon=..&species=..&pasture=1&lang=swa&confirm=..&numbered=..&fit=0&v=..`
+- `GET /mapview/?lat=..&lon=..&species=..&lang=swa&numbered=..` (public, HTML)
 
 ## Project layout
 

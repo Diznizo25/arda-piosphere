@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.db import get_pg_connection
-from app.routers import advisory, dashboard, dev, ground_truth, legal, maps, run, water_sources, whatsapp
+from app.routers import advisory, dashboard, dev, ground_truth, legal, maps, mapview, run, water_sources, whatsapp
 from app.services.storage import get_s3_client
 from app.services.gee_auth import init_earth_engine
 
@@ -34,6 +34,7 @@ app.include_router(ground_truth.router)
 app.include_router(run.router)
 app.include_router(water_sources.router)
 app.include_router(maps.router)
+app.include_router(mapview.router)
 app.include_router(dashboard.router)
 app.include_router(legal.router)
 app.include_router(dev.router)
