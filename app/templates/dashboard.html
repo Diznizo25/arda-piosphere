@@ -45,6 +45,7 @@
   .t-running{background:#172554;color:#60a5fa} .t-done{background:#052e16;color:#4ade80}
   .t-built{background:#052e16;color:#4ade80} .t-failed{background:#450a0a;color:#f87171}
   .t-seed{background:#334155;color:#cbd5e1} .t-query{background:#312e81;color:#a5b4fc}
+  .t-wtype{background:#083344;color:#67e8f9}
   .t-build{background:#1e3a2f;color:#34d399} .t-report{background:#3f1d38;color:#f0abfc}
   select, button { background:var(--panel2); color:var(--text); border:1px solid #475569;
                    border-radius:8px; padding:6px 10px; font-size:13px; }
@@ -193,16 +194,21 @@ function renderMap(gj) {
   map._markers = [];
   const bySource = { 'satellite_gsw':'Water (GSW)', 'osm':'Water (OSM)', 'wpdx':'Water (WPDx)',
                      'ilri':'Water (ILRI)', 'ground_truth':'Pinned by herder' };
+  const byType = { 'river':'River', 'borehole':'Borehole', 'well':'Well', 'spring':'Spring',
+                   'pan':'Water pan', 'dam':'Dam', 'lake':'Lake', 'tap':'Tap' };
+  const WTYPE_COLORS = { 'river':'#2563eb', 'borehole':'#ea580c', 'well':'#059669', 'spring':'#16a34a',
+                         'pan':'#06b6d4', 'dam':'#0891b2', 'lake':'#0891b2', 'tap':'#9333ea' };
   gj.features.forEach(f => {
     const p = f.properties, [lon, lat] = f.geometry.coordinates;
-    const color = STATUS_COLORS[p.build_status] || '#3b82f6';
+    const color = WTYPE_COLORS[p.water_type] || STATUS_COLORS[p.build_status] || '#3b82f6';
     const m = L.circleMarker([lat, lon], { radius: 7, color: '#0f172a', weight: 1,
       fillColor: color, fillOpacity: 0.95 });
     m.bindPopup(
       `<b>${esc(p.name || p.ward || 'Unknown')}</b>` +
       (p.name && p.ward ? ` <span class="muted">(${esc(p.ward)})</span>` : '') +
-      `<br><span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span><br>` +
-      `Status: <span class="tag t-${p.build_status}">${esc(p.build_status)}</span>` +
+      `<br><span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span>` +
+      (p.water_type ? `<br>Type: <span class="tag t-wtype">${esc(byType[p.water_type] || p.water_type)}</span>` : '') +
+      `<br>Status: <span class="tag t-${p.build_status}">${esc(p.build_status)}</span>` +
       (p.build_progress ? ` (${p.build_progress}%)` : '') +
       (p.has_cog ? `<br>✅ satellite COG built` : `<br>⏳ no COG yet`) +
       `<br>Zones: ${p.zone_count} · conf ${p.confidence}<br>` +
