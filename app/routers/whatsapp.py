@@ -655,6 +655,17 @@ def _handle_water_request(phone: str, pastoralist) -> None:
                 }[pastoralist.preferred_language],
             )
             return
+    if get_last_location(phone) is None:
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Ili nikuonyeshe vyanzo vya maji karibu nawe, kwanza tuma eneo lako "
+                           "(location) kwenye WhatsApp.",
+                "english": "To show you the water points near you, first share your location "
+                           "on WhatsApp.",
+            }[pastoralist.preferred_language],
+        )
+        return
     _ask_confirm_water(phone, pastoralist)
 
 
@@ -1011,7 +1022,9 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
 
     if state == "onboarding.water":
         # The herder is confirming which water point their animals drink from.
-        _handle_confirm_water_reply(phone, pastoralist, text)
+        # If the reply isn't a valid choice, RE-ASK (never reply silently).
+        if not _handle_confirm_water_reply(phone, pastoralist, text):
+            whatsapp_client.send_text(phone, ASK_CONFIRM_WATER_RETRY[lang])
         return
 
     if state == "onboarding.name":
