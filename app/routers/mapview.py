@@ -35,7 +35,7 @@ def _t(lang: str) -> dict:
             "show": "Show rings + pasture",
             "pasture": "Satellite pasture",
             "summary": "Pasture now",
-            "grass": "green = grass", "dry": "olive = dry forage",
+            "grass": "green = grass", "dry": "brown = dry forage",
             "bare": "red = bare", "on": "Hide pasture", "off": "Show pasture",
             "preparing": "Pasture layer being prepared",
             "mapBase": "Map", "satBase": "Satellite",
@@ -47,7 +47,7 @@ def _t(lang: str) -> dict:
         "show": "Ona kanda + malisho",
         "pasture": "Malisho ya satelaiti",
         "summary": "Malisho sasa hivi",
-        "grass": "kijani = nyasi", "dry": "zeituni = nyasi kavu",
+        "grass": "kijani = nyasi", "dry": "kahawia = nyasi kavu",
         "bare": "nyekundu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
         "preparing": "Ramani ya malisho inaandaliwa",
         "mapBase": "Ramani", "satBase": "Satellite",
@@ -130,7 +130,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 base = get_settings().app_public_base_url.rstrip("/")
                 overlay = {
                     "url": (f"{base}/map/{main_id}/pasture.png?species={species}"
-                            f"&interval={interval}&v=7"),
+                            f"&interval={interval}&v=8"),
                     "bounds": status["bounds"],
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
@@ -216,7 +216,7 @@ const typeName = { river:'River/Mto', borehole:'Borehole', well:'Well/Kisima',
 const typeColor = { river:'#2563eb', borehole:'#ea580c', well:'#059669',
   spring:'#16a34a', pan:'#06b6d4', dam:'#0891b2', lake:'#0891b2', tap:'#9333ea' };
 const ringHex = { cattle:'#3b82f6', shoat:'#10b981', camel:'#f97316' };
-const pastureCols = { green:'#22c55e', dry:'#84cc16', bare:'#dc2626', unclear:'#f59e0b' };
+const pastureCols = { green:'#22c55e', dry:'#96602d', bare:'#dc2626', unclear:'#f59e0b' };
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
   .setView([D.herder.lat, D.herder.lon], 10);
@@ -255,9 +255,9 @@ let overlayLayer = null;
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
-// Satellite pasture overlay for the focused water point (framed + clipped to
-// this species' ring server-side). Semi-transparent so roads/labels on the map
-// underneath stay visible.
+// Satellite pasture overlay for the focused water point — framed to the water
+// point's full ring stack (all species rings shown). Semi-transparent so the
+// map underneath stays visible.
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
     { opacity: 0.6, interactive: false }).addTo(map);

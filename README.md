@@ -128,7 +128,7 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   ring fits.
 - **Centered on the herder**, with blue "Wewe hapa" / red water pins, a line and
   distance badge between them, and the ward direction.
-- Satellite pasture overlay: green = grass, olive = dry forage, red = bare,
+- Satellite pasture overlay: green = grass, brown = dry forage, red = bare,
   yellow = unclear, with "% usable pasture" in the legend.
 - **Green arrow to the nearest walkable good patch** (a ~2 km cluster around
   the closest good pixel — not a far-away global centroid) and a big

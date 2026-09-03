@@ -39,7 +39,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
-from app.config import get_advisory_thresholds, get_species_rings
+from app.config import get_advisory_thresholds
 from app.services import water_sources
 
 IMG_SIZE = 1024
@@ -889,14 +889,14 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
         if lang == "swa":
             pasture_rows = [
                 ("Rangi ya malisho (ndani ya duara):", None),
-                ("  green=nyasi  olive=nyasi kavu", (21, 128, 61)),
+                ("  green=nyasi  brown=nyasi kavu", (21, 128, 61)),
                 ("  red=ntupo  yellow=haielewiki", (220, 38, 38)),
                 (f"  {pasture_note}", None),
             ]
         else:
             pasture_rows = [
                 ("Pasture colours (inside rings):", None),
-                ("  green=grass  olive=dry forage", (21, 128, 61)),
+                ("  green=grass  brown=dry forage", (21, 128, 61)),
                 ("  red=bare  yellow=unclear", (220, 38, 38)),
                 (f"  {pasture_note}", None),
             ]
@@ -1048,7 +1048,7 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     color_map = {
         0: (0, 0, 0, 0),
         1: (21, 128, 61, 110),
-        2: (132, 204, 22, 105),
+        2: (150, 96, 45, 105),     # brown dry forage
         3: (220, 38, 38, 105),
         4: (245, 158, 11, 75),
     }
@@ -1110,20 +1110,15 @@ def _mercator_y_inv(y):
 
 
 def _zone_radius_km(ws, zones, species: str | None, water_interval: str = "daily") -> float:
-    """Radius (km) the pasture layer should cover around a water point.
+    """Radius (km) the pasture layer covers around a water point.
 
-    When the caller selects a species (interactive map) this is the species'
-    EFFECTIVE ring for the watering interval — the layer is framed and clipped
-    to exactly that ring so pasture colour never appears outside the grazing
-    zone drawn on the map. When no species is given (static map) it falls back
-    to the widest stored zone (the full satellite compute ring)."""
-    if species:
-        try:
-            r = get_species_rings().effective_radius_km(species, water_interval)
-            if r and r > 0:
-                return float(r)
-        except Exception:  # noqa: BLE001
-            pass
+    The map draws a ring for EVERY species at this water point (cattle inner,
+    shoat, camel outer); pasture is shown across the whole stack, so the layer
+    is framed and clipped to the WIDEST stored ring (the satellite compute ring,
+    e.g. 25 km) — every ring displayed on the map has pasture colour where the
+    satellite has data. The per-species ring only affects which ring is drawn
+    as that herd's grazing zone, not the layer extent.
+    """
     return max(float(z["radius_km"]) for z in zones)
 
 
@@ -1195,7 +1190,7 @@ def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
     color_map = {
         0: (0, 0, 0, 0),
         1: (34, 197, 94, 235),    # grass
-        2: (132, 204, 22, 235),   # dry forage
+        2: (150, 96, 45, 235),    # dry forage (brown)
         3: (220, 38, 38, 235),    # bare
         4: (245, 158, 11, 220),   # unclear
     }
