@@ -56,7 +56,7 @@ def main() -> None:
     herder = types.SimpleNamespace(
         id="p1", phone_number="+254test", preferred_language="swahili",
         primary_species="camel", voice_replies=False, water_source_id=None,
-        is_onboarded=True, first_name="Test",
+        is_onboarded=True, first_name="Test", water_interval="daily",
     )
     SENT.clear()
     asked = []
