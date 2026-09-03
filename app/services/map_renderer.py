@@ -1101,3 +1101,135 @@ def _mercator_x_inv(x):
 def _mercator_y_inv(y):
     """Inverse Web Mercator y (m) -> latitude. Vectorised (numpy-safe)."""
     return np.degrees(np.arctan(np.sinh(np.asarray(y, dtype=float) * np.pi / 20037508.34)))
+
+
+# --- interactive pasture layer (for the /mapview Leaflet page) ----------------
+# The same satellite pasture classification used on the static PNG, exposed as a
+# transparent, georeferenced RGBA layer the browser overlays on OSM tiles.
+
+
+def _overlay_view(water_source_id: str, species: str | None,
+                  water_interval: str = "daily"):
+    """Viewport (west,north,mpp) for the pasture layer around a water point:
+    centred on the water, zoomed so the species' effective ring fits (same
+    geometry the static PNG uses when no herder location is given)."""
+    ws = next((w for w in water_sources.list_water_sources()
+               if w.id == water_source_id), None)
+    zones = water_sources.zones_for_water_source(water_source_id)
+    if ws is None or not zones:
+        return None
+    radius_km = max(float(z["radius_km"]) for z in zones)
+    if species and any(z["species"] == species for z in zones):
+        try:
+            from app.config import get_species_rings
+
+            radius_km = get_species_rings().effective_radius_km(species, water_interval)
+        except Exception:  # noqa: BLE001
+            pass
+    zoom = _compute_zoom(ws.lat, radius_km)
+    mpp = 156543.03392 * math.cos(math.radians(ws.lat)) / (2 ** zoom)
+    cx, cy = _mercator_x(ws.lon), _mercator_y(ws.lat)
+    half = IMG_SIZE / 2 * mpp
+    return ws.lat, ws.lon, zoom, mpp, cx - half, cy + half
+
+
+def _read_classes(water_source_id: str):
+    """(classes, transform) from the overview COG, or None when unavailable."""
+    from app.services.raster_read import read_overview_array
+
+    try:
+        res = read_overview_array(water_source_id, bands=[1, 3, 4], max_dim=512)
+    except Exception:  # noqa: BLE001
+        return None
+    if res is None:
+        return None
+    arr, transform = res
+    if arr.shape[0] < 3:
+        return None
+    _, classes = _nearest_good_patch(arr, transform, None, None)
+    return classes, transform
+
+
+def _rgba_classes(classes, transform, west: float, north: float, mpp: float):
+    """Colour the classification into an RGBA image (transparent where no data),
+    georeferenced to the given viewport — the interactive pasture layer."""
+    color_map = {
+        0: (0, 0, 0, 0),
+        1: (21, 128, 61, 150),
+        2: (132, 204, 22, 145),
+        3: (220, 38, 38, 135),
+        4: (245, 158, 11, 90),
+    }
+    h, w = classes.shape
+    c0, f0 = transform.c, transform.f
+    a_, e_ = transform.a, transform.e
+    lons = _mercator_x_inv(west + np.arange(IMG_SIZE, dtype=np.float32) * mpp)
+    lats = _mercator_y_inv(north - np.arange(IMG_SIZE, dtype=np.float32) * mpp)
+    col_i = np.clip(np.rint((lons[None, :] - c0) / a_).astype(np.int32), 0, w - 1)
+    row_i = np.clip(np.rint((f0 - lats[:, None]) / e_).astype(np.int32), 0, h - 1)
+    in_bounds = (((lons[None, :] - c0) / a_ >= 0) & ((lons[None, :] - c0) / a_ <= w - 1)
+                 & ((f0 - lats[:, None]) / e_ >= 0) & ((f0 - lats[:, None]) / e_ <= h - 1))
+    sampled = classes[row_i, col_i]
+    sampled[~in_bounds] = 0
+    out_rgba = np.zeros((IMG_SIZE, IMG_SIZE, 4), dtype=np.uint8)
+    for k, color in color_map.items():
+        out_rgba[sampled == k] = color
+    return Image.fromarray(out_rgba, "RGBA")
+
+
+def _overlay_bounds_deg(west: float, north: float, mpp: float):
+    """[[south, west], [north, east]] geographic bounds of the layer image."""
+    west_, east_ = _mercator_x_inv(west), _mercator_x_inv(west + IMG_SIZE * mpp)
+    north_, south_ = _mercator_y_inv(north), _mercator_y_inv(north - IMG_SIZE * mpp)
+    return [[float(south_), float(west_)], [float(north_), float(east_)]]
+
+
+def pasture_overlay_status(water_source_id: str, species: str | None = None,
+                           water_interval: str = "daily") -> dict | None:
+    """For the interactive map: geobounds of the pasture layer + a quantity/
+    quality summary from the satellite indices (NO layer image — the browser
+    fetches it from /map/{id}/pasture.png). Returns None when the water point
+    has no usable viewport (missing source/zones)."""
+    view = _overlay_view(water_source_id, species, water_interval)
+    if view is None:
+        return None
+    _, _, _, mpp, west, north = view
+    out: dict = {
+        "bounds": _overlay_bounds_deg(west, north, mpp),
+        "available": False,
+        "usable_pct": None,
+        "frac": None,
+    }
+    res = _read_classes(water_source_id)
+    if res is None:
+        return out
+    classes, _ = res
+    valid = int((classes > 0).sum())
+    if valid:
+        frac = {
+            "green": round(100.0 * int((classes == 1).sum()) / valid),
+            "dry": round(100.0 * int((classes == 2).sum()) / valid),
+            "bare": round(100.0 * int((classes == 3).sum()) / valid),
+            "unclear": round(100.0 * int((classes == 4).sum()) / valid),
+        }
+        usable = frac["green"] + frac["dry"]
+        out.update({"available": True, "usable_pct": usable, "frac": frac})
+    return out
+
+
+def pasture_layer_png(water_source_id: str, species: str | None = None,
+                      water_interval: str = "daily") -> bytes | None:
+    """Transparent RGBA pasture layer PNG for the given viewport (or None when
+    no satellite data). Used by GET /map/{id}/pasture.png."""
+    view = _overlay_view(water_source_id, species, water_interval)
+    if view is None:
+        return None
+    _, _, _, mpp, west, north = view
+    res = _read_classes(water_source_id)
+    if res is None:
+        return None
+    classes, transform = res
+    img = _rgba_classes(classes, transform, west, north, mpp)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

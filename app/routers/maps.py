@@ -1,8 +1,9 @@
 """Map image endpoints.
 
-GET /map/{water_source_id}.png renders the species rings for that water point
-as a PNG (used by the WhatsApp flow to send herders a map of their rings, and
-by anyone testing the renderer over HTTP).
+GET /map/{water_source_id}.png renders the species rings for a water point as a
+PNG (used by the WhatsApp flow). GET /map/{water_source_id}/pasture.png serves
+the transparent, georeferenced satellite pasture layer used as a Leaflet image
+overlay on the interactive /mapview page.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from app.services.map_renderer import render_rings_png
+from app.services.map_renderer import pasture_layer_png, render_rings_png
 
 router = APIRouter(prefix="/map", tags=["map"])
 
@@ -43,6 +44,12 @@ def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: f
                             water_interval=water_interval)
 
 
+@lru_cache(maxsize=16)
+def _pasture_layer_cached(water_source_id: str, species: str | None,
+                          water_interval: str, version: int) -> bytes | None:
+    return pasture_layer_png(water_source_id, species, water_interval)
+
+
 @router.get("/{water_source_id}.png")
 def get_rings_map(
     water_source_id: str,
@@ -62,17 +69,10 @@ def get_rings_map(
                                       "species ring to its effective reach"),
     v: int = Query(default=1, description="Cache-buster; bump when the renderer changes."),
 ) -> Response:
-    """Render the species rings for a water point.
-
-    Optional `lat`/`lon` query params mark the herder's position on the map
-    (blue "Wewe hapa / You are here" pin + distance to the water) and center
-    the view on them. `species` zooms to that species' ring, and `pasture=1`
-    (default) colours the map by satellite forage quality (green=dry-forage/
-    grass, red=bare) with a green arrow to the nearest good pasture patch and a
-    big direction banner in the herder's language. `confirm` highlights the
-    herder's confirmed water point; `numbered` draws the given water points as
-    numbered 1..N markers (used by the water-point confirmation flow).
-    """
+    """Render the species rings for a water point. Optional lat/lon mark the
+    herder (blue pin) and centre the view on them; species zooms to that ring;
+    pasture=1 colours the map by satellite forage quality with a green arrow to
+    the nearest good pasture patch and a direction banner."""
     numbered_ids = tuple(u for u in (numbered or "").split(",") if u)
     try:
         from app.services import query_log
@@ -93,8 +93,25 @@ def get_rings_map(
         except Exception:  # noqa: BLE001
             pass
         raise HTTPException(status_code=500, detail=f"Map render failed: {e}")
-    return Response(
-        content=png,
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=600"},
-    )
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=600"})
+
+
+@router.get("/{water_source_id}/pasture.png")
+def get_pasture_layer(
+    water_source_id: str,
+    species: str | None = Query(default=None, pattern="^(cattle|shoat|camel)$"),
+    interval: str = Query(default="daily", pattern="^(daily|every_2_3_days)$"),
+    v: int = Query(default=1, description="Cache-buster"),
+) -> Response:
+    """Transparent, georeferenced pasture-classification layer (RGBA PNG) for
+    Leaflet image overlays on the interactive /mapview page. Colours match the
+    static map: green=grass, olive=dry forage, red=bare, yellow=unclear;
+    transparent where the satellite stack has no data. Framed around the water
+    point at the species' effective-ring zoom."""
+    png = _pasture_layer_cached(water_source_id, species, interval, v)
+    if png is None:
+        raise HTTPException(status_code=404, detail="Pasture layer not available")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+

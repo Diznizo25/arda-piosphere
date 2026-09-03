@@ -903,7 +903,8 @@ def _handle_map_request(phone: str, pastoralist) -> None:
            f"&confirm={confirmed_id}&interval={water_interval}&v=8")
     # Google-Maps-style zoomable link (tap to open + pinch to zoom).
     live_url = (f"{settings.app_public_base_url.rstrip('/')}/mapview/?lat={lat}&lon={lon}"
-                f"&species={species}&id={water_source_id}&lang={lang_key}")
+                f"&species={species}&id={water_source_id}&lang={lang_key}"
+                f"&interval={water_interval}")
 
     # Concrete, herder-friendly caption: where they are, water direction +
     # distance, and pasture direction + distance (when the COG is available).
@@ -951,6 +952,20 @@ def _handle_map_request(phone: str, pastoralist) -> None:
                         f"Tap to open & zoom like Google Maps: {live_url}"),
         }[pastoralist.preferred_language],
     )
+    # A second, easy-to-tap live-map link so the herder can open + zoom the
+    # interactive pasture map (Google-Maps style) whenever they want.
+    try:
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": f"🗺 Fungua RAMANI HAI (piga zoom, ona malisho ya satelaiti "
+                           f"na kanda za wanyama):\n{live_url}",
+                "english": f"🗺 Open the LIVE MAP (zoom in, see satellite pasture "
+                           f"and your animals' rings):\n{live_url}",
+            }[pastoralist.preferred_language],
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("live-map link send failed (non-fatal)")
 
 
 def _handle_pin_request(phone: str, pastoralist) -> None:
