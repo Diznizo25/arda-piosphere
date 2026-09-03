@@ -228,7 +228,7 @@ const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/servi
   attribution: '&copy Esri, Maxar, Earthstar Geographics'});
 // Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
 L.control.layers(
-  { (TXT.mapBase || 'Map'): osmTiles, (TXT.satBase || 'Satellite'): esriTiles },
+  { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
   null, { position: 'topright', collapsed: true }).addTo(map);
 // On satellite base the pasture is blended so real ground cover shows through.
 map.on('baselayerchange', function (e) {
