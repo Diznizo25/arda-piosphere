@@ -261,8 +261,6 @@ const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
     { opacity: 0.6, interactive: false }).addTo(map);
-  // Bring the pasture area into the default view so it is seen right away.
-  fitTargets.push(L.latLngBounds(D.overlay.bounds));
 }
 
 // Species rings (scaled to the watering interval) for the focused water point.
@@ -374,15 +372,14 @@ document.body.addEventListener('click', function (ev) {
   }
 });
 
-// Zoom so everyone is on screen; on a focused water point, fit its pasture/rings.
+// Zoom so everyone is on screen; on a focused water point, fit its rings
+// (pasture colour always stays inside the widest ring, so this shows it all).
 let boundsToFit = null;
-if (D.focus === 1) {
-  if (D.overlay && D.overlay.available) {
-    boundsToFit = L.latLngBounds(D.overlay.bounds);
-  } else {
-    const rb = ringBounds();
-    if (rb) boundsToFit = L.latLngBounds(rb);
-  }
+const rb = ringBounds();
+if (rb) {
+  boundsToFit = L.latLngBounds(rb);
+} else if (D.overlay && D.overlay.available) {
+  boundsToFit = L.latLngBounds(D.overlay.bounds);
 }
 if (!boundsToFit && fitTargets.length > 1) boundsToFit = L.latLngBounds(fitTargets);
 if (boundsToFit) map.fitBounds(boundsToFit, { padding: [45, 45], maxZoom: 13 });
