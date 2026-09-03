@@ -45,20 +45,32 @@ WATER_TEXT_EN = {
 
 _SUPPORTED = ("swahili", "english")
 
-# Grazing-zone warnings, appended when the herder is far from water relative to
-# their species' effective reach ring (comfortable = no warning).
+# Grazing-zone notes. These describe the USUAL grazing reach for the species at
+# the herder's watering routine — NOT a biological collapse threshold. Being
+# outside it is not "instant death"; it means every long daily walk costs the
+# animal condition, especially in a harsh/dry season.
 ZONE_WARN_SW = {
-    "far": "⚠️ Uko kwenye ukingo wa uwezo wa wanyama wako (~{eff:.0f} km kutoka maji). "
-           "Wakati wa kurejea majini — usiwapeleke mbali zaidi.",
-    "critical": "🚨 Uko kwenye au nje ya mpaka salama (~{eff:.0f} km kutoka maji). "
-                "Wanyama wako wanaweza kuchoka/kukosa maji — rudi karibu na maji sasa.",
+    "far": "⚠️ Umeenda mbali kuliko eneo la kawaida la malisho (~{eff:.0f} km kutoka maji). "
+           "Wanyama bado wanaweza, lakini wanaanza kuchoka — pinduka taratibu kuelekea majini.",
+    "critical": "⚠️ Hapa ni mbali zaidi ya eneo la kawaida la malisho (~{eff:.0f} km kutoka maji). "
+                "Kila siku ya matembezi marefu hivyo hupunguza nguvu na hali ya mnyama — "
+                "rudi karibu na maji leo.",
 }
 ZONE_WARN_EN = {
-    "far": "⚠️ You are at the far edge of what your animals can manage "
-           "(~{eff:.0f} km from water). Time to head back — don't push them further.",
-    "critical": "🚨 You are at or beyond the safe limit (~{eff:.0f} km from water). "
-                "Your animals risk exhaustion/dehydration — move closer to water now.",
+    "far": "⚠️ You are farther than the usual grazing zone (~{eff:.0f} km from water). "
+           "Animals can still cope, but they are tiring — turn back toward water.",
+    "critical": "⚠️ This is beyond the usual grazing zone (~{eff:.0f} km from water). "
+                "Every day of such long walks costs condition — head back to water today.",
 }
+
+# Actionable advice when the forage/season is harsh (we know this from the
+# satellite indices — no extra compute).
+DRY_HARSH_SW = ("☀️ Msimu ni mkavu na malisho ni machache. Ushauri: wanyama wanywe maji "
+                "mapema asubuhi, waende malisho karibu na maji, na usiwakimbize "
+                "matembezi marefu kila siku — wasipoteze hali.")
+DRY_HARSH_EN = ("☀️ Dry season — forage is scarce. Advice: water your animals early, "
+                "let them graze closer to water, and avoid long forced walks every "
+                "day so they don't lose condition.")
 
 
 def format_advisory_message(
@@ -71,6 +83,7 @@ def format_advisory_message(
     water_reliability: WaterReliability,
     grazing_zone: str | None = None,
     effective_radius_km: float | None = None,
+    dry_harsh: bool = False,
 ) -> str:
     if language not in _SUPPORTED:
         language = "swahili"
@@ -91,6 +104,8 @@ def format_advisory_message(
             lines.append("Grass is still curing, not fully dry yet.")
         if grazing_zone in ZONE_WARN_EN and effective_radius_km:
             lines.append(ZONE_WARN_EN[grazing_zone].format(eff=effective_radius_km))
+        if dry_harsh:
+            lines.append(DRY_HARSH_EN)
         lines.append(f"Water: {water_text}.")
         return "\n".join(lines)
 
@@ -110,6 +125,8 @@ def format_advisory_message(
         lines.append("Nyasi bado inakauka, si kavu kabisa.")
     if grazing_zone in ZONE_WARN_SW and effective_radius_km:
         lines.append(ZONE_WARN_SW[grazing_zone].format(eff=effective_radius_km))
+    if dry_harsh:
+        lines.append(DRY_HARSH_SW)
     lines.append(f"Maji: {water_text}.")
     return "\n".join(lines)
 

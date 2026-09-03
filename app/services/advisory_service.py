@@ -10,7 +10,11 @@ import logging
 from app.config import get_species_rings
 from app.models.schemas import AdvisoryRequest, AdvisoryResult
 from app.services import ai, water_reach, raster_read
-from app.services.advisory_logic import classify_forage_condition, classify_water_reliability
+from app.services.advisory_logic import (
+    ForageCondition,
+    classify_forage_condition,
+    classify_water_reliability,
+)
 from app.services.i18n import format_advisory_message
 
 log = logging.getLogger(__name__)
@@ -98,6 +102,9 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
 
     forage = classify_forage_condition(stats.means)
     water_reliability = classify_water_reliability(stats.means.get("GSW_MONTHLY_RECURRENCE", 0.0))
+    # Harsh/dry-season flag: degraded (overgrazed/bare) forage around this water
+    # right now. We already classify it from the overview COG — no extra compute.
+    dry_harsh = forage.condition == ForageCondition.BARE_DEGRADED
 
     message = format_advisory_message(
         language=req.language,
@@ -109,6 +116,7 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         water_reliability=water_reliability,
         grazing_zone=grazing_zone,
         effective_radius_km=effective_radius_km,
+        dry_harsh=dry_harsh,
     )
     # The LLM may only rephrase the deterministic text, never add facts; on any
     # failure the original message is returned (see app/services/ai.py).

@@ -15,7 +15,9 @@ species_rings:
 # species' (effective) max ring radius:
 #   comfortable = normal daily grazing zone (animals are fine)
 #   far         = animals are tiring — time to head back toward water
-#   critical    = the outer ring — crossing it risks condition loss
+#   critical    = the outer ring — beyond it every long daily walk costs the
+#                 animal condition (NOT an instant collapse threshold; risk
+#                 rises with distance + dry-season stress)
 # These are used for map zone lines and for honest advisory wording.
 grazing_zones:
   comfortable_frac: 0.5

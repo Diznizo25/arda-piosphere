@@ -876,13 +876,13 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
     zone_rows: list[tuple[str, tuple | None]] = []
     if active_species and items:
         if lang == "swa":
-            zone_rows = [("  kijani ndani = eneo salama", _ZONE_COLORS["comfortable"]),
-                         ("  njano = ukingo hatari", _ZONE_COLORS["far"]),
-                         ("  mstari wa nje = mpaka wa hatari", (60, 60, 60))]
+            zone_rows = [("  kijani = eneo la kila siku", _ZONE_COLORS["comfortable"]),
+                         ("  njano = ukingo wa eneo la kawaida", _ZONE_COLORS["far"]),
+                         ("  nje = mbali — rudi majini mapema", (60, 60, 60))]
         else:
-            zone_rows = [("  green inside = safe area", _ZONE_COLORS["comfortable"]),
-                         ("  amber = danger edge", _ZONE_COLORS["far"]),
-                         ("  outer line = hard limit", (60, 60, 60))]
+            zone_rows = [("  green = usual daily zone", _ZONE_COLORS["comfortable"]),
+                         ("  amber = edge of usual zone", _ZONE_COLORS["far"]),
+                         ("  beyond = far — head back", (60, 60, 60))]
 
     pasture_rows = []
     if pasture_note:

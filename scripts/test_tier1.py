@@ -35,7 +35,7 @@ assert rings.grazing_zone(9.8, "cattle", "every_2_3_days") == "critical"
 assert rings.grazing_zone(6.0, "cattle", "daily") != "comfortable"
 print("grazing-zone classification: OK")
 
-# advisory wording: far/critical add the warning, comfortable does not
+# advisory wording: far/critical add the usual-zone warning, comfortable does not
 common = dict(condition=ForageCondition.DRY_FORAGE_AVAILABLE, seasonally_normal=True,
               curing_stage_note=None, water_reliability=WaterReliability.RELIABLE)
 msg_safe = format_advisory_message("swahili", "cattle", 4.0, grazing_zone="comfortable",
@@ -44,9 +44,19 @@ msg_far = format_advisory_message("swahili", "cattle", 6.0, grazing_zone="far",
                                   effective_radius_km=7.0, **common)
 msg_crit = format_advisory_message("english", "cattle", 7.1, grazing_zone="critical",
                                    effective_radius_km=7.0, **common)
-assert "hatari" not in msg_safe
-assert "⚠️" in msg_far and "ukingo" in msg_far
-assert "🚨" in msg_crit and "safe limit" in msg_crit
-print("zone advisory wording (swa+eng): OK")
+assert "⚠️" not in msg_safe
+assert "⚠️" in msg_far and "eneo la kawaida" in msg_far
+assert "usual grazing zone" in msg_crit  # risk wording, NOT a false 'safe limit'
+print("zone advisory wording (swa+eng, usual-zone framing): OK")
+
+# dry-season assist: when forage is harsh the message adds actionable advice
+msg_harsh = format_advisory_message("swahili", "shoat", 3.0,
+                                    condition=ForageCondition.BARE_DEGRADED,
+                                    seasonally_normal=True, curing_stage_note=None,
+                                    water_reliability=WaterReliability.RELIABLE,
+                                    grazing_zone="comfortable",
+                                    effective_radius_km=11.0, dry_harsh=True)
+assert "☀️" in msg_harsh and "karibu na maji" in msg_harsh
+print("dry-season actionable advice: OK")
 
 print("\nTier-1 config/i18n tests OK.")
