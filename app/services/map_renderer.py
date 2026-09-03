@@ -53,6 +53,10 @@ RING_STYLE = {
     "camel": ((249, 115, 22, 55), (234, 88, 12, 255), "camel (25km)"),
 }
 
+# Inner grazing-zone line colours (drawn inside the ACTIVE species ring):
+# comfortable boundary = green (safe daily area), far boundary = amber (edge).
+_ZONE_COLORS = {"comfortable": (34, 197, 94), "far": (245, 158, 11)}
+
 # Full compass in the words herders actually use (Swahili first, English fallback).
 COMPASS_SWA = [
     "Kaskazini", "Kaskazini-Mashariki", "Mashariki", "Kusini-Mashariki",
@@ -264,12 +268,26 @@ def _compute_zoom(lat: float, max_radius_km: float) -> int:
     return max(8, min(14, int(round(z))))
 
 
+def _scale_coords(coords, frac: float):
+    """Scale a ring's lon/lat vertices toward its own centre by `frac` — used to
+    draw concentric grazing-zone rings from the stored piosphere polygon (no
+    recompute: the stored circle is just resized at draw time)."""
+    xs = [p[0] for p in coords]
+    ys = [p[1] for p in coords]
+    if not xs:
+        return coords
+    cx = (min(xs) + max(xs)) / 2.0
+    cy = (min(ys) + max(ys)) / 2.0
+    return [(cx + (x - cx) * frac, cy + (y - cy) * frac) for x, y in coords]
+
+
 def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                      herder_lat: float | None = None, species: str | None = None,
                      pasture: bool = True, lang: str = "swa",
                      confirm_source_id: str | None = None,
                      numbered_sources: list[dict] | None = None,
-                     fit_view: bool = False) -> bytes:
+                     fit_view: bool = False,
+                     water_interval: str = "daily") -> bytes:
     """Render the water point's rings -- and, when pasture=True, the actual
     satellite forage-quality layer -- to PNG bytes. Raises ValueError if the
     water source (or its zones) doesn't exist.
@@ -289,6 +307,10 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     pasture overlay. A herder whose nearest registered water points are tens of
     kilometres away then SEES the numbered options on the map (like pins on a
     Google map) instead of empty blank land with the options off-screen.
+
+    `water_interval` ('daily' | 'every_2_3_days') scales the ACTIVE species'
+    ring to its effective reach (herders who water every 2-3 days can graze
+    further from water). Zone lines (comfortable/far) are drawn inside it.
     """
     ws = next((w for w in water_sources.list_water_sources() if w.id == water_source_id), None)
     if ws is None:
@@ -300,6 +322,22 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     lat, lon = ws.lat, ws.lon
     c_lat = herder_lat if herder_lat is not None else lat
     c_lon = herder_lon if herder_lon is not None else lon
+
+    # Effective reach of the herder's species ring (scaled by their watering
+    # interval, capped at the compute ring) + grazing-zone fractions. All from
+    # config; nothing recomputed.
+    eff_radius_km: float | None = None
+    zone_fracs: dict[str, float] = {}
+    if species and any(z["species"] == species for z in zones):
+        try:
+            from app.config import get_species_rings
+
+            rings_cfg = get_species_rings()
+            eff_radius_km = rings_cfg.effective_radius_km(species, water_interval)
+            zone_fracs = dict(rings_cfg.zone_fracs)
+        except Exception:  # noqa: BLE001
+            eff_radius_km = None
+            zone_fracs = {}
 
     # "fit" overview mode (confirmation flow): zoom out so the herder and ALL
     # the numbered water-point options fit on screen. Otherwise zoom so the
@@ -336,9 +374,11 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
         c_lat = float(np.mean(fys))
         center_x, center_y = _mercator_x(c_lon), _mercator_y(c_lat)
     else:
-        # Zoom so the HERDER'S species ring fits; default to the widest ring.
+        # Zoom so the HERDER'S species ring fits (effective reach when they
+        # water every 2-3 days); default to the widest ring.
         if species and any(z["species"] == species for z in zones):
-            max_radius_km = max(z["radius_km"] for z in zones if z["species"] == species)
+            base_max = max(z["radius_km"] for z in zones if z["species"] == species)
+            max_radius_km = eff_radius_km or base_max
         else:
             max_radius_km = max(z["radius_km"] for z in zones)
         zoom = _compute_zoom(c_lat, max_radius_km)
@@ -371,7 +411,9 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     _draw_landmark_labels(draw, west, north, mpp, lang, center_lon=c_lon, center_lat=c_lat)
 
     # Draw rings outer -> inner so the smallest stays on top (not in fit/overview
-    # mode — there the numbered markers ARE the content).
+    # mode — there the numbered markers ARE the content). The ACTIVE species'
+    # ring is scaled to its effective reach (watering interval) and carries two
+    # inner zone lines: comfortable (green) and far (amber) boundaries.
     if not fit_points:
         for zone in sorted(zones, key=lambda z: -z["radius_km"]):
             geom = shape(json.loads(zone["geojson"]))
@@ -383,9 +425,24 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                 rings_ = [p.exterior.coords for p in geom.geoms]
             else:
                 continue
+            scale = 1.0
+            if zone["species"] == species and eff_radius_km and float(zone["radius_km"]) > 0:
+                scale = eff_radius_km / float(zone["radius_km"])
             for ring in rings_:
-                pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in ring]
+                coords = list(ring)
+                if scale != 1.0:
+                    coords = _scale_coords(coords, scale)
+                pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in coords]
                 draw.polygon(pts, fill=style[0], outline=style[1], width=3)
+                if zone["species"] == species and zone_fracs:
+                    for zname in ("comfortable", "far"):
+                        frac = zone_fracs.get(zname)
+                        if not frac or frac <= 0 or frac >= 1.0:
+                            continue
+                        zcoords = _scale_coords(coords, float(frac))
+                        zpts = [_lonlat_to_px(x, y, west, north, mpp) for x, y in zcoords]
+                        if len(zpts) >= 3:
+                            draw.polygon(zpts, outline=_ZONE_COLORS[zname], width=2)
 
         # No satellite data yet: never show a blank map — draw a clear "data is
         # being prepared" notice + a light loading hatch so it's obvious why the
@@ -446,7 +503,9 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                  ward=None if fit_points else (ws.name or ws.ward),
                  county=None if fit_points else ws.county,
                  pasture_note=None if fit_points else pasture_note,
-                 lang=lang)
+                 lang=lang,
+                 active_species=None if fit_points else species,
+                 effective_km=eff_radius_km if (not fit_points and eff_radius_km) else None)
     _draw_scale_bar(draw, mpp)
     _draw_compass(draw, lang=lang)
 
@@ -803,13 +862,27 @@ def _draw_confirmed_source(draw: ImageDraw.ImageDraw, west: float, north: float,
 
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,
                  county: str | None = None, pasture_note: str | None = None,
-                 lang: str = "swa") -> None:
+                 lang: str = "swa", active_species: str | None = None,
+                 effective_km: float | None = None) -> None:
     font = _get_font(15)
     small = _get_font(13)
     line_h = 20
     x0, y0 = 16, 76
-    items = [(zone["species"], RING_STYLE[zone["species"]][1])
+    items = [(zone["species"], RING_STYLE[zone["species"]][1],
+              float(zone["radius_km"]))
              for zone in sorted(zones, key=lambda z: z["radius_km"])]
+
+    # Grazing-zone key (shown when the active species ring carries zone lines).
+    zone_rows: list[tuple[str, tuple | None]] = []
+    if active_species and items:
+        if lang == "swa":
+            zone_rows = [("  kijani ndani = eneo salama", _ZONE_COLORS["comfortable"]),
+                         ("  njano = ukingo hatari", _ZONE_COLORS["far"]),
+                         ("  mstari wa nje = mpaka wa hatari", (60, 60, 60))]
+        else:
+            zone_rows = [("  green inside = safe area", _ZONE_COLORS["comfortable"]),
+                         ("  amber = danger edge", _ZONE_COLORS["far"]),
+                         ("  outer line = hard limit", (60, 60, 60))]
 
     pasture_rows = []
     if pasture_note:
@@ -840,16 +913,23 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
 
     header = f"{ward or 'Water source'} - {county}" if county else (ward or "Water source")
     header_h = 20
-    box_w = 240
-    rows_n = len(items) + len(pasture_rows) + len(water_rows)
+    box_w = 260
+    rows_n = len(items) + len(zone_rows) + len(pasture_rows) + len(water_rows)
     box_h = header_h + rows_n * line_h + 10
     draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=6, fill=(255, 255, 255, 225))
     draw.text((x0 + 10, y0 + 4), header, fill=(20, 20, 20), font=font)
 
     cy = y0 + header_h + 8
-    for species, color in items:
+    for species, color, radius_km in items:
         draw.ellipse((x0 + 10, cy - 5, x0 + 21, cy + 6), fill=color)
-        draw.text((x0 + 27, cy - 7), RING_STYLE[species][2], fill=(40, 40, 40), font=font)
+        disp_km = effective_km if (species == active_species and effective_km) else radius_km
+        draw.text((x0 + 27, cy - 7), f"{species} ({disp_km:g} km)", fill=(40, 40, 40), font=font)
+        cy += line_h
+
+    for label, color in zone_rows:
+        if color:
+            draw.rectangle((x0 + 10, cy - 6, x0 + 21, cy + 5), fill=color)
+        draw.text((x0 + 27, cy - 7), label, fill=(40, 40, 40), font=small)
         cy += line_h
 
     for label, color in pasture_rows:

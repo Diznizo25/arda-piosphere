@@ -5,10 +5,14 @@ import sys
 import types
 
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, ".")
 from app.services import map_renderer  # noqa: E402
 from app.services import water_sources as ws_mod  # noqa: E402
+
+# Deterministic + offline: plain base tiles, no OSM network calls.
+map_renderer._fetch_tile = lambda z, x, y: Image.new("RGB", (256, 256), (242, 239, 233))
 
 
 def main() -> None:
@@ -124,6 +128,27 @@ def main() -> None:
         "x", herder_lon=37.58, herder_lat=0.35, species="camel", pasture=True, lang="swa")
     assert png3[:8] == b"\x89PNG\r\n\x1a\n"
     print(f"no-COG fallback render OK ({len(png3)} bytes PNG)")
+
+    # 6) Tier-1 grazing zones + effective reach (watering interval): the active
+    #    species ring gets green/amber zone lines and the every_2_3_days ring
+    #    renders larger. Rendered from the STORED ring (no recompute).
+    import io as _io
+
+    png5 = map_renderer.render_rings_png(
+        "x", herder_lon=37.58, herder_lat=0.35, species="cattle", pasture=False,
+        lang="swa", water_interval="every_2_3_days")
+    assert png5[:8] == b"\x89PNG\r\n\x1a\n"
+    arr = np.asarray(Image.open(_io.BytesIO(png5)).convert("RGB")).astype(int)
+
+    def _px(color, tol=40):
+        return int(((abs(arr - np.array(color)).sum(axis=2)) < tol).sum())
+
+    zone_green = _px(map_renderer._ZONE_COLORS["comfortable"])
+    zone_amber = _px(map_renderer._ZONE_COLORS["far"])
+    assert zone_green > 150, f"comfortable zone line missing ({zone_green} px)"
+    assert zone_amber > 150, f"far zone line missing ({zone_amber} px)"
+    print(f"grazing-zone render OK (green {zone_green}px, amber {zone_amber}px, "
+          f"{len(png5)} bytes)")
 
 
 def _circle_geojson(lon, lat, radius_deg):

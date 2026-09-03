@@ -11,6 +11,31 @@ species_rings:
   camel:
     radius_km: 25        # spec range: 20-30+ km
 
+# Three grazing-risk bands inside each species ring, as fractions of that
+# species' (effective) max ring radius:
+#   comfortable = normal daily grazing zone (animals are fine)
+#   far         = animals are tiring — time to head back toward water
+#   critical    = the outer ring — crossing it risks condition loss
+# These are used for map zone lines and for honest advisory wording.
+grazing_zones:
+  comfortable_frac: 0.5
+  far_frac: 0.8
+  critical_frac: 1.0
+
+# Per-species reach multiplier when the herder waters their animals every 2-3
+# days instead of daily: a longer watering interval lets animals graze further
+# from water before returning. Applied at READ time (no recompute); always
+# capped at the compute ring (camel) where the satellite data exists.
+watering_intervals:
+  daily:
+    cattle: 1.0
+    shoat: 1.0
+    camel: 1.0
+  every_2_3_days:
+    cattle: 1.4    # ~9.8 km
+    shoat: 1.3     # ~14 km
+    camel: 1.0     # already at the 25 km compute/data limit
+
 # The camel radius is treated as the outer/compute ring: GEE compute runs once per
 # water point across this outer buffer, and cattle/shoat results are tagged from it
 # at read time rather than computed separately three times.

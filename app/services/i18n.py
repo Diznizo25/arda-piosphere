@@ -45,6 +45,21 @@ WATER_TEXT_EN = {
 
 _SUPPORTED = ("swahili", "english")
 
+# Grazing-zone warnings, appended when the herder is far from water relative to
+# their species' effective reach ring (comfortable = no warning).
+ZONE_WARN_SW = {
+    "far": "⚠️ Uko kwenye ukingo wa uwezo wa wanyama wako (~{eff:.0f} km kutoka maji). "
+           "Wakati wa kurejea majini — usiwapeleke mbali zaidi.",
+    "critical": "🚨 Uko kwenye au nje ya mpaka salama (~{eff:.0f} km kutoka maji). "
+                "Wanyama wako wanaweza kuchoka/kukosa maji — rudi karibu na maji sasa.",
+}
+ZONE_WARN_EN = {
+    "far": "⚠️ You are at the far edge of what your animals can manage "
+           "(~{eff:.0f} km from water). Time to head back — don't push them further.",
+    "critical": "🚨 You are at or beyond the safe limit (~{eff:.0f} km from water). "
+                "Your animals risk exhaustion/dehydration — move closer to water now.",
+}
+
 
 def format_advisory_message(
     language: str,
@@ -54,6 +69,8 @@ def format_advisory_message(
     seasonally_normal: bool,
     curing_stage_note: str | None,
     water_reliability: WaterReliability,
+    grazing_zone: str | None = None,
+    effective_radius_km: float | None = None,
 ) -> str:
     if language not in _SUPPORTED:
         language = "swahili"
@@ -72,6 +89,8 @@ def format_advisory_message(
             lines.append("This is normal for the dry season.")
         if curing_stage_note == "still_curing":
             lines.append("Grass is still curing, not fully dry yet.")
+        if grazing_zone in ZONE_WARN_EN and effective_radius_km:
+            lines.append(ZONE_WARN_EN[grazing_zone].format(eff=effective_radius_km))
         lines.append(f"Water: {water_text}.")
         return "\n".join(lines)
 
@@ -89,6 +108,8 @@ def format_advisory_message(
         lines.append("Hii ni ya kawaida kwa msimu huu wa kiangazi.")
     if curing_stage_note == "still_curing":
         lines.append("Nyasi bado inakauka, si kavu kabisa.")
+    if grazing_zone in ZONE_WARN_SW and effective_radius_km:
+        lines.append(ZONE_WARN_SW[grazing_zone].format(eff=effective_radius_km))
     lines.append(f"Maji: {water_text}.")
     return "\n".join(lines)
 

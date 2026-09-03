@@ -32,6 +32,29 @@ order by distance_m asc
 limit %(limit)s
 """
 
+# Same shape as above, but reach is a straight-line distance to the water point
+# of `radius_m` (used when the herder's watering interval widens their effective
+# reach beyond the stored ring — no recompute, geometry unchanged).
+NEAREST_REACHABLE_DIST_SQL = """
+select
+    ws.id as water_source_id,
+    ws.source_type,
+    ws.confidence,
+    ws.last_confirmed,
+    st_x(ws.geom) as lon,
+    st_y(ws.geom) as lat,
+    st_asgeojson(pz.geom) as species_zone_geojson,
+    st_distance(ws.geom::geography, st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography) as distance_m
+from piosphere_zones pz
+join water_sources ws on ws.id = pz.water_source_id
+where pz.species = %(species)s
+  and st_dwithin(ws.geom::geography,
+                 st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography,
+                 %(radius_m)s)
+order by distance_m asc
+limit %(limit)s
+"""
+
 
 @dataclass
 class ReachableWater:
@@ -45,14 +68,27 @@ class ReachableWater:
     species_zone_geojson: str
 
 
-def find_nearest_reachable_water(lon: float, lat: float, species: str, limit: int = 3) -> list[ReachableWater]:
+def find_nearest_reachable_water(lon: float, lat: float, species: str, limit: int = 3,
+                                 effective_radius_km: float | None = None) -> list[ReachableWater]:
     """Returns up to `limit` reachable water points for this species, nearest
     first. Empty list means no known water point has this species' ring
     reaching the herder's location — a real (if hopefully rare) answer, not
-    an error: it should be surfaced to the herder honestly, not hidden."""
+    an error: it should be surfaced to the herder honestly, not hidden.
+
+    `effective_radius_km` widens reach beyond the stored ring for herders who
+    water every 2-3 days (longer watering interval => they can graze further
+    from water); the stored ring geometry is still returned for pasture stats.
+    """
+    if effective_radius_km is not None:
+        sql = NEAREST_REACHABLE_DIST_SQL
+        params = {"lon": lon, "lat": lat, "species": species,
+                  "limit": limit, "radius_m": int(effective_radius_km * 1000)}
+    else:
+        sql = NEAREST_REACHABLE_SQL
+        params = {"lon": lon, "lat": lat, "species": species, "limit": limit}
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(NEAREST_REACHABLE_SQL, {"lon": lon, "lat": lat, "species": species, "limit": limit})
+            cur.execute(sql, params)
             rows = cur.fetchall()
 
     return [

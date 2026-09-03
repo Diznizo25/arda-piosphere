@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from app.config import get_species_rings
 from app.models.schemas import AdvisoryRequest, AdvisoryResult
 from app.services import ai, water_reach, raster_read
 from app.services.advisory_logic import classify_forage_condition, classify_water_reliability
@@ -52,7 +53,13 @@ def get_advisory(req: AdvisoryRequest) -> AdvisoryResult:
 
 
 def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
-    candidates = water_reach.find_nearest_reachable_water(req.lon, req.lat, req.species, limit=1)
+    rings = get_species_rings()
+    # Effective reach = species max ring scaled by the herder's watering interval
+    # (capped at the satellite compute ring). No recompute — a read-time scale.
+    effective_radius_km = rings.effective_radius_km(req.species, req.water_interval)
+    candidates = water_reach.find_nearest_reachable_water(
+        req.lon, req.lat, req.species, limit=1,
+        effective_radius_km=effective_radius_km)
 
     if not candidates:
         species_label = SPECIES_PLAIN.get((req.language, req.species), req.species)
@@ -62,6 +69,8 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         )
 
     nearest = candidates[0]
+    distance_km = nearest.distance_m / 1000
+    grazing_zone = rings.grazing_zone(distance_km, req.species, req.water_interval)
 
     try:
         stats = raster_read.read_zone_stats(nearest.water_source_id, nearest.species_zone_geojson)
@@ -70,10 +79,12 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         return AdvisoryResult(
             found=True,
             water_source_id=nearest.water_source_id,
-            distance_km=nearest.distance_m / 1000,
+            distance_km=round(distance_km, 2),
             source_type=nearest.source_type,
             water_confidence=nearest.confidence,
             last_confirmed=nearest.last_confirmed,
+            grazing_zone=grazing_zone,
+            effective_radius_km=round(effective_radius_km, 1),
             message=(
                 f"Tunajua eneo la maji lakini data ya malisho haipatikani kwa sasa. "
                 f"(COG_READ_ERROR: {type(e).__name__}: {e})"
@@ -91,24 +102,26 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
     message = format_advisory_message(
         language=req.language,
         species=req.species,
-        distance_km=nearest.distance_m / 1000,
+        distance_km=distance_km,
         condition=forage.condition,
         seasonally_normal=forage.seasonally_normal,
         curing_stage_note=forage.curing_stage_note,
         water_reliability=water_reliability,
+        grazing_zone=grazing_zone,
+        effective_radius_km=effective_radius_km,
     )
     # The LLM may only rephrase the deterministic text, never add facts; on any
     # failure the original message is returned (see app/services/ai.py).
     message = ai.rephrase_advisory(
         language=req.language,
         base_message=message,
-        distance_km=nearest.distance_m / 1000,
+        distance_km=distance_km,
     )
 
     return AdvisoryResult(
         found=True,
         water_source_id=nearest.water_source_id,
-        distance_km=round(nearest.distance_m / 1000, 2),
+        distance_km=round(distance_km, 2),
         source_type=nearest.source_type,
         water_confidence=nearest.confidence,
         last_confirmed=nearest.last_confirmed,
@@ -116,6 +129,8 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         seasonally_normal=forage.seasonally_normal,
         curing_stage_note=forage.curing_stage_note,
         water_reliability=water_reliability.value,
+        grazing_zone=grazing_zone,
+        effective_radius_km=round(effective_radius_km, 1),
         message=message,
         raw_indices=forage.raw,
     )

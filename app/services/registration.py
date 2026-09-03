@@ -23,6 +23,20 @@ SPECIES_KEYS = {
 ANIMAL_BUTTONS = [("cattle", "Ng'ombe"), ("shoat", "Mbuzi/Kondoo"), ("camel", "Ngamia")]
 MIXED_BUTTONS = [("yes_mixed", "Ndiyo, mchanganyiko"), ("no_mixed", "Hapana, moja tu")]
 
+# Watering interval in the dry season. This tunes how far the species reach ring
+# is drawn/advisoryed (longer interval => animals can graze further from water).
+INTERVAL_BUTTONS = [
+    ("interval:daily", "Kila siku"),
+    ("interval:every_2_3_days", "Kila siku 2-3"),
+]
+
+ASK_INTERVAL = {
+    "swahili": "Wanyama wako hunywa maji mara ngapi wakati wa kiangazi? "
+               "(Hii hutueleza wanaweza kwenda mbali gani kutafuta malisho bila kuchoka.)",
+    "english": "In the dry season, how often do your animals get water? "
+               "(This tells us how far they can safely graze from water.)",
+}
+
 SET_NAME_SQL = "update pastoralists set full_name = %(name)s where phone_number = %(phone)s"
 
 SET_LANGUAGE_SQL = "update pastoralists set preferred_language = %(language)s where phone_number = %(phone)s"

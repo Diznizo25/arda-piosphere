@@ -21,7 +21,7 @@ CACHE_TTL_SECONDS = 3600  # rings only change when zones are regenerated
 def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: float | None,
                    version: int, species: str | None, pasture: bool, lang: str,
                    confirm_source_id: str | None, numbered_ids: tuple[str, ...],
-                   fit_view: bool) -> bytes:
+                   fit_view: bool, water_interval: str) -> bytes:
     from app.services import water_sources
 
     numbered_sources = None
@@ -39,7 +39,8 @@ def _render_cached(water_source_id: str, herder_lon: float | None, herder_lat: f
     return render_rings_png(water_source_id, herder_lon, herder_lat,
                             species=species, pasture=pasture, lang=lang,
                             confirm_source_id=confirm_source_id,
-                            numbered_sources=numbered_sources, fit_view=fit_view)
+                            numbered_sources=numbered_sources, fit_view=fit_view,
+                            water_interval=water_interval)
 
 
 @router.get("/{water_source_id}.png")
@@ -56,6 +57,9 @@ def get_rings_map(
     fit: int = Query(default=0,
                      description="fit=1: zoom out to show ALL numbered markers + the herder "
                                  "(confirmation 'options' map, no rings)"),
+    interval: str = Query(default="daily", pattern="^(daily|every_2_3_days)$",
+                          description="Herder's watering interval — widens the active "
+                                      "species ring to its effective reach"),
     v: int = Query(default=1, description="Cache-buster; bump when the renderer changes."),
 ) -> Response:
     """Render the species rings for a water point.
@@ -75,7 +79,7 @@ def get_rings_map(
 
         t = query_log.timer()
         png = _render_cached(water_source_id, lon, lat, v, species, pasture, lang,
-                             confirm, numbered_ids, bool(fit))
+                             confirm, numbered_ids, bool(fit), interval)
         query_log.log_query(kind="map", lat=lat, lon=lon, species=species,
                             water_source_id=water_source_id, result="ok", latency_ms=t.ms())
     except ValueError as e:

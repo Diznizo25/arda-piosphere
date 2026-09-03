@@ -611,7 +611,8 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
         return
 
     req = AdvisoryRequest(lat=lat, lon=lon, species=pastoralist.primary_species,
-                           language=pastoralist.preferred_language)
+                          language=pastoralist.preferred_language,
+                          water_interval=pastoralist.water_interval or "daily")
     result = get_advisory(req)
 
     if result.found:
@@ -828,6 +829,14 @@ def _handle_map_request(phone: str, pastoralist) -> None:
 
     lon, lat = loc
     species = pastoralist.primary_species or "camel"
+    water_interval = pastoralist.water_interval or "daily"
+    # Effective reach for this herder's species + watering interval (no recompute).
+    try:
+        from app.config import get_species_rings
+
+        eff_km = get_species_rings().effective_radius_km(species, water_interval)
+    except Exception:  # noqa: BLE001
+        eff_km = None
 
     # Prefer the herder's CONFIRMED water point when they are still within its
     # ring (they told us where their animals drink); otherwise fall back to the
@@ -836,13 +845,15 @@ def _handle_map_request(phone: str, pastoralist) -> None:
     water_source_id = None
     if confirmed_id:
         try:
-            reachable = water_reach.find_nearest_reachable_water(lon, lat, species, limit=20)
+            reachable = water_reach.find_nearest_reachable_water(
+                lon, lat, species, limit=20, effective_radius_km=eff_km)
             if any(c.water_source_id == confirmed_id for c in reachable):
                 water_source_id = confirmed_id
         except Exception:  # noqa: BLE001
             log.exception("confirmed water reach check failed")
     if water_source_id is None:
-        candidates = water_reach.find_nearest_reachable_water(lon, lat, species, limit=1)
+        candidates = water_reach.find_nearest_reachable_water(
+            lon, lat, species, limit=1, effective_radius_km=eff_km)
         if not candidates:
             # Honest + useful: nothing within grazing reach, but SHOW the closest
             # registered water points (with a zoomable live map) so the herder can
@@ -889,7 +900,7 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         place_bit = ""
     url = (f"{settings.app_public_base_url.rstrip('/')}/map/{water_source_id}.png"
            f"?lat={lat}&lon={lon}&species={species}&pasture=1&lang={lang_key}"
-           f"&confirm={confirmed_id}&v=8")
+           f"&confirm={confirmed_id}&interval={water_interval}&v=8")
     # Google-Maps-style zoomable link (tap to open + pinch to zoom).
     live_url = (f"{settings.app_public_base_url.rstrip('/')}/mapview/?lat={lat}&lon={lon}"
                 f"&species={species}&id={water_source_id}&lang={lang_key}")
@@ -1290,8 +1301,14 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
             )
             return
         if any(k in t for k in ("no", "hapana", "no_more", "kumaliza", "la", "siyo")):
-            # No more animals -> finish onboarding.
-            _finish_onboarding(phone, pastoralist, data)
+            # No more animals -> ask watering interval, then finish onboarding.
+            conversation.set_state(phone, "onboarding.interval", data)
+            whatsapp_client.send_quick_reply_buttons(
+                phone,
+                registration.ASK_INTERVAL[pastoralist.preferred_language]
+                + _hint(pastoralist.preferred_language),
+                registration.INTERVAL_BUTTONS,
+            )
             return
         whatsapp_client.send_text(phone, registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language]
                                  + _hint(pastoralist.preferred_language))
@@ -1327,6 +1344,31 @@ def _handle_onboarding_step(phone: str, pastoralist, text: str | None) -> None:
             registration.ASK_OTHER_ANIMALS[pastoralist.preferred_language] + _hint(pastoralist.preferred_language),
             [("yes_more", "Ndiyo, nyingine"), ("no_more", "Hapana, kumaliza")],
         )
+
+    elif state == "onboarding.interval":
+        interval = None
+        if "interval:every_2_3_days" in t or t in ("2", "3", "2-3") or any(k in t for k in (
+                "2-3", "2 3", "siku 2", "siku mbili", "siku tatu", "every 2", "every_2",
+                "mbili", "tatu", "two", "three", "mara mbili", "mara tatu")):
+            interval = "every_2_3_days"
+        elif "interval:daily" in t or t in ("1",) or any(k in t for k in (
+                "daily", "kila siku", "every day", "day", "moja", "one", "siku moja")):
+            interval = "daily"
+        if interval is None:
+            whatsapp_client.send_quick_reply_buttons(
+                phone,
+                registration.ASK_INTERVAL[pastoralist.preferred_language] + _hint(lang),
+                registration.INTERVAL_BUTTONS,
+            )
+            return
+        data["water_interval"] = interval
+        try:
+            from app.services.pastoralists import set_water_interval
+
+            set_water_interval(phone, interval)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to save watering interval (non-fatal)")
+        _finish_onboarding(phone, pastoralist, data)
 
 
 def _finish_onboarding(phone: str, pastoralist, data: dict) -> None:

@@ -36,6 +36,12 @@ set water_source_id = %(water_source_id)s
 where phone_number = %(phone)s
 """
 
+SET_WATER_INTERVAL_SQL = """
+update pastoralists
+set water_interval = %(water_interval)s
+where phone_number = %(phone)s
+"""
+
 
 @dataclass
 class Pastoralist:
@@ -48,6 +54,7 @@ class Pastoralist:
     herd_composition: dict | None = None
     onboarded_at: object | None = None
     water_source_id: str | None = None
+    water_interval: str = "daily"
 
     @property
     def is_onboarded(self) -> bool:
@@ -98,6 +105,7 @@ def _from_row(row) -> Pastoralist:
         herd_composition=herd,
         onboarded_at=row.get("onboarded_at"),
         water_source_id=str(row["water_source_id"]) if row.get("water_source_id") else None,
+        water_interval=row.get("water_interval") or "daily",
     )
 
 
@@ -122,6 +130,16 @@ def set_water_source(phone_number: str, water_source_id: str) -> None:
         with conn.cursor() as cur:
             cur.execute(SET_WATER_SOURCE_SQL,
                         {"phone": phone_number, "water_source_id": water_source_id})
+        conn.commit()
+
+
+def set_water_interval(phone_number: str, water_interval: str) -> None:
+    """Remember how often the herder waters their animals ('daily' | 'every_2_3_days').
+    Used to widen the species reach ring at read time (no recompute)."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SET_WATER_INTERVAL_SQL,
+                        {"phone": phone_number, "water_interval": water_interval})
         conn.commit()
 
 

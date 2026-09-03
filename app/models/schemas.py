@@ -14,6 +14,7 @@ class AdvisoryRequest(BaseModel):
     lon: float = Field(..., ge=-180, le=180)
     species: Species
     language: Language = "swahili"
+    water_interval: Literal["daily", "every_2_3_days"] = "daily"
 
 
 class AdvisoryResult(BaseModel):
@@ -27,6 +28,8 @@ class AdvisoryResult(BaseModel):
     seasonally_normal: bool | None = None
     curing_stage_note: str | None = None
     water_reliability: str | None = None
+    grazing_zone: str | None = None
+    effective_radius_km: float | None = None
     message: str
     raw_indices: dict[str, float] | None = None
 

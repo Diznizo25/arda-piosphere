@@ -117,6 +117,22 @@ class SpeciesRingConfig:
         }
         self.compute_ring_species: str = raw["compute_ring_species"]
 
+        zones = raw.get("grazing_zones", {}) or {}
+        self.zone_fracs: dict[str, float] = {
+            "comfortable": float(zones.get("comfortable_frac", 0.5)),
+            "far": float(zones.get("far_frac", 0.8)),
+            "critical": float(zones.get("critical_frac", 1.0)),
+        }
+        # watering interval -> species -> reach multiplier
+        intervals = raw.get("watering_intervals", {}) or {}
+        self.interval_multipliers: dict[str, dict[str, float]] = {
+            name: {
+                species: float(mult.get(species, 1.0))
+                for species in self.radii_km
+            }
+            for name, mult in intervals.items()
+        }
+
     def radius_for(self, species: Species) -> float:
         return self.radii_km[species]
 
@@ -124,6 +140,34 @@ class SpeciesRingConfig:
     def compute_radius_km(self) -> float:
         """The outer ring radius GEE compute is scoped to (currently: camel)."""
         return self.radii_km[self.compute_ring_species]
+
+    def multiplier_for(self, species: Species, water_interval: str = "daily") -> float:
+        """Reach multiplier for a herder's watering interval (1.0 = daily)."""
+        return self.interval_multipliers.get(water_interval, {}).get(species, 1.0)
+
+    def effective_radius_km(self, species: Species, water_interval: str = "daily") -> float:
+        """Species max ring adjusted for the herder's watering interval, capped at
+        the satellite compute ring (no data beyond it)."""
+        return min(
+            self.radii_km[species] * self.multiplier_for(species, water_interval),
+            self.compute_radius_km,
+        )
+
+    def grazing_zone(self, distance_km: float, species: Species,
+                     water_interval: str = "daily") -> str:
+        """comfortable | far | critical for a herder `distance_km` from the water.
+
+        comfortable = normal daily grazing (< far band), far = at the edge
+        (>= far band), critical = at/over the max ring."""
+        eff = self.effective_radius_km(species, water_interval)
+        if eff <= 0:
+            return "critical"
+        frac = distance_km / eff
+        if frac < self.zone_fracs["far"]:
+            return "comfortable"
+        if frac < self.zone_fracs["critical"]:
+            return "far"
+        return "critical"
 
     def species_ordered_by_radius(self) -> list[str]:
         """Smallest ring first — used when tagging a pixel/result with the
