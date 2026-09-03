@@ -38,6 +38,7 @@ def _t(lang: str) -> dict:
             "grass": "green = grass", "dry": "olive = dry forage",
             "bare": "red = bare", "on": "Hide pasture", "off": "Show pasture",
             "preparing": "Pasture layer being prepared",
+            "mapBase": "Map", "satBase": "Satellite",
         }
     return {
         "title": "Ramani hai — malisho na maji",
@@ -49,6 +50,7 @@ def _t(lang: str) -> dict:
         "grass": "kijani = nyasi", "dry": "zeituni = nyasi kavu",
         "bare": "nyekundu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
         "preparing": "Ramani ya malisho inaandaliwa",
+        "mapBase": "Ramani", "satBase": "Satellite",
     }
 
 
@@ -218,8 +220,20 @@ const pastureCols = { green:'#22c55e', dry:'#84cc16', bare:'#dc2626', unclear:'#
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
   .setView([D.herder.lat, D.herder.lon], 10);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+const osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
+  'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19,
+  attribution: '&copy Esri, Maxar, Earthstar Geographics'});
+// Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
+L.control.layers(
+  { (TXT.mapBase || 'Map'): osmTiles, (TXT.satBase || 'Satellite'): esriTiles },
+  null, { position: 'topright', collapsed: true }).addTo(map);
+// On satellite base the pasture is blended so real ground cover shows through.
+map.on('baselayerchange', function (e) {
+  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.7 : 1.0);
+});
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
 function focusUrl(wid) {
