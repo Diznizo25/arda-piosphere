@@ -39,7 +39,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
-from app.config import get_advisory_thresholds
+from app.config import get_advisory_thresholds, get_species_rings
 from app.services import water_sources
 
 IMG_SIZE = 1024
@@ -1058,9 +1058,10 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     lons = _mercator_x_inv(west + np.arange(IMG_SIZE, dtype=np.float32) * mpp)
     lats = _mercator_y_inv(north - np.arange(IMG_SIZE, dtype=np.float32) * mpp)
     col_i = np.clip(np.rint((lons[None, :] - c0) / a_).astype(np.int32), 0, w - 1)
-    row_i = np.clip(np.rint((f0 - lats[:, None]) / e_).astype(np.int32), 0, h - 1)
+    # rasterio north-up rows: lat = f0 + row*e (e negative) => row = (lat - f0)/e
+    row_i = np.clip(np.rint((lats[:, None] - f0) / e_).astype(np.int32), 0, h - 1)
     in_bounds = (((lons[None, :] - c0) / a_ >= 0) & ((lons[None, :] - c0) / a_ <= w - 1)
-                 & ((f0 - lats[:, None]) / e_ >= 0) & ((f0 - lats[:, None]) / e_ <= h - 1))
+                 & ((lats[:, None] - f0) / e_ >= 0) & ((lats[:, None] - f0) / e_ <= h - 1))
     sampled = classes[row_i, col_i]
     sampled[~in_bounds] = 0
 
@@ -1108,26 +1109,45 @@ def _mercator_y_inv(y):
 # transparent, georeferenced RGBA layer the browser overlays on OSM tiles.
 
 
+def _zone_radius_km(ws, zones, species: str | None, water_interval: str = "daily") -> float:
+    """Radius (km) the pasture layer should cover around a water point.
+
+    When the caller selects a species (interactive map) this is the species'
+    EFFECTIVE ring for the watering interval — the layer is framed and clipped
+    to exactly that ring so pasture colour never appears outside the grazing
+    zone drawn on the map. When no species is given (static map) it falls back
+    to the widest stored zone (the full satellite compute ring)."""
+    if species:
+        try:
+            r = get_species_rings().effective_radius_km(species, water_interval)
+            if r and r > 0:
+                return float(r)
+        except Exception:  # noqa: BLE001
+            pass
+    return max(float(z["radius_km"]) for z in zones)
+
+
 def _overlay_view(water_source_id: str, species: str | None,
                   water_interval: str = "daily"):
-    """Viewport (west,north,mpp) for the pasture layer around a water point.
+    """Viewport (lat,lon,zoom,mpp,west,north,radius_km) for the pasture layer.
 
-    Framed to the FULL satellite compute ring (the widest stored species zone,
-    i.e. 25 km camel data) so the layer shows all the grass/dry/bare the COG
-    actually contains — NOT just the (often overgrazed, sparse) inner species
-    ring. The species' effective ring is drawn on top separately.
+    Framed to the ACTIVE species' effective ring (e.g. cattle 9.8 km) so the
+    coloured pasture sits inside the same ring drawn on the map — the grass
+    further out (outside this herd's grazing reach) is not painted as if it
+    were relevant. Falls back to the full satellite compute ring (25 km) when
+    no species is selected.
     """
     ws = next((w for w in water_sources.list_water_sources()
                if w.id == water_source_id), None)
     zones = water_sources.zones_for_water_source(water_source_id)
     if ws is None or not zones:
         return None
-    radius_km = max(float(z["radius_km"]) for z in zones)
+    radius_km = _zone_radius_km(ws, zones, species, water_interval)
     zoom = _compute_zoom(ws.lat, radius_km)
     mpp = 156543.03392 * math.cos(math.radians(ws.lat)) / (2 ** zoom)
     cx, cy = _mercator_x(ws.lon), _mercator_y(ws.lat)
     half = IMG_SIZE / 2 * mpp
-    return ws.lat, ws.lon, zoom, mpp, cx - half, cy + half
+    return ws.lat, ws.lon, zoom, mpp, cx - half, cy + half, radius_km
 
 
 def _read_classes(water_source_id: str):
@@ -1147,11 +1167,31 @@ def _read_classes(water_source_id: str):
     return classes, transform
 
 
-def _rgba_classes(classes, transform, west: float, north: float, mpp: float):
+def _class_mask_within(classes, transform, lon_c: float, lat_c: float,
+                       radius_km: float):
+    """Boolean mask (True = inside the ring) on a classification grid.
+
+    Equirectangular distance from the water point so the pasture stats and the
+    layer clip use the SAME geography as the drawn species ring."""
+    h, w = classes.shape
+    c0, f0 = transform.c, transform.f
+    a_, e_ = transform.a, transform.e
+    cols = c0 + np.arange(w, dtype=np.float32) * a_
+    rows = f0 + np.arange(h, dtype=np.float32) * e_
+    dlon = cols[None, :] - lon_c
+    dlat = rows[:, None] - lat_c
+    km_x = 111.32 * math.cos(math.radians(lat_c))
+    km = np.sqrt((dlon * km_x) ** 2 + (dlat * 110.57) ** 2)
+    return km <= radius_km
+
+
+def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
+                  center_lon: float | None = None, center_lat: float | None = None,
+                  radius_km: float | None = None):
     """Colour the classification into an RGBA image (transparent where no data),
     georeferenced to the given viewport — the interactive pasture layer. The
-    classes are drawn NEARLY OPAQUE so the pasture is obvious at a glance (a
-    land-cover map, not a faint tint)."""
+    classes are drawn nearly-opaque but the LEAFET side keeps overlay opacity
+    moderate so map labels/roads stay visible underneath."""
     color_map = {
         0: (0, 0, 0, 0),
         1: (34, 197, 94, 235),    # grass
@@ -1165,11 +1205,19 @@ def _rgba_classes(classes, transform, west: float, north: float, mpp: float):
     lons = _mercator_x_inv(west + np.arange(IMG_SIZE, dtype=np.float32) * mpp)
     lats = _mercator_y_inv(north - np.arange(IMG_SIZE, dtype=np.float32) * mpp)
     col_i = np.clip(np.rint((lons[None, :] - c0) / a_).astype(np.int32), 0, w - 1)
-    row_i = np.clip(np.rint((f0 - lats[:, None]) / e_).astype(np.int32), 0, h - 1)
+    # rasterio north-up rows: lat = f0 + row*e (e negative) => row = (lat - f0)/e
+    row_i = np.clip(np.rint((lats[:, None] - f0) / e_).astype(np.int32), 0, h - 1)
     in_bounds = (((lons[None, :] - c0) / a_ >= 0) & ((lons[None, :] - c0) / a_ <= w - 1)
-                 & ((f0 - lats[:, None]) / e_ >= 0) & ((f0 - lats[:, None]) / e_ <= h - 1))
+                 & ((lats[:, None] - f0) / e_ >= 0) & ((lats[:, None] - f0) / e_ <= h - 1))
     sampled = classes[row_i, col_i]
     sampled[~in_bounds] = 0
+    # Clip to the water point's ring: no pasture colour outside the drawn zone.
+    if center_lon is not None and center_lat is not None and radius_km:
+        dlon = lons[None, :] - center_lon
+        dlat = lats[:, None] - center_lat
+        km_x = 111.32 * math.cos(math.radians(center_lat))
+        km = np.sqrt((dlon * km_x) ** 2 + (dlat * 110.57) ** 2)
+        sampled[km > radius_km] = 0
     out_rgba = np.zeros((IMG_SIZE, IMG_SIZE, 4), dtype=np.uint8)
     for k, color in color_map.items():
         out_rgba[sampled == k] = color
@@ -1192,7 +1240,7 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     view = _overlay_view(water_source_id, species, water_interval)
     if view is None:
         return None
-    _, _, _, mpp, west, north = view
+    lat, lon, _, mpp, west, north, radius_km = view
     out: dict = {
         "bounds": _overlay_bounds_deg(west, north, mpp),
         "available": False,
@@ -1202,14 +1250,16 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     res = _read_classes(water_source_id)
     if res is None:
         return out
-    classes, _ = res
-    valid = int((classes > 0).sum())
+    classes, transform = res
+    mask = _class_mask_within(classes, transform, lon, lat, radius_km)
+    inside = classes * mask
+    valid = int((inside > 0).sum())
     if valid:
         frac = {
-            "green": round(100.0 * int((classes == 1).sum()) / valid),
-            "dry": round(100.0 * int((classes == 2).sum()) / valid),
-            "bare": round(100.0 * int((classes == 3).sum()) / valid),
-            "unclear": round(100.0 * int((classes == 4).sum()) / valid),
+            "green": round(100.0 * int((inside == 1).sum()) / valid),
+            "dry": round(100.0 * int((inside == 2).sum()) / valid),
+            "bare": round(100.0 * int((inside == 3).sum()) / valid),
+            "unclear": round(100.0 * int((inside == 4).sum()) / valid),
         }
         usable = frac["green"] + frac["dry"]
         out.update({"available": True, "usable_pct": usable, "frac": frac})
@@ -1219,16 +1269,19 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
 def pasture_layer_png(water_source_id: str, species: str | None = None,
                       water_interval: str = "daily") -> bytes | None:
     """Transparent RGBA pasture layer PNG for the given viewport (or None when
-    no satellite data). Used by GET /map/{id}/pasture.png."""
+    no satellite data). Used by GET /map/{id}/pasture.png. The layer is framed
+    to (and clipped inside) the species' effective ring so the pasture colour
+    exactly matches the ring drawn on the map."""
     view = _overlay_view(water_source_id, species, water_interval)
     if view is None:
         return None
-    _, _, _, mpp, west, north = view
+    lat, lon, _, mpp, west, north, radius_km = view
     res = _read_classes(water_source_id)
     if res is None:
         return None
     classes, transform = res
-    img = _rgba_classes(classes, transform, west, north, mpp)
+    img = _rgba_classes(classes, transform, west, north, mpp,
+                        center_lon=lon, center_lat=lat, radius_km=radius_km)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()

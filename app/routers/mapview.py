@@ -130,7 +130,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 base = get_settings().app_public_base_url.rstrip("/")
                 overlay = {
                     "url": (f"{base}/map/{main_id}/pasture.png?species={species}"
-                            f"&interval={interval}&v=5"),
+                            f"&interval={interval}&v=7"),
                     "bounds": status["bounds"],
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
@@ -232,7 +232,7 @@ L.control.layers(
   null, { position: 'topright', collapsed: true }).addTo(map);
 // On satellite base the pasture is blended so real ground cover shows through.
 map.on('baselayerchange', function (e) {
-  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.7 : 1.0);
+  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.75 : 0.6);
 });
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
@@ -255,11 +255,12 @@ let overlayLayer = null;
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
-// Satellite pasture overlay for the focused water point (opaque land-cover
-// colours so the pasture is obvious at a glance).
+// Satellite pasture overlay for the focused water point (framed + clipped to
+// this species' ring server-side). Semi-transparent so roads/labels on the map
+// underneath stay visible.
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
-    { opacity: 1.0, interactive: false }).addTo(map);
+    { opacity: 0.6, interactive: false }).addTo(map);
   // Bring the pasture area into the default view so it is seen right away.
   fitTargets.push(L.latLngBounds(D.overlay.bounds));
 }
