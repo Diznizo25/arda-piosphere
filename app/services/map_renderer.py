@@ -1149,13 +1149,15 @@ def _read_classes(water_source_id: str):
 
 def _rgba_classes(classes, transform, west: float, north: float, mpp: float):
     """Colour the classification into an RGBA image (transparent where no data),
-    georeferenced to the given viewport — the interactive pasture layer."""
+    georeferenced to the given viewport — the interactive pasture layer. The
+    classes are drawn NEARLY OPAQUE so the pasture is obvious at a glance (a
+    land-cover map, not a faint tint)."""
     color_map = {
         0: (0, 0, 0, 0),
-        1: (21, 128, 61, 150),
-        2: (132, 204, 22, 145),
-        3: (220, 38, 38, 135),
-        4: (245, 158, 11, 90),
+        1: (34, 197, 94, 235),    # grass
+        2: (132, 204, 22, 235),   # dry forage
+        3: (220, 38, 38, 235),    # bare
+        4: (245, 158, 11, 220),   # unclear
     }
     h, w = classes.shape
     c0, f0 = transform.c, transform.f

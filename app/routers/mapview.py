@@ -128,7 +128,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 base = get_settings().app_public_base_url.rstrip("/")
                 overlay = {
                     "url": (f"{base}/map/{main_id}/pasture.png?species={species}"
-                            f"&interval={interval}&v=2"),
+                            f"&interval={interval}&v=5"),
                     "bounds": status["bounds"],
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
@@ -214,7 +214,7 @@ const typeName = { river:'River/Mto', borehole:'Borehole', well:'Well/Kisima',
 const typeColor = { river:'#2563eb', borehole:'#ea580c', well:'#059669',
   spring:'#16a34a', pan:'#06b6d4', dam:'#0891b2', lake:'#0891b2', tap:'#9333ea' };
 const ringHex = { cattle:'#3b82f6', shoat:'#10b981', camel:'#f97316' };
-const pastureCols = { green:'#15803d', dry:'#84cc16', bare:'#dc2626', unclear:'#f59e0b' };
+const pastureCols = { green:'#22c55e', dry:'#84cc16', bare:'#dc2626', unclear:'#f59e0b' };
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
   .setView([D.herder.lat, D.herder.lon], 10);
@@ -241,10 +241,13 @@ let overlayLayer = null;
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
-// Satellite pasture overlay for the focused water point.
+// Satellite pasture overlay for the focused water point (opaque land-cover
+// colours so the pasture is obvious at a glance).
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
-    { opacity: 0.8, interactive: false }).addTo(map);
+    { opacity: 1.0, interactive: false }).addTo(map);
+  // Bring the pasture area into the default view so it is seen right away.
+  fitTargets.push(L.latLngBounds(D.overlay.bounds));
 }
 
 // Species rings (scaled to the watering interval) for the focused water point.
