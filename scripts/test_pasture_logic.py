@@ -61,7 +61,7 @@ def test_classification() -> None:
     classes = np.full(ndvi.shape, 0, dtype=np.uint8)
     classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1  # green
     classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi <= t["bsi_low_threshold"])] = 2  # dry
+            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2  # dry
     classes[good & (satvi < t["satvi_bare_threshold"])] = 3  # bare
     classes[good & (bsi >= t["bsi_high_threshold"])] = 3
     classes[good & (classes == 0)] = 4  # uncertain

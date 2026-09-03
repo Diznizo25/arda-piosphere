@@ -979,7 +979,7 @@ def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     # 1 green | 2 dry forage | 3 bare | 4 uncertain
     classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
     classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi <= t["bsi_low_threshold"])] = 2
+            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2
     classes[good & (satvi < t["satvi_bare_threshold"])] = 3
     classes[good & (bsi >= t["bsi_high_threshold"])] = 3
     classes[good & (classes == 0)] = 4  # uncertain

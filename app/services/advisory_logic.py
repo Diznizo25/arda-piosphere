@@ -53,9 +53,10 @@ def classify_forage_condition(band_means: dict[str, float]) -> ForageAssessment:
 
     if ndvi >= veg["ndvi_green_threshold"]:
         condition = ForageCondition.GREEN_GROWING
-    elif satvi >= veg["satvi_dry_forage_threshold"] and bsi <= veg["bsi_low_threshold"]:
-        # The core correction this system exists to make: high SATVI + low BSI
-        # alongside low NDVI is standing dry forage, not bare/poor land.
+    elif satvi >= veg["satvi_dry_forage_threshold"] and bsi < veg["bsi_high_threshold"]:
+        # The core correction this system exists to make: high SATVI alongside
+        # low NDVI is standing dry forage (bsi below the bare-soil cutoff), not
+        # bare/poor land.
         condition = ForageCondition.DRY_FORAGE_AVAILABLE
     elif satvi < veg["satvi_bare_threshold"] or bsi >= veg["bsi_high_threshold"]:
         condition = ForageCondition.BARE_DEGRADED
