@@ -1110,22 +1110,19 @@ def _mercator_y_inv(y):
 
 def _overlay_view(water_source_id: str, species: str | None,
                   water_interval: str = "daily"):
-    """Viewport (west,north,mpp) for the pasture layer around a water point:
-    centred on the water, zoomed so the species' effective ring fits (same
-    geometry the static PNG uses when no herder location is given)."""
+    """Viewport (west,north,mpp) for the pasture layer around a water point.
+
+    Framed to the FULL satellite compute ring (the widest stored species zone,
+    i.e. 25 km camel data) so the layer shows all the grass/dry/bare the COG
+    actually contains — NOT just the (often overgrazed, sparse) inner species
+    ring. The species' effective ring is drawn on top separately.
+    """
     ws = next((w for w in water_sources.list_water_sources()
                if w.id == water_source_id), None)
     zones = water_sources.zones_for_water_source(water_source_id)
     if ws is None or not zones:
         return None
     radius_km = max(float(z["radius_km"]) for z in zones)
-    if species and any(z["species"] == species for z in zones):
-        try:
-            from app.config import get_species_rings
-
-            radius_km = get_species_rings().effective_radius_km(species, water_interval)
-        except Exception:  # noqa: BLE001
-            pass
     zoom = _compute_zoom(ws.lat, radius_km)
     mpp = 156543.03392 * math.cos(math.radians(ws.lat)) / (2 ** zoom)
     cx, cy = _mercator_x(ws.lon), _mercator_y(ws.lat)
