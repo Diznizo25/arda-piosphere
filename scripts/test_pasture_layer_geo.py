@@ -70,7 +70,7 @@ def main():
     classes = _make_classes()
     radius_km = 40.0  # no clip for the row-mapping check
     a, west, north, mpp = _render(classes, radius_km)
-    green = (a[..., 0] == 34) & (a[..., 1] == 197) & (a[..., 2] == 94) & (a[..., 3] > 60)
+    green = (a[..., 0] == 22) & (a[..., 1] == 163) & (a[..., 2] == 74) & (a[..., 3] > 60)
     py, _ = np.nonzero(green)
     assert green.sum() > 10_000, "no green stripe rendered"
     img_row_lats = _mercator_y_inv(north - (np.arange(IMG_SIZE) + 0.5) * mpp)

@@ -889,15 +889,17 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
         if lang == "swa":
             pasture_rows = [
                 ("Rangi ya malisho (ndani ya duara):", None),
-                ("  green=nyasi  brown=nyasi kavu", (21, 128, 61)),
-                ("  red=ntupo  yellow=haielewiki", (220, 38, 38)),
+                ("  green=nyasi", (21, 128, 61)),
+                ("  brown=nyasi kavu", (138, 77, 23)),
+                ("  red=ntupo  (eneo lisilo wazi halipakwi rangi)", (200, 30, 30)),
                 (f"  {pasture_note}", None),
             ]
         else:
             pasture_rows = [
                 ("Pasture colours (inside rings):", None),
-                ("  green=grass  brown=dry forage", (21, 128, 61)),
-                ("  red=bare  yellow=unclear", (220, 38, 38)),
+                ("  green=grass", (21, 128, 61)),
+                ("  brown=dry forage", (138, 77, 23)),
+                ("  red=bare  (unclear areas are left uncoloured)", (200, 30, 30)),
                 (f"  {pasture_note}", None),
             ]
 
@@ -1048,9 +1050,9 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     color_map = {
         0: (0, 0, 0, 0),
         1: (21, 128, 61, 110),
-        2: (150, 96, 45, 105),     # brown dry forage
-        3: (220, 38, 38, 105),
-        4: (245, 158, 11, 75),
+        2: (138, 77, 23, 105),     # dry forage brown
+        3: (200, 30, 30, 105),
+        4: (0, 0, 0, 0),           # unclear -> transparent on maps too
     }
     h, w = classes.shape
     c0, f0 = transform.c, transform.f
@@ -1189,10 +1191,10 @@ def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
     moderate so map labels/roads stay visible underneath."""
     color_map = {
         0: (0, 0, 0, 0),
-        1: (34, 197, 94, 235),    # grass
-        2: (150, 96, 45, 235),    # dry forage (brown)
-        3: (220, 38, 38, 235),    # bare
-        4: (245, 158, 11, 220),   # unclear
+        1: (22, 163, 74, 255),    # grass (vivid green)
+        2: (138, 77, 23, 255),    # dry forage (rich brown)
+        3: (206, 32, 32, 255),    # bare (strong red)
+        4: (0, 0, 0, 0),          # unclear -> NOT painted (no guessing)
     }
     h, w = classes.shape
     c0, f0 = transform.c, transform.f
@@ -1248,13 +1250,15 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     classes, transform = res
     mask = _class_mask_within(classes, transform, lon, lat, radius_km)
     inside = classes * mask
-    valid = int((inside > 0).sum())
+    # Only the three PAINTED classes count (unclear is left transparent on the
+    # map, so it must not inflate the legend percentages).
+    painted = (inside == 1) | (inside == 2) | (inside == 3)
+    valid = int(painted.sum())
     if valid:
         frac = {
             "green": round(100.0 * int((inside == 1).sum()) / valid),
             "dry": round(100.0 * int((inside == 2).sum()) / valid),
             "bare": round(100.0 * int((inside == 3).sum()) / valid),
-            "unclear": round(100.0 * int((inside == 4).sum()) / valid),
         }
         usable = frac["green"] + frac["dry"]
         out.update({"available": True, "usable_pct": usable, "frac": frac})

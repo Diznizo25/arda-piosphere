@@ -130,7 +130,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 base = get_settings().app_public_base_url.rstrip("/")
                 overlay = {
                     "url": (f"{base}/map/{main_id}/pasture.png?species={species}"
-                            f"&interval={interval}&v=8"),
+                            f"&interval={interval}&v=9"),
                     "bounds": status["bounds"],
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
@@ -216,7 +216,7 @@ const typeName = { river:'River/Mto', borehole:'Borehole', well:'Well/Kisima',
 const typeColor = { river:'#2563eb', borehole:'#ea580c', well:'#059669',
   spring:'#16a34a', pan:'#06b6d4', dam:'#0891b2', lake:'#0891b2', tap:'#9333ea' };
 const ringHex = { cattle:'#3b82f6', shoat:'#10b981', camel:'#f97316' };
-const pastureCols = { green:'#22c55e', dry:'#96602d', bare:'#dc2626', unclear:'#f59e0b' };
+const pastureCols = { green:'#16a34a', dry:'#8a4d17', bare:'#ce2020' };
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
   .setView([D.herder.lat, D.herder.lon], 10);
@@ -230,9 +230,9 @@ const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/servi
 L.control.layers(
   { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
   null, { position: 'topright', collapsed: true }).addTo(map);
-// On satellite base the pasture is blended so real ground cover shows through.
+// Pasture colours are near-solid so green/brown/red always match the legend.
 map.on('baselayerchange', function (e) {
-  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.75 : 0.6);
+  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.9 : 0.9);
 });
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
@@ -260,7 +260,7 @@ const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 // map underneath stays visible.
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
-    { opacity: 0.6, interactive: false }).addTo(map);
+    { opacity: 0.9, interactive: false }).addTo(map);
 }
 
 // Species rings (scaled to the watering interval) for the focused water point.

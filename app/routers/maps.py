@@ -105,10 +105,11 @@ def get_pasture_layer(
     v: int = Query(default=1, description="Cache-buster"),
 ) -> Response:
     """Transparent, georeferenced pasture-classification layer (RGBA PNG) for
-    Leaflet image overlays on the interactive /mapview page. Colours match the
-    static map: green=grass, brown=dry forage, red=bare, yellow=unclear;
-    transparent where the satellite stack has no data. Framed around the water
-    point's full ring stack (covers the rings drawn for every species)."""
+    Leaflet image overlays on the interactive /mapview page. Only THREE clear
+    colours are painted: green=grass, brown=dry forage, red=bare; pixels the
+    satellite can't read reliably are left fully transparent (never guessed).
+    Framed around the water point's full ring stack (covers every species ring
+    drawn on the map)."""
     png = _pasture_layer_cached(water_source_id, species, interval, v)
     if png is None:
         raise HTTPException(status_code=404, detail="Pasture layer not available")
