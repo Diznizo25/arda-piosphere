@@ -41,6 +41,9 @@ def _t(lang: str) -> dict:
             "places": "Named places", "cattle": "cattle", "shoat": "goats/sheep",
             "camel": "camels", "k_city": "town", "k_village": "village",
             "k_market": "market", "k_river": "river", "k_peak": "hill",
+            "rivers": "Rivers (water) — zones follow the river",
+            "z_near": "near water", "z_edge": "edge of zone",
+            "z_limit": "far limit — return to water",
             "mapBase": "Map", "satBase": "Satellite",
         }
     return {
@@ -56,6 +59,9 @@ def _t(lang: str) -> dict:
         "places": "Maeneo yenye majina", "cattle": "Ng'ombe", "shoat": "Mbuzi/Kondoo",
         "camel": "Ngamia", "k_city": "Mji", "k_village": "Kijiji",
         "k_market": "Soko", "k_river": "Mto", "k_peak": "Kilima",
+        "rivers": "Mito (maji) — kanda zinafuata mto",
+        "z_near": "karibu na maji", "z_edge": "ukingo wa eneo",
+        "z_limit": "kikomo cha mbali — rudi majini",
         "mapBase": "Ramani", "satBase": "Satellite",
     }
 
@@ -159,6 +165,23 @@ def _payload(lat: float, lon: float, species: str, interval: str,
     except Exception:  # noqa: BLE001
         landmarks = []
 
+    # Rivers are water too — and they are LINES, so their grazing zones are
+    # distance ribbons along the river, not rings around one point.
+    from app.services import river_zones
+
+    rivers: list[dict] = []
+    ribbons: dict | None = None
+    try:
+        span = max([r["km"] for r in rings], default=0.0) or 25.0
+        rivers = river_zones.nearby_rivers(anchor_lon, anchor_lat,
+                                           radius_km=span * 1.25, limit=6)
+        if main_id and eff_km:
+            ribbons = river_zones.river_zone_ribbons(
+                anchor_lon, anchor_lat, reach_km=eff_km,
+                max_km=max(span, eff_km) * 1.05)
+    except Exception:  # noqa: BLE001
+        rivers, ribbons = [], None
+
     label = name or map_renderer._herder_place_label(lon, lat)
     return {
         "lang": lang,
@@ -168,6 +191,8 @@ def _payload(lat: float, lon: float, species: str, interval: str,
         "options": options,
         "rings": rings,
         "landmarks": landmarks,
+        "rivers": rivers,
+        "ribbons": ribbons,
         "species": species,
         "interval": interval,
         "main_id": main_id,
@@ -291,8 +316,28 @@ if (D.overlay && D.overlay.url && D.overlay.available) {
     { opacity: 0.55, interactive: false }).addTo(map);
 }
 
-// Named places (vijiji, masoko, mito, vilima) drawn ON TOP of the colours, so a
-// pastoralist can read where the grazing is against names they know.
+// River grazing zones: distance RIBBONS along the river line (a river is long,
+// so its zones follow the river instead of circling one point). Drawn under the
+// rings, above the pasture colour.
+const zoneCols = { comfortable: '#16a34a', far: '#f59e0b', critical: '#ce2020' };
+const ribbonNames = { comfortable: TXT.z_near || 'near water', far: TXT.z_edge || 'edge',
+  critical: TXT.z_limit || 'far limit — return to water' };
+if (D.ribbons && D.ribbons.bands) {
+  D.ribbons.bands.slice().reverse().forEach(b => {
+    const c = zoneCols[b.level] || '#64748b';
+    L.geoJSON(b.geojson, { style: { color: c, weight: b.level === 'critical' ? 2.5 : 1.5,
+      dashArray: b.level === 'comfortable' ? null : '6 5',
+      fillColor: c, fillOpacity: b.level === 'critical' ? 0.05 : 0.07 } }).addTo(map);
+  });
+}
+
+// The rivers themselves, named (they are water points a herd can drink from).
+(D.rivers || []).forEach(rv => {
+  L.geoJSON(rv.geojson, { style: { color: '#1d4ed8', weight: 3, opacity: 0.9 } })
+   .bindTooltip(rv.name + ' (' + (TXT.k_river || 'river') + ' · ' + rv.dist_km + ' km)',
+                { permanent: true, direction: 'center', className: 'lm-label' })
+   .addTo(map);
+});
 const lmKind = { city:'#111827', town:'#111827', village:'#374151', market:'#7c2d12',
   river:'#1d4ed8', hamlet:'#4b5563', peak:'#78350f' };
 const lmSeenKinds = {};
@@ -401,6 +446,22 @@ const Legend = L.Control.extend({
       'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';margin-right:6px"></span>' +
       (lmName[k] || k) + '</div>').join('');
     if (lmRows) html += '<b>' + (TXT.places || 'Named places') + '</b>' + lmRows;
+    // Rivers + their distance ribbons (zones follow the river line).
+    if (D.rivers && D.rivers.length) {
+      let rv = '<b>' + (TXT.rivers || 'Rivers — zones follow the river') + '</b>' +
+        '<div style="line-height:1.5"><span style="display:inline-block;width:14px;height:3px;' +
+        'background:#1d4ed8;margin-right:6px;vertical-align:middle"></span>' +
+        (TXT.k_river || 'river') + ': ' +
+        D.rivers.slice(0, 3).map(r => r.name + ' ' + r.dist_km + ' km').join(', ') + '</div>';
+      if (D.ribbons && D.ribbons.bands) {
+        rv += D.ribbons.bands.map(b =>
+          '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+          'border-radius:2px;background:' + (zoneCols[b.level] || '#64748b') +
+          ';margin-right:6px"></span>' + (ribbonNames[b.level] || b.level) +
+          ' <b>&lt; ' + b.km + ' km</b></div>').join('');
+      }
+      html += rv;
+    }
     const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
       camel: TXT.camel || 'camel' };
     const rows = (D.rings || []).map(r =>

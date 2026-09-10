@@ -131,6 +131,11 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
 - Satellite pasture overlay: **green = grass, brown = dry forage, red = bare**
   (areas the satellite can't read reliably are left uncoloured), with
   "% usable pasture" in the legend.
+- **Rivers are mapped as water** (`config/rivers.geojson`, 180 OSM segments):
+  a river is a LONG water body, so its grazing zones are distance **ribbons
+  along the river line** (comfortable ≤0.5 R, edge ≤0.8 R, far limit = R)
+  rather than rings around one point — see `app/services/river_zones.py`.
+  Point sources (wells/boreholes/pans) keep circular piosphere rings.
 - **Green arrow to the nearest walkable good patch** (a ~2 km cluster around
   the closest good pixel — not a far-away global centroid) and a big
   bottom-center banner: `Malisho bora: Kaskazini-Mashariki · 3.2 km`.
