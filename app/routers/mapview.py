@@ -44,6 +44,10 @@ def _t(lang: str) -> dict:
             "rivers": "Rivers (water) — zones follow the river",
             "z_near": "near water", "z_edge": "edge of zone",
             "z_limit": "far limit — return to water",
+            "water_status": "Water status (from herders)",
+            "s_ok": "water there", "s_season": "seasonal water",
+            "s_dry": "dry (reported)", "s_broken": "broken (reported)",
+            "s_gone": "gone (reported)", "s_unknown": "not confirmed",
             "mapBase": "Map", "satBase": "Satellite",
         }
     return {
@@ -62,6 +66,10 @@ def _t(lang: str) -> dict:
         "rivers": "Mito (maji) — kanda zinafuata mto",
         "z_near": "karibu na maji", "z_edge": "ukingo wa eneo",
         "z_limit": "kikomo cha mbali — rudi majini",
+        "water_status": "Hali ya maji (kutoka wachungaji)",
+        "s_ok": "maji yapo", "s_season": "maji ya vipindi",
+        "s_dry": "imekauka (taarifa)", "s_broken": "imeharibika (taarifa)",
+        "s_gone": "haipo tena (taarifa)", "s_unknown": "haijathibitishwa",
         "mapBase": "Ramani", "satBase": "Satellite",
     }
 
@@ -270,6 +278,16 @@ const typeColor = { river:'#2563eb', borehole:'#ea580c', well:'#059669',
   spring:'#16a34a', pan:'#06b6d4', dam:'#0891b2', lake:'#0891b2', tap:'#9333ea' };
 const ringHex = { cattle:'#3b82f6', shoat:'#10b981', camel:'#f97316' };
 const pastureCols = { green:'#16a34a', dry:'#8a4d17', bare:'#ce2020' };
+// Herder-reported water status: blue = confirmed water now, amber = seasonal,
+// red = reported dry/broken/gone, grey = never confirmed.
+const statusCols = { functional:'#0ea5e9', flowing:'#0ea5e9', intermittent:'#f59e0b',
+  dry:'#b91c1c', broken:'#b91c1c', not_found:'#b91c1c', unknown:'#6b7280' };
+const statusName = { functional: TXT.s_ok, flowing: TXT.s_ok, intermittent: TXT.s_season,
+  dry: TXT.s_dry, broken: TXT.s_broken, not_found: TXT.s_gone, unknown: TXT.s_unknown };
+function pinColor(w) {
+  const s = w.status && w.status !== 'unknown' ? statusCols[w.status] : null;
+  return s || typeColor[w.water_type] || '#0f766e';
+}
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
   .setView([D.herder.lat, D.herder.lon], 10);
@@ -382,9 +400,11 @@ function ringBounds() {
 }
 
 const seenTypes = {};
+const seenStatus = {};
 (D.options || []).forEach(w => {
-  const c = typeColor[w.water_type] || '#0f766e';
+  const c = pinColor(w);
   seenTypes[w.water_type || '?'] = true;
+  seenStatus[w.status || 'unknown'] = true;
   const numHtml = w.num ? '<div style="position:absolute;top:-7px;left:-7px;width:26px;height:26px;' +
     'background:' + c + ';border:2px solid #fff;border-radius:50%;font-weight:800;color:#fff;' +
     'font-size:13px;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.5)">' +
@@ -395,8 +415,12 @@ const seenTypes = {};
   const type = typeName[w.water_type] || '';
   const d = w.dist_km != null ? ' ~' + w.dist_km.toFixed(1) + ' km' : '';
   const label = (w.num ? w.num + '. ' : '') + (w.name || T.noName);
+  const st = w.status && w.status !== 'unknown'
+    ? '<br><b style="color:' + pinColor(w) + '">' + (statusName[w.status] || w.status) +
+      (w.status_age_days != null ? ' (siku ' + w.status_age_days + ')' : '') + '</b>'
+    : (w.needs_check ? '<br><span style="color:#6b7280">' + (TXT.s_unknown || 'not confirmed') + '</span>' : '');
   L.marker([w.lat, w.lon], { icon }).addTo(map)
-   .bindPopup('<b>' + label + '</b>' + (type ? '<br>' + type : '') + '<br>' + d + ' ' + T.dist +
+   .bindPopup('<b>' + label + '</b>' + (type ? '<br>' + type : '') + st + '<br>' + d + ' ' + T.dist +
      '<br><a href="' + focusUrl(w.id) + '" style="font-weight:700">' +
      (TXT.show || 'Show rings + pasture') + '</a>');
   fitTargets.push(L.latLng(w.lat, w.lon));
@@ -438,6 +462,12 @@ const Legend = L.Control.extend({
       'border-radius:50%;background:' + (typeColor[k] || '#0f766e') + ';margin-right:6px"></span>' +
       (typeName[k] || k) + '</div>').join('');
     if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
+    // Herder-reported water status — the most actionable line on the map.
+    const stRows = Object.keys(seenStatus).map(k =>
+      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+      'border-radius:50%;background:' + (statusCols[k] || '#6b7280') + ';margin-right:6px"></span>' +
+      (statusName[k] || k) + '</div>').join('');
+    if (stRows) html += '<b>' + (TXT.water_status || 'Water status (from herders)') + '</b>' + stRows;
     // Named places drawn on the map (towns, villages, markets, rivers, hills).
     const lmName = { city: TXT.k_city, town: TXT.k_city, village: TXT.k_village,
       hamlet: TXT.k_village, market: TXT.k_market, river: TXT.k_river, peak: TXT.k_peak };

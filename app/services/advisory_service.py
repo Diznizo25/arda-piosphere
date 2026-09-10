@@ -118,6 +118,22 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         effective_radius_km=effective_radius_km,
         dry_harsh=dry_harsh,
     )
+    # Herder-reported water status beats the satellite for "is there water TODAY":
+    # if this point has never been confirmed, or was last confirmed long ago, say
+    # so plainly instead of implying the water is fine.
+    if nearest.needs_check:
+        from app.services import water_status as ws
+
+        label = ws.status_label(nearest.status, "swa" if req.language == "swahili" else "eng")
+        age = ws.age_days(nearest.status_updated_at) or ws.age_days(nearest.last_confirmed)
+        if req.language == "swahili":
+            head = (f"⚠️ Maji haya: {label}"
+                    + (f" (siku {round(age)} zilizopita)" if age is not None else ""))
+            message = f"{head}\nHakikisha yapo kabla ya kuanza safari.\n\n{message}"
+        else:
+            head = (f"⚠️ This water: {label}"
+                    + (f" ({round(age)} days ago)" if age is not None else ""))
+            message = f"{head}\nConfirm before you set off.\n\n{message}"
     # The LLM may only rephrase the deterministic text, never add facts; on any
     # failure the original message is returned (see app/services/ai.py).
     message = ai.rephrase_advisory(

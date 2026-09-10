@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from app.db import get_pg_connection
+from app.services import water_status
 
 log = logging.getLogger(__name__)
 
@@ -20,9 +21,20 @@ KEYWORDS = {
     "water_dry": ["water dry", "dry water", "no water", "maji hayupo", "haujui maji",
                   "bishaan hin jiru", "bishaan gogaa"],
     "water_available": ["water available", "water is there", "maji yapo", "bishaan jira"],
+    "water_flowing": ["maji yanatiririka", "water flowing", "inatiririka"],
+    "water_intermittent": ["maji ya vipindi", "seasonal water", "intermittent"],
+    "water_broken": ["pump broken", "broken pump", "imeharibika", "pampu imeharibika",
+                     "bomba limeharibika", "haina pampu"],
+    "water_not_found": ["haipo tena", "no longer there", "not there any more",
+                        "hakuna maji hapa", "does not exist", "haipo"],
     "pasture_good": ["good pasture", "grass good", "malisho mazuri", "margi gaarii"],
     "pasture_poor": ["poor pasture", "no grass", "malisho mabaya", "margi hin jiru"],
 }
+
+# Confirmed-good statuses raise confidence; unusable ones cut it hard; intermittent
+# leaves confidence alone (the point is real, it just dries out).
+_CONFIDENCE_UP = (water_status.STATUS_FLOWING, water_status.STATUS_FUNCTIONAL)
+_CONFIDENCE_DOWN = water_status.UNUSABLE_STATUSES
 
 FIND_NEAREST_TO_LOCATION_SQL = """
 select ws.id, ws.confidence
@@ -38,21 +50,34 @@ insert into ground_truth_reports (pastoralist_id, water_source_id, report_type, 
 values (%(pastoralist_id)s, %(water_source_id)s, %(report_type)s, %(report_text)s)
 """
 
-BUMP_CONFIDENCE_DOWN_SQL = """
+SET_WATER_STATUS_SQL = """
 update water_sources
-set confidence = greatest(confidence * 0.7, 0.1)
+set status = %(status)s,
+    status_updated_at = now(),
+    status_source = 'herder',
+    status_reports = status_reports + 1,
+    confidence = case
+        when %(direction)s = 'up' then least(confidence * 1.1 + 0.05, 0.99)
+        when %(direction)s = 'down' then greatest(confidence * 0.7, 0.1)
+        else confidence end,
+    last_confirmed = case when %(direction)s = 'up' then now() else last_confirmed end
 where id = %(water_source_id)s
 """
 
-BUMP_CONFIDENCE_UP_SQL = """
-update water_sources
-set confidence = least(confidence * 1.1 + 0.05, 0.99),
-    last_confirmed = now()
-where id = %(water_source_id)s
-"""
+
+def _confidence_direction(status: str) -> str:
+    if status in _CONFIDENCE_UP:
+        return "up"
+    if status in _CONFIDENCE_DOWN:
+        return "down"
+    return "hold"
 
 
 def parse_ground_truth_intent(text_lower: str) -> str | None:
+    """One-tap digit first (that is how herders actually answer), then keywords."""
+    digit = water_status.intent_for_digit(text_lower)
+    if digit is not None:
+        return digit
     for report_type, phrases in KEYWORDS.items():
         if any(p in text_lower for p in phrases):
             return report_type
@@ -69,9 +94,15 @@ def _find_nearest_water_source_id(pastoralist_id: str) -> str | None:
 
 def record_ground_truth(pastoralist, report_type: str, raw_text: str,
                          water_source_id: str | None = None) -> None:
-    if water_source_id is None and report_type in ("water_dry", "water_available"):
+    """Store the herder's report and, when it is about water, write the water
+    point's STATUS (which then gates guidance: dry/broken/not-found points stop
+    being recommended for STALE_STATUS_DAYS)."""
+    if water_source_id is None and report_type in (
+            "water_dry", "water_available", "water_flowing", "water_intermittent",
+            "water_broken", "water_not_found"):
         water_source_id = _find_nearest_water_source_id(pastoralist.id)
 
+    status = water_status.status_for_report(report_type)
     with get_pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -83,11 +114,26 @@ def record_ground_truth(pastoralist, report_type: str, raw_text: str,
                     "report_text": raw_text,
                 },
             )
-            if water_source_id and report_type == "water_dry":
-                cur.execute(BUMP_CONFIDENCE_DOWN_SQL, {"water_source_id": water_source_id})
-            elif water_source_id and report_type == "water_available":
-                cur.execute(BUMP_CONFIDENCE_UP_SQL, {"water_source_id": water_source_id})
+            if water_source_id and status:
+                cur.execute(SET_WATER_STATUS_SQL, {
+                    "water_source_id": water_source_id,
+                    "status": status,
+                    "direction": _confidence_direction(status),
+                })
         conn.commit()
 
-    log.info(f"Recorded ground truth report_type={report_type} pastoralist={pastoralist.phone_number} "
-              f"water_source_id={water_source_id}")
+    log.info("Recorded ground truth report_type=%s pastoralist=%s water_source_id=%s status=%s",
+             report_type, pastoralist.phone_number, water_source_id, status)
+
+
+def water_status_for(water_source_id: str) -> dict | None:
+    """Current status of a water point: {status, updated_at, source, reports}."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select status, status_updated_at, status_source, status_reports
+                   from water_sources where id = %(id)s""",
+                {"id": water_source_id},
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None

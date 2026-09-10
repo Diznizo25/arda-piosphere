@@ -31,6 +31,7 @@ from app.services import (
     speech,
     water_reach,
     water_sources,
+    water_status,
     water_validation,
     weight as weight_service,
     whatsapp_client,
@@ -46,6 +47,8 @@ from app.services.pastoralists import (
     get_water_source,
     delete_pastoralist,
     set_voice_replies,
+    get_last_advisory_water_source,
+    set_last_advisory_water_source,
 )
 
 log = logging.getLogger(__name__)
@@ -189,20 +192,41 @@ def _water_type_swa(nearby: dict, lang: str = "swahili") -> str:
 def _source_label(nearby: dict, lang: str = "swahili") -> str:
     """Human label for a nearby water option: the LOCAL NAME when we have one
     (that's how a pastoralist identifies a water point), else a landmark-based
-    description like 'Kisima karibu na Burat', else the ward."""
-    if nearby.get("name"):
-        return nearby["name"]
-    try:
-        from app.services.map_renderer import _water_label
+    description like 'Kisima karibu na Burat', else the ward.
 
-        lbl = _water_label(nearby, "swa" if lang == "swahili" else "eng")
-        if "karibu na" in lbl or " near " in lbl:
-            return lbl
-    except Exception:  # noqa: BLE001
-        pass
-    if nearby.get("ward"):
-        return nearby["ward"]
-    return "Maji" if lang == "swahili" else "Water"
+    When herders have reported the point's status we append it — a pastoralist
+    must be able to see 'imekauka' (dry) BEFORE choosing it as their water."""
+    if nearby.get("name"):
+        base = nearby["name"]
+    else:
+        base = ""
+        try:
+            from app.services.map_renderer import _water_label
+
+            lbl = _water_label(nearby, "swa" if lang == "swahili" else "eng")
+            if "karibu na" in lbl or " near " in lbl:
+                base = lbl
+        except Exception:  # noqa: BLE001
+            pass
+        if not base and nearby.get("ward"):
+            base = nearby["ward"]
+        if not base:
+            base = "Maji" if lang == "swahili" else "Water"
+    return base + _status_suffix(nearby, lang)
+
+
+def _status_suffix(nearby: dict, lang: str = "swahili") -> str:
+    """' — imekauka (siku 3 zilizopita)' / ' — not confirmed' for a water option."""
+    status = nearby.get("status")
+    if not status or status == water_status.STATUS_UNKNOWN:
+        return "" if not nearby.get("needs_check") else (
+            " — haijathibitishwa" if lang == "swahili" else " — not confirmed")
+    label = water_status.status_label(status, "swa" if lang == "swahili" else "eng")
+    age = nearby.get("status_age_days")
+    if age:
+        return (f" — {label} (siku {age} zilizopita)" if lang == "swahili"
+                else f" — {label} ({age} days ago)")
+    return f" — {label}"
 
 VOICE_TOO_LONG_MSG = {
     "swahili": "Ujumbe wa sauti ni mrefu sana. Tuma ujumbe mfupi (chini ya dakika moja) au andika ujumbe.",
@@ -616,7 +640,15 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
     result = get_advisory(req)
 
     if result.found:
-        _send_reply(phone, pastoralist, result.message, voice=pastoralist.voice_replies)
+        # Ask for the one thing the satellite cannot see: is there water TODAY?
+        # One-tap answer ("2" = imekauka) -> ground truth -> gates future guidance.
+        lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+        msg = f"{result.message}\n\n{water_status.check_question(lang_key)}"
+        _send_reply(phone, pastoralist, msg, voice=pastoralist.voice_replies)
+        try:
+            set_last_advisory_water_source(phone, result.water_source_id)
+        except Exception:  # noqa: BLE001  (never break the advisory over bookkeeping)
+            log.warning("Could not remember last advisory water source for %s", phone)
         return
 
     # No known water point reaches this location -> offer to register a new one.
@@ -650,6 +682,21 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     if not pastoralist.is_onboarded:
         _start_onboarding(phone, pastoralist, text, voice=voice)
         return
+
+    # One-tap water-status reply. Only treated as a report when we JUST asked
+    # about a water point (otherwise "1" is a menu choice, not "maji yapo").
+    if (status_intent := water_status.intent_for_digit(text_lower)) is not None:
+        try:
+            target = get_last_advisory_water_source(phone)
+        except Exception:  # noqa: BLE001
+            target = None
+        if target:
+            record_ground_truth(pastoralist, status_intent, text,
+                                water_source_id=target["water_source_id"])
+            lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+            _send_reply(phone, pastoralist,
+                        water_status.thanks_for_report(status_intent, lang_key), voice=voice)
+            return
 
     # Voice-reply preference toggle.
     if any(k in text_lower for k in VOICE_KEYWORDS):

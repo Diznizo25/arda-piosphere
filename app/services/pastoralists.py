@@ -42,6 +42,26 @@ set water_interval = %(water_interval)s
 where phone_number = %(phone)s
 """
 
+# Which water point we last advised about: the target for a bare "2" (imekauka)
+# reply, which is how a herder reports status in one tap.
+SET_LAST_ADVISORY_SQL = """
+update pastoralists
+set last_advisory_water_source_id = %(water_source_id)s,
+    last_advisory_at = now()
+where phone_number = %(phone)s
+"""
+
+GET_LAST_ADVISORY_SQL = """
+select p.last_advisory_water_source_id as water_source_id,
+       p.last_advisory_at,
+       ws.name, ws.status
+from pastoralists p
+left join water_sources ws on ws.id = p.last_advisory_water_source_id
+where p.phone_number = %(phone)s
+  and p.last_advisory_water_source_id is not null
+  and p.last_advisory_at > now() - interval '%(hours)s hours'
+"""
+
 
 @dataclass
 class Pastoralist:
@@ -141,6 +161,32 @@ def set_water_interval(phone_number: str, water_interval: str) -> None:
             cur.execute(SET_WATER_INTERVAL_SQL,
                         {"phone": phone_number, "water_interval": water_interval})
         conn.commit()
+
+
+def set_last_advisory_water_source(phone_number: str, water_source_id: str | None) -> None:
+    """Remember which water point the last advisory was about, so a one-tap
+    status reply ('1 maji yapo' / '2 imekauka') knows which point it refers to."""
+    if not water_source_id:
+        return
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SET_LAST_ADVISORY_SQL,
+                        {"phone": phone_number, "water_source_id": water_source_id})
+        conn.commit()
+
+
+def get_last_advisory_water_source(phone_number: str, hours: int = 48) -> dict | None:
+    """The water point we advised about in the last `hours` (None when there's
+    no recent advisory — then a bare digit is NOT a water-status reply)."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(GET_LAST_ADVISORY_SQL, {"phone": phone_number, "hours": hours})
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {"water_source_id": str(row["water_source_id"]),
+            "last_advisory_at": row["last_advisory_at"],
+            "name": row["name"], "status": row["status"]}
 
 
 def get_water_source(phone_number: str) -> dict | None:
