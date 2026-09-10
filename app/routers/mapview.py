@@ -118,7 +118,11 @@ def _payload(lat: float, lon: float, species: str, interval: str,
             options.append({"id": n["water_source_id"], "lon": n["lon"],
                             "lat": n["lat"], "name": n["name"],
                             "water_type": n["water_type"], "ward": n["ward"],
-                            "num": None, "dist_km": n["distance_km"]})
+                            "num": None, "dist_km": n["distance_km"],
+                            "status": n.get("status"),
+                            "status_label": n.get("status_label"),
+                            "status_age_days": n.get("status_age_days"),
+                            "needs_check": n.get("needs_check")})
 
     # Rings + pasture ONLY for the specific water point requested (a reachable/
     # confirmed point). The pin-based page (no id) shows options and lets the
