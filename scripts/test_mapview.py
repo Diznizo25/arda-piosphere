@@ -32,16 +32,17 @@ def test_mapview_pages() -> None:
         for lang in ("swa", "eng"):
             html = mapview_page(lat=0.3525, lon=37.583, species="camel", lang=lang,
                                 id="88bc1e17-a5f6-4c4d-a410-e551e4af7e54",
-                                numbered=None, name=None)
+                                numbered=None, name=None, interval="daily", focus=1)
             body = html.body.decode("utf-8", errors="replace")
             assert "leaflet" in body.lower()
             assert "__DATA__" not in body
             assert '"herder"' in body and '"options"' in body
             assert "L.imageOverlay" in body and "pasture.png" in body, "pasture overlay"
             assert "usable_pct" in body
+            assert '"landmarks"' in body, "named places embedded"
             print(f"{lang} mapview page OK ({len(body)} chars, pasture overlay present)")
         html2 = mapview_page(lat=0.3525, lon=37.583, species="camel", lang="swa",
-                             id=None, name=None,
+                             id=None, name=None, interval="daily", focus=0,
                              numbered="88bc1e17-a5f6-4c4d-a410-e551e4af7e54")
         assert '"num"' in html2.body.decode("utf-8", errors="replace")
         print("numbered mapview page OK")

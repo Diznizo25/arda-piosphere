@@ -38,6 +38,9 @@ def _t(lang: str) -> dict:
             "grass": "green = grass", "dry": "brown = dry forage",
             "bare": "red = bare", "on": "Hide pasture", "off": "Show pasture",
             "preparing": "Pasture layer being prepared",
+            "places": "Named places", "cattle": "cattle", "shoat": "goats/sheep",
+            "camel": "camels", "k_city": "town", "k_village": "village",
+            "k_market": "market", "k_river": "river", "k_peak": "hill",
             "mapBase": "Map", "satBase": "Satellite",
         }
     return {
@@ -50,6 +53,9 @@ def _t(lang: str) -> dict:
         "grass": "kijani = nyasi", "dry": "kahawia = nyasi kavu",
         "bare": "nyekundu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
         "preparing": "Ramani ya malisho inaandaliwa",
+        "places": "Maeneo yenye majina", "cattle": "Ng'ombe", "shoat": "Mbuzi/Kondoo",
+        "camel": "Ngamia", "k_city": "Mji", "k_village": "Kijiji",
+        "k_market": "Soko", "k_river": "Mto", "k_peak": "Kilima",
         "mapBase": "Ramani", "satBase": "Satellite",
     }
 
@@ -130,7 +136,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 base = get_settings().app_public_base_url.rstrip("/")
                 overlay = {
                     "url": (f"{base}/map/{main_id}/pasture.png?species={species}"
-                            f"&interval={interval}&v=9"),
+                            f"&interval={interval}&v=10"),
                     "bounds": status["bounds"],
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
@@ -138,6 +144,20 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 }
         except Exception:  # noqa: BLE001
             rings, overlay = [], None
+
+    # Named places around the map (villages, markets, rivers, peaks) so the
+    # pasture colours can be read against names a pastoralist actually uses.
+    landmarks: list[dict] = []
+    try:
+        anchor_lon, anchor_lat = lon, lat
+        if main_id and main_id in by_id:
+            w = by_id[main_id]
+            anchor_lon, anchor_lat = w.lon, w.lat
+        km = max([r["km"] for r in rings], default=0.0) or 25.0
+        landmarks = map_renderer.nearby_landmarks(anchor_lon, anchor_lat,
+                                                  radius_km=km * 1.25, limit=12)
+    except Exception:  # noqa: BLE001
+        landmarks = []
 
     label = name or map_renderer._herder_place_label(lon, lat)
     return {
@@ -147,6 +167,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
         "herder": {"lon": lon, "lat": lat},
         "options": options,
         "rings": rings,
+        "landmarks": landmarks,
         "species": species,
         "interval": interval,
         "main_id": main_id,
@@ -202,6 +223,13 @@ _PAGE_TEMPLATE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Ramani</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  /* Named-place labels (villages, markets, rivers) — always visible, on top. */
+  .lm-label{background:rgba(255,255,255,.86);border:0;box-shadow:0 0 0 1px rgba(0,0,0,.15);
+    border-radius:3px;font-size:11px;font-weight:700;color:#111;padding:0 3px;
+    white-space:nowrap;text-shadow:0 1px 0 #fff}
+  .lm-label:before{display:none !important}
+</style>
 </head><body>
 <div id="map" style="position:fixed;top:0;bottom:0;left:0;right:0"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -230,9 +258,9 @@ const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/servi
 L.control.layers(
   { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
   null, { position: 'topright', collapsed: true }).addTo(map);
-// Pasture colours are near-solid so green/brown/red always match the legend.
+// Pasture colours stay semi-transparent so the base map stays readable.
 map.on('baselayerchange', function (e) {
-  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.9 : 0.9);
+  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.7 : 0.55);
 });
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
@@ -260,8 +288,26 @@ const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 // map underneath stays visible.
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
-    { opacity: 0.9, interactive: false }).addTo(map);
+    { opacity: 0.55, interactive: false }).addTo(map);
 }
+
+// Named places (vijiji, masoko, mito, vilima) drawn ON TOP of the colours, so a
+// pastoralist can read where the grazing is against names they know.
+const lmKind = { city:'#111827', town:'#111827', village:'#374151', market:'#7c2d12',
+  river:'#1d4ed8', hamlet:'#4b5563', peak:'#78350f' };
+const lmSeenKinds = {};
+(D.landmarks || []).forEach(l => {
+  const c = lmKind[l.kind] || '#374151';
+  lmSeenKinds[l.kind] = true;
+  const icon = L.divIcon({ className: '', iconSize: [8, 8], iconAnchor: [4, 4],
+    html: '<div style="width:8px;height:8px;border-radius:50%;background:' + c +
+          ';border:1.5px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.6)"></div>' });
+  L.marker([l.lat, l.lon], { icon: icon })
+   .bindTooltip(l.name + (l.dist_km != null ? ' · ' + l.dist_km + ' km' : ''),
+                { permanent: true, direction: 'right', offset: [7, 0],
+                  className: 'lm-label' })
+   .addTo(map);
+});
 
 // Species rings (scaled to the watering interval) for the focused water point.
 function drawRings(rings) {
@@ -343,14 +389,24 @@ const Legend = L.Control.extend({
       html += '<div style="color:#065f46">' + (TXT.tap || 'Tap a water pin') + '</div>';
     }
     const wrows = Object.keys(seenTypes).map(k =>
-      '<div style="line-height:1.6"><span style="display:inline-block;width:11px;height:11px;' +
+      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
       'border-radius:50%;background:' + (typeColor[k] || '#0f766e') + ';margin-right:6px"></span>' +
       (typeName[k] || k) + '</div>').join('');
     if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
+    // Named places drawn on the map (towns, villages, markets, rivers, hills).
+    const lmName = { city: TXT.k_city, town: TXT.k_city, village: TXT.k_village,
+      hamlet: TXT.k_village, market: TXT.k_market, river: TXT.k_river, peak: TXT.k_peak };
+    const lmRows = Object.keys(lmSeenKinds).map(k =>
+      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+      'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';margin-right:6px"></span>' +
+      (lmName[k] || k) + '</div>').join('');
+    if (lmRows) html += '<b>' + (TXT.places || 'Named places') + '</b>' + lmRows;
+    const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
+      camel: TXT.camel || 'camel' };
     const rows = (D.rings || []).map(r =>
-      '<div style="line-height:1.6"><span style="display:inline-block;width:10px;height:10px;' +
+      '<div style="line-height:1.5"><span style="display:inline-block;width:10px;height:10px;' +
       'border:2px solid ' + (ringHex[r.species] || '#64748b') + ';margin-right:6px"></span>' +
-      r.species + ' ' + r.km + ' km</div>').join('');
+      (spName[r.species] || r.species) + ' ' + r.km + ' km</div>').join('');
     if (rows) html += '<b>' + T.rings + '</b>' + rows;
     html += '</div>';
     el.innerHTML = html;

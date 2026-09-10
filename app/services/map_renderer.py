@@ -194,6 +194,37 @@ def _herder_place_label(lon: float, lat: float) -> str | None:
     return lm["name"] if lm else None
 
 
+# Named places a pastoralist navigates by, most useful first.
+LMARK_RANK = {"city": 0, "town": 1, "village": 2, "market": 3,
+              "river": 4, "hamlet": 5, "peak": 6}
+
+
+def nearby_landmarks(lon: float, lat: float, radius_km: float = 25.0,
+                     limit: int = 12) -> list[dict]:
+    """Named places (towns/villages/markets/rivers/peaks) within `radius_km`,
+    best-first: settlements and markets before rivers, then nearest first.
+
+    Used by the interactive /mapview page to label the map with the names
+    herders actually use, so the grazing colours mean something in the field.
+    De-duplicated by name; [] when the gazetteer is unavailable."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for lm in _load_landmarks():
+        d = _haversine_km(lat, lon, lm["lat"], lm["lon"])
+        if d > radius_km:
+            continue
+        key = lm["name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": lm["name"], "kind": lm["kind"],
+                    "lat": lm["lat"], "lon": lm["lon"],
+                    "dist_km": round(d, 1),
+                    "rank": LMARK_RANK.get(lm["kind"], 9)})
+    out.sort(key=lambda x: (x["rank"], x["dist_km"]))
+    return out[:limit]
+
+
 def _water_label(ws: dict, lang: str = "swa") -> str:
     """A water point's map label: local name when known, else '<type> karibu na
     <landmark>' so even unnamed points mean something to the herder. A river
