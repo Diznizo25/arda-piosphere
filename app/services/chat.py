@@ -240,13 +240,45 @@ def mentions_water_or_pasture(question: str) -> bool:
 
 # --- validation: the guardrail ----------------------------------------------
 
+_CODE_TOKEN_RE = re.compile(r"[a-z]+(?:_[a-z]+)+")
+
+
+def code_tokens(value) -> set[str]:
+    """snake_case identifiers present in the facts (dry_season, water_available...).
+
+    These are CODE. A herder must never see them, so any answer containing one is
+    rejected — this is how we caught a live reply that said "(dry_season)".
+    """
+    if isinstance(value, dict):
+        out: set[str] = set()
+        for k, v in value.items():
+            out |= set(_CODE_TOKEN_RE.findall(str(k)))
+            out |= code_tokens(v)
+        return out
+    if isinstance(value, (list, tuple, set)):
+        out = set()
+        for v in value:
+            out |= code_tokens(v)
+        return out
+    if isinstance(value, str):
+        return set(_CODE_TOKEN_RE.findall(value))
+    return set()
+
+
 def validate_answer(answer: str, allowed: set[str],
-                    lang: str = "swahili") -> tuple[bool, str]:
+                    lang: str = "swahili", forbidden: set[str] | None = None
+                    ) -> tuple[bool, str]:
     """Is this answer safe to send? Returns (ok, reason-if-not).
 
-    Checks, in order: non-empty, short enough, no markdown/URLs, no invented
-    number, right language. Every failure sends the caller to the deterministic
-    fallback, so nothing here can leak a fabricated fact to a herder.
+    Checks, in order: non-empty, short enough, no markdown/URLs, no internal
+    identifier, no invented number, right language. Every failure sends the caller
+    to the deterministic fallback, so nothing here can leak a fabricated fact or an
+    internal field name to a herder.
+
+    Note what this CANNOT catch: a number that is traceable but attached to the
+    wrong unit (a live probe turned "30 days" into "miezi 30"). That is prevented
+    structurally instead — the facts bundle states units in words and supplies a
+    suggested sentence (see _rain_facts).
     """
     text = (answer or "").strip()
     if not text:
@@ -255,6 +287,9 @@ def validate_answer(answer: str, allowed: set[str],
         return False, "too_long"
     if "http://" in text or "https://" in text or "**" in text or "```" in text:
         return False, "markdown_or_url"
+    leaked = code_tokens(text) & (forbidden or set())
+    if leaked:
+        return False, f"internal_identifier:{sorted(leaked)[0]}"
     for token in numbers_in(text):
         if not _number_is_traceable(token, allowed):
             return False, f"invented_number:{token}"
@@ -339,23 +374,72 @@ def _advisory_facts(pastoralist, lat: float | None, lon: float | None) -> dict:
 
     if not res.found:
         return {"water": {"found": False},
-                "herd": {"species": pastoralist.primary_species or "cattle"}}
+                "herd": {"species_in_herder_words": _species_words(pastoralist)}}
 
+    # Enums are translated here, at the boundary: the bundle must contain herder
+    # words, because whatever is in the bundle can end up in the message verbatim
+    # (a live probe leaked "(dry_season)" before this rule existed).
+    lang = getattr(pastoralist, "preferred_language", "swahili")
     return {
         "water": {
             "found": True,
             "distance_km": res.distance_km,
-            "reliability": res.water_reliability,
-            "grazing_zone": res.grazing_zone,
+            "reliability_in_herder_words": _reliability_words(res.water_reliability, lang),
+            "grazing_zone_in_herder_words": _zone_words(res.grazing_zone, lang),
         },
         "pasture": {
-            "condition": res.forage_condition,
-            "seasonally_normal": res.seasonally_normal,
-            "vci": (res.raw_indices or {}).get("VCI"),
+            "condition_in_herder_words": _condition_words(res.forage_condition, lang),
+            "normal_for_the_season": res.seasonally_normal,
         },
-        "reach": {"effective_radius_km": res.effective_radius_km},
-        "herd": {"species": pastoralist.primary_species or "cattle"},
+        "reach": {"usual_reach_km": res.effective_radius_km},
+        "herd": {"species_in_herder_words": _species_words(pastoralist)},
     }
+
+
+def _species_words(pastoralist) -> str:
+    from app.services.i18n import SPECIES_LABEL_EN, SPECIES_LABEL_SW
+
+    species = getattr(pastoralist, "primary_species", None) or "cattle"
+    if getattr(pastoralist, "preferred_language", "swahili") == "english":
+        return SPECIES_LABEL_EN.get(species, species)
+    return SPECIES_LABEL_SW.get(species, species)
+
+
+def _condition_words(condition, lang: str) -> str | None:
+    try:
+        from app.services.advisory_logic import ForageCondition
+        from app.services.i18n import CONDITION_TEXT_EN, CONDITION_TEXT_SW
+
+        maps = CONDITION_TEXT_EN if lang == "english" else CONDITION_TEXT_SW
+        return maps.get(ForageCondition(condition))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _reliability_words(reliability, lang: str) -> str | None:
+    try:
+        from app.services.advisory_logic import WaterReliability
+        from app.services.i18n import WATER_TEXT_EN, WATER_TEXT_SW
+
+        maps = WATER_TEXT_EN if lang == "english" else WATER_TEXT_SW
+        return maps.get(WaterReliability(reliability))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _zone_words(zone, lang: str) -> str | None:
+    """Reach note in herder words ('kwenye eneo la kawaida' / 'mbali kidogo')."""
+    if not zone:
+        return None
+    table = {
+        "comfortable": ("ndani ya eneo la kawaida la malisho" if lang != "english"
+                        else "within the usual grazing reach"),
+        "far": ("mbali kidogo kuliko kawaida" if lang != "english"
+                else "a bit farther than usual"),
+        "critical": ("mbali zaidi ya eneo la kawaida" if lang != "english"
+                     else "beyond the usual grazing reach"),
+    }
+    return table.get(str(zone))
 
 
 def nearest_water_source_id(pastoralist, lat: float | None, lon: float | None) -> str | None:
@@ -382,14 +466,23 @@ def nearest_water_source_id(pastoralist, lat: float | None, lon: float | None) -
 
 def _rain_facts(pastoralist, lat: float | None = None,
                 lon: float | None = None) -> dict:
-    """Rain outlook from the stored series/forecast (never a live weather call)."""
+    """Rain outlook from the stored series/forecast (never a live weather call).
+
+    The bundle carries WIERDER WORDING, not raw field values: units are spelled
+    out ("siku 30 ZILIZOPITA"), buckets are described in the herder's language, and
+    ready-made sentences are supplied. Learned the hard way — a live probe phrased
+    30 DAYS as "miezi 30 ya mwisho" (30 months) and leaked the internal token
+    "(dry_season)" into a herder's message, and number validation alone could not
+    catch either.
+    """
     ws_id = getattr(pastoralist, "water_source_id", None) or \
         nearest_water_source_id(pastoralist, lat, lon)
     if not ws_id:
         return {}
+    lang = getattr(pastoralist, "preferred_language", "swahili")
     try:
         from app.services import environment
-        from app.services.forecast import outlook_severity
+        from app.services.forecast import rain_line, season_note
 
         o = environment.outlook(ws_id, window_days=30)
     except Exception:  # noqa: BLE001
@@ -397,17 +490,26 @@ def _rain_facts(pastoralist, lat: float | None = None,
         return {}
     if o is None:
         return {}
-    return {"rain": {
-        "dry_spell_days": o.dry_spell_days,
-        "observed_30d_mm": o.rain_30d_mm,
-        "normal_30d_mm": o.normal_30d_mm,
-        "deficit_pct": o.deficit_pct,
-        "season": outlook_severity(o),
-        "forecast_days": o.horizon_days,
-        "forecast_total_mm": o.forecast_total_mm,
-        "onset_date": o.onset_date.isoformat() if o.onset_date else None,
-        "confidence": o.confidence if o.has_forecast else None,
-    }}
+
+    sw = lang != "english"
+    facts: dict = {
+        "rain": {
+            # Units stated with every window so they cannot be misread.
+            "dry_spell_days": o.dry_spell_days,
+            "dry_spell_means": ("siku mfululizo bila mvua ya maana (zilizopita)" if sw
+                                else "consecutive days with no real rain (in the past)"),
+            "rain_over_past_30_days_mm": o.rain_30d_mm,
+            "normal_for_the_same_30_days_mm": o.normal_30d_mm,
+            "deficit_percent_vs_normal": o.deficit_pct,
+            "season_in_herder_words": season_note(o, lang),
+            "forecast_covers_days_ahead": o.horizon_days,
+            "forecast_total_rain_mm": o.forecast_total_mm,
+            "forecast_is_an_estimate": True,
+            "suggested_reply": rain_line(o, lang),
+        }
+    }
+    return facts
+
 
 
 
@@ -416,18 +518,26 @@ def _rain_facts(pastoralist, lat: float | None = None,
 SW_SYSTEM = (
     "Wewe ni Arda Link, msaidizi wa WhatsApp kwa wachungaji wa Isiolo, Kenya. "
     "Jibu kwa Kiswahili rahisi. SHERIA KALI: (1) tumia tu FACTS ulizopewa - "
-    "usibuni namba, umbali, tarehe, bei, dawa au jina la eneo lolote; (2) kama "
-    "FACTS hazitoshi, sema hivyo na mwambie achague huduma au atume eneo lake; "
-    "(3) usitoe utambuzi wa ugonjwa hata kidogo; (4) weka alama '(makadirio)' "
-    "kwa mambo ya utabiri; (5) mstari 3 mafupi pekee, bila markdown, bila URL."
+    "usibuni namba, umbali, tarehe, bei, dawa au jina la eneo lolote; (2) "
+    "USIBADILISHE VIPIMO - siku ni siku, miezi ni miezi, mm ni mm, km ni km; "
+    "usiseme 'miezi' kama FACTS zinasema siku; (3) kama FACTS hazitoshi, sema "
+    "hivyo na mwambie achague huduma au atume eneo lake; (4) usitoe utambuzi wa "
+    "ugonjwa hata kidogo; (5) usitumie maneno ya kiufundi wala majina ya ndani ya "
+    "mfumo (kama dry_season, moderate) - sema kwa maneno ya mchungaji; (6) weka "
+    "alama '(makadirio)' kwa mambo ya utabiri; (7) mstari 3 mafupi pekee, bila "
+    "markdown, bila URL. Kama FACTS zina 'suggested_reply', fuata maneno yake."
 )
 EN_SYSTEM = (
     "You are Arda Link, a WhatsApp assistant for pastoralists in Isiolo, Kenya. "
     "Reply in simple English. HARD RULES: (1) use ONLY the FACTS given - never "
-    "invent a number, distance, date, price, drug or place name; (2) if FACTS are "
-    "insufficient, say so and offer the services menu or ask for their location; "
-    "(3) never give a disease diagnosis; (4) mark forecast statements as "
-    "'(estimate)'; (5) at most 3 short lines, no markdown, no URLs."
+    "invent a number, distance, date, price, drug or place name; (2) NEVER CHANGE "
+    "UNITS - days are days, months are months, mm are mm, km are km; never say "
+    "'months' when the FACTS say days; (3) if FACTS are insufficient, say so and "
+    "offer the services menu or ask for their location; (4) never give a disease "
+    "diagnosis; (5) never use technical or internal field names (like dry_season "
+    "or moderate) - speak in a herder's words; (6) mark forecast statements as "
+    "'(estimate)'; (7) at most 3 short lines, no markdown, no URLs. If the FACTS "
+    "contain a 'suggested_reply', stay close to its wording."
 )
 
 
@@ -455,18 +565,20 @@ def deterministic_answer(facts: dict, lang: str = "swahili") -> str:
         if rain.get("dry_spell_days") is not None:
             bits.append(f"siku {rain['dry_spell_days']} bila mvua ya maana" if sw
                         else f"{rain['dry_spell_days']} days without real rain")
-        if rain.get("normal_30d_mm") is not None:
+        if rain.get("normal_for_the_same_30_days_mm") is not None:
             bits.append(
-                (f"mvua ya siku 30 ni {rain.get('observed_30d_mm')} mm dhidi ya "
-                 f"kawaida {float(rain['normal_30d_mm']):.1f} mm") if sw else
-                (f"30-day rain {rain.get('observed_30d_mm')} mm vs a normal of "
-                 f"{float(rain['normal_30d_mm']):.1f} mm"))
-        if rain.get("forecast_days"):
+                (f"mvua ya siku 30 zilizopita ni "
+                 f"{rain.get('rain_over_past_30_days_mm')} mm dhidi ya kawaida "
+                 f"{float(rain['normal_for_the_same_30_days_mm']):.1f} mm") if sw else
+                (f"rain over the past 30 days is "
+                 f"{rain.get('rain_over_past_30_days_mm')} mm vs a normal of "
+                 f"{float(rain['normal_for_the_same_30_days_mm']):.1f} mm"))
+        if rain.get("forecast_covers_days_ahead"):
             bits.append(
-                (f"utabiri wa siku {rain['forecast_days']}: "
-                 f"{rain.get('forecast_total_mm')} mm (makadirio)") if sw else
-                (f"{rain['forecast_days']}-day forecast: "
-                 f"{rain.get('forecast_total_mm')} mm (estimate)"))
+                (f"utabiri wa siku {rain['forecast_covers_days_ahead']} zijazo: "
+                 f"{rain.get('forecast_total_rain_mm')} mm (makadirio)") if sw else
+                (f"next {rain['forecast_covers_days_ahead']} days: "
+                 f"{rain.get('forecast_total_rain_mm')} mm (estimate)"))
         if bits:
             lines.append(("Mvua: " if sw else "Rain: ") + "; ".join(bits) + ".")
 
@@ -479,14 +591,16 @@ def deterministic_answer(facts: dict, lang: str = "swahili") -> str:
     elif water.get("distance_km") is not None:
         line = (f"Maji ya karibu yapo umbali wa {float(water['distance_km']):.1f} km." if sw
                 else f"Nearest water is {float(water['distance_km']):.1f} km away.")
-        if water.get("reliability"):
-            line += f" ({water['reliability']})"
+        if water.get("reliability_in_herder_words"):
+            line += f" {water['reliability_in_herder_words'].capitalize()}."
         lines.append(line)
 
     pasture = facts.get("pasture") or {}
-    if pasture.get("condition"):
-        lines.append((f"Malisho karibu na maji: {pasture['condition']}." if sw
-                      else f"Pasture near that water: {pasture['condition']}."))
+    if pasture.get("condition_in_herder_words"):
+        lines.append((f"Malisho karibu na maji: "
+                      f"{pasture['condition_in_herder_words']}." if sw
+                      else f"Pasture near that water: "
+                           f"{pasture['condition_in_herder_words']}."))
 
     for entry in (facts.get("guidance") or []):
         text = (entry.get("text") or "").strip()
@@ -596,7 +710,8 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
             log.exception("chat: model call failed")
             candidate = None
         if candidate:
-            ok, why = validate_answer(candidate, allowed, lang)
+            ok, why = validate_answer(candidate, allowed, lang,
+                                      forbidden=code_tokens(facts))
             if ok:
                 _log_chat(pastoralist, question, candidate, used_llm=True)
                 return candidate

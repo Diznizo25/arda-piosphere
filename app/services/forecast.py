@@ -193,6 +193,16 @@ def build_outlook(*, recent_rain: list[float], climatology: dict[int, float],
     )
 
 
+def season_note(o: RainOutlook, lang: str = "swahili") -> str:
+    """Herder-worded description of the season bucket (never the raw enum).
+
+    The internal bucket names (dry_season, very_dry, ...) must never reach a
+    herder: they are code. Callers put this sentence in the facts bundle instead.
+    """
+    sev = outlook_severity(o)
+    return (_SEV_SW if lang != "english" else _SEV_EN)[sev]
+
+
 def outlook_severity(o: RainOutlook) -> str:
     """normal | dry | very_dry | dry_season — the bucket we are willing to name.
 

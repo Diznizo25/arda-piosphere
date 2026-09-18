@@ -98,17 +98,23 @@ print("knowledge base + sourcing rule OK")
 
 # --- 7) the deterministic answer stands on its own --------------------------
 facts = {
-    "rain": {"dry_spell_days": 30, "observed_30d_mm": 0.1, "normal_30d_mm": 6.87,
-             "deficit_pct": -98.5, "season": "dry_season", "forecast_days": 15,
-             "forecast_total_mm": 1.3, "onset_date": None, "confidence": "moderate"},
-    "water": {"found": True, "distance_km": 4.2, "reliability": "seasonal"},
-    "pasture": {"condition": "dry_forage_available", "seasonally_normal": True, "vci": 42},
+    "rain": {"dry_spell_days": 30, "rain_over_past_30_days_mm": 0.1,
+             "normal_for_the_same_30_days_mm": 6.87, "deficit_percent_vs_normal": -98.5,
+             "season_in_herder_words": "mvua ni kidogo, lakini huu ni msimu wa kiangazi "
+                                       "wa kawaida",
+             "forecast_covers_days_ahead": 15, "forecast_total_rain_mm": 1.3,
+             "forecast_is_an_estimate": True},
+    "water": {"found": True, "distance_km": 4.2,
+              "reliability_in_herder_words": "maji ya msimu"},
+    "pasture": {"condition_in_herder_words": "nyasi kavu nzuri ya malisho ipo",
+                "normal_for_the_season": True},
     "guidance": [{"text": "Ng'ombe mmoja anahitaji takriban lita 30-45 kwa siku.",
                   "source": "FAO", "reviewed": False}],
 }
 sw = chat.deterministic_answer(facts, "swahili")
 assert "siku 30 bila mvua" in sw and "6.9" in sw and "makadirio" in sw, sw
 assert "4.2" in sw, "the bundle included water facts, so they are spoken"
+assert "Maji ya msimu." in sw, sw  # capitalised as its own sentence
 # A rain-only bundle stays a rain answer - the routing (not a hidden filter) is
 # what keeps replies on topic.
 rain_only = chat.deterministic_answer({"rain": facts["rain"]}, "swahili")
@@ -123,6 +129,31 @@ assert "4.2" in with_guidance
 empty = chat.deterministic_answer({}, "swahili")
 assert "menu" in empty
 print("deterministic answer OK")
+
+# --- 7b) internal identifiers must never reach a herder ----------------------
+# Regression from a LIVE probe: the model echoed the internal bucket name, so the
+# reply to a real herder contained "(dry_season)". Number validation allowed it.
+leaky_rain = {"season_in_herder_words": "msimu wa kiangazi wa kawaida",
+              "raw_bucket": "dry_season"}
+# Both the keys and the values count: a model echoing a schema name is just as
+# broken as one echoing an enum value.
+assert chat.code_tokens(leaky_rain) == {"season_in_herder_words", "raw_bucket",
+                                        "dry_season"}
+assert chat.code_tokens({"a_b": 1, "nested": [{"x_y_z": "s"}]}) == {"a_b", "x_y_z"}
+assert chat.code_tokens({"plain": "no identifiers here"}) == set()
+ok, why = chat.validate_answer("Mvua ni kidogo katika kiangazi (dry_season).",
+                               set(), "swahili", forbidden=chat.code_tokens(leaky_rain))
+assert not ok and why == "internal_identifier:dry_season", why
+# ...and it must be rejected even when every number is traceable.
+ok, why = chat.validate_answer("Siku 30 bila mvua, hali ni dry_season.",
+                               {"30"}, "swahili", forbidden={"dry_season"})
+assert not ok and why.startswith("internal_identifier"), why
+# A clean herder-worded answer still passes.
+ok, why = chat.validate_answer("Siku 30 bila mvua ya maana; msimu wa kiangazi "
+                               "wa kawaida (makadirio).", {"30"}, "swahili",
+                               forbidden={"dry_season"})
+assert ok, why
+print("internal-identifier guardrail OK")
 
 # --- 8) end-to-end answer(): model proposes, validator decides, fallback saves
 def gather_rain(herder, question, sections):
