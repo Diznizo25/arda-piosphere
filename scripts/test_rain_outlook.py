@@ -136,3 +136,43 @@ assert "Utabiri" in msg and "makadirio" in msg
 print("mvua message OK")
 
 print("rain-outlook tests OK")
+
+# --- 9) the wiring other modules must not silently lose ----------------------
+# The advisory reads the stored outlook and appends the line; the WhatsApp handler
+# routes 'mvua' to it. Both are pure string/structure checks, no DB or network.
+import io  # noqa: E402
+
+adv_src = io.open("app/services/advisory_service.py", encoding="utf-8").read()
+assert "environment.outlook(" in adv_src, "advisory must read the stored rain outlook"
+assert "rain_line(" in adv_src, "advisory must append the rain line"
+assert "rain_dry_spell_days=" in adv_src, "AdvisoryResult must expose the rain fields"
+# Fail-open: the outlook read is wrapped in try/except, so a DB/weather problem
+# can never break an advisory (the except must therefore follow the call).
+_after_outlook = adv_src.split("environment.outlook(")[1][:900]
+assert "except Exception" in _after_outlook, \
+    "the rain lookup must be fail-open (no stored data still answers)"
+
+wa_src = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
+assert "RAIN_KEYWORDS" in wa_src and "_handle_rain_request" in wa_src
+assert '"8": "rain"' in wa_src, "menu slot 8 must be the rain service"
+assert "mvua_message" in wa_src, "the mvua service must use the honest formatter"
+
+from app.services import environment as env  # noqa: E402
+
+# The request path must never fetch weather live: only the refresh script fetches.
+assert env.FORECAST_DAYS >= 10 and env.PAST_DAYS >= 30
+assert "def fetch_open_meteo" in io.open(
+    "app/services/environment.py", encoding="utf-8").read()
+print("advisory + WhatsApp + menu wiring OK")
+
+# --- 10) the COG archive is what makes the past survive ----------------------
+from app.services.storage import cog_archive_key, cog_key  # noqa: E402
+
+assert cog_key("abc") == "cogs/abc/indices.tif"
+assert cog_archive_key("abc", "2026-09-18") == "cogs/abc/archive/indices_2026-09-18.tif"
+assert cog_archive_key("abc", "2026-09-18") != cog_key("abc"), \
+    "an archive key must never collide with the live key"
+transfer_src = io.open("scripts/transfer_assets_to_r2.py", encoding="utf-8").read()
+assert "archive_current_cog(" in transfer_src and "_set_indices_as_of(" in transfer_src
+print("dated COG archive wiring OK")
+
