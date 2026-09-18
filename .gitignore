@@ -14,3 +14,10 @@ tile_test.tif
 render_check_output.txt
 render_env_set_output.txt
 CLAUDE_CODE_PROMPT (1).md
+
+# Throwaway probe/scratch scripts (underscore-prefixed by convention).
+# They are handy locally but must never land in a commit — use scripts/ without
+# the underscore for anything worth keeping.
+scripts/_*.py
+*.out
+

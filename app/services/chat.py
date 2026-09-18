@@ -286,7 +286,7 @@ def gather_facts(pastoralist, question: str, sections: list[str] | None = None,
         facts.update(_advisory_facts(pastoralist, lat, lon))
 
     if not sections or "rain" in sections:
-        facts.update(_rain_facts(pastoralist))
+        facts.update(_rain_facts(pastoralist, lat, lon))
 
     entries = match_knowledge(question)
     if entries:
@@ -358,9 +358,33 @@ def _advisory_facts(pastoralist, lat: float | None, lon: float | None) -> dict:
     }
 
 
-def _rain_facts(pastoralist) -> dict:
+def nearest_water_source_id(pastoralist, lat: float | None, lon: float | None) -> str | None:
+    """The water point to speak about, for a herder who has not confirmed one.
+
+    A herder with no registered water point is not a herder without rain: their
+    weather is the weather at the nearest water point we know. (Same fallback the
+    'mvua' WhatsApp service uses, so the two never disagree.)
+    """
+    coords = _herder_location(pastoralist, lat, lon)
+    if not coords:
+        return None
+    plat, plon = coords
+    try:
+        from app.services import water_reach
+
+        candidates = water_reach.find_nearest_reachable_water(
+            plon, plat, getattr(pastoralist, "primary_species", None) or "cattle", limit=1)
+    except Exception:  # noqa: BLE001
+        log.exception("chat: nearest water lookup failed (non-fatal)")
+        return None
+    return candidates[0].water_source_id if candidates else None
+
+
+def _rain_facts(pastoralist, lat: float | None = None,
+                lon: float | None = None) -> dict:
     """Rain outlook from the stored series/forecast (never a live weather call)."""
-    ws_id = getattr(pastoralist, "water_source_id", None)
+    ws_id = getattr(pastoralist, "water_source_id", None) or \
+        nearest_water_source_id(pastoralist, lat, lon)
     if not ws_id:
         return {}
     try:

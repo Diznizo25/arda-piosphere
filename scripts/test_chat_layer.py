@@ -9,6 +9,7 @@ Run: python scripts/test_chat_layer.py
 from __future__ import annotations
 
 import sys
+from datetime import date
 
 sys.path.insert(0, ".")
 
@@ -182,7 +183,29 @@ out = chat.answer(herder, "mbuzi wangu ana homa na kuhara", "swahili",
 assert "afisa wa mifugo" in out.lower(), out
 print("no-facts -> menu, disease -> vet route OK")
 
-# --- 9) wiring: whatsapp asks the chat layer before showing the menu ---------
+# --- 9) a herder with NO registered water point still gets a rain answer -----
+# Regression: asking "mvua itanyesha lini?" used to fall through to the services
+# menu for anyone who had not confirmed a water point, even though their location
+# (and therefore the nearest water point's rainfall) was known.
+import app.services.environment as env_mod  # noqa: E402
+from app.services.forecast import RainOutlook  # noqa: E402
+
+anon = FakeHerder()
+anon.water_source_id = None
+chat.nearest_water_source_id = lambda h, lat, lon: "nearest-id"
+env_mod.outlook = lambda ws_id, window_days=30: RainOutlook(
+    dry_spell_days=30, rain_30d_mm=0.1, normal_30d_mm=6.87, deficit_pct=-98.5,
+    has_forecast=True, horizon_days=15, forecast_total_mm=1.3,
+    generated_on=date(2026, 9, 17))
+rain_facts = chat.gather_facts(anon, "mvua itanyesha lini?", ["rain"],
+                               lat=0.5669, lon=37.2402)
+assert "rain" in rain_facts and rain_facts["rain"]["dry_spell_days"] == 30, rain_facts
+# With no location at all there is genuinely nothing to say -> menu is correct.
+chat.nearest_water_source_id = lambda h, lat, lon: None
+assert chat.gather_facts(anon, "mvua itanyesha lini?", ["rain"]) == {}
+print("rain answer without a registered water point OK")
+
+# --- 10) wiring: whatsapp asks the chat layer before showing the menu --------
 import io  # noqa: E402
 
 wa = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
