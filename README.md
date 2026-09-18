@@ -168,6 +168,59 @@ kidogo, lakini huu ni msimu wa kiangazi wa kawaida. Utabiri (siku 15): hakuna mv
 inayotarajiwa (makadirio).`) and the `mvua` service (menu 8) gives the fuller
 answer with an action attached.
 
+## The conversational layer (a grounded assistant, not a free chatbot)
+
+A herder can just type a question. `app/services/chat.py` answers it — and the
+design constraint is that it may **never** invent a fact:
+
+```
+question → which fact sections? (keyword routing, no model)
+         → facts from OUR data (advisory / rain outlook) + curated entries
+           (config/pastoral_knowledge.yaml)
+         → ONE model call (app/services/ai.grounded_answer) to phrase it
+         → HARD VALIDATION: every number traceable to the facts, no URLs/markdown,
+           right language, ≤550 chars
+         → on any failure: a deterministic answer built from the same facts
+```
+
+Why validation instead of trust: this bot tells a man whether to walk 200 cattle to
+water. An invented distance is not a typo, it is a lost herd. Anything the
+validator cannot trace back to the facts is discarded and replaced with the plain
+deterministic sentence — so the chat degrades, it never lies. Measured behaviour
+from the test suite: a model reply containing an invented `240 mm` and a
+wrong-language reply are both rejected and replaced at runtime.
+
+Three more deliberate choices:
+
+- **Disease questions never reach the model.** Symptom or death keywords route to a
+  fixed reply whose only advice is: isolate the animal, do NOT take a sick animal to
+  a public water point (that is how disease spreads between herds), call the ward
+  livestock officer. A plausible-sounding diagnosis can kill a herd, and no
+  environmental dataset can predict an outbreak.
+- **The knowledge base is curated and sourced.** Every entry in
+  `config/pastoral_knowledge.yaml` must carry a `source`, and entries marked
+  `needs_review: true` are delivered **with that marker shown to the herder** —
+  never dressed up as settled fact. Only a qualified person (county livestock
+  officer, vet, ILRI/extension) flips that flag.
+- **Cost is bounded, latency is honest.** One call per question with a per-herder
+  daily cap (`DAILY_LLM_LIMIT`); over the cap the herder still gets the
+  deterministic answer. Reasoning models bill hidden thinking tokens (measured:
+  256-400 per short exchange), which is why the token budget must stay generous —
+  a small `max_completion_tokens` gets fully consumed by the reasoning pass and
+  produces an *empty* reply.
+
+Test it in production without sending a WhatsApp message:
+
+```bash
+curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"text":"mvua itanyesha lini?","lat":0.5669,"lon":37.2402}' \
+  https://arda-piosphere.onrender.com/dev/chat
+```
+
+The response says whether the model was used (`used_llm: false` means the
+deterministic path answered) and whether the disease guardrail fired.
+
+
 
 
 
@@ -289,7 +342,9 @@ Checks & debugging:
 - `check_prod_map.py`, `verify_map_center.py`, `verify_prod_map_geo.py` —
   verify the live map is geolocated correctly
 - `test_pasture_render.py` (mocked, no network), `test_weight_service.py`,
-  `test_conversation_flows.py` (end-to-end WhatsApp flows)
+  `test_rain_outlook.py` (rain-outlook logic + wiring), `test_chat_layer.py`
+  (chat routing, number/disease guardrails, fail-open), `test_conversation_flows.py`
+  (end-to-end WhatsApp flows)
 
 Deployment & scheduling:
 - `trigger_render_deploy.py`, `trigger_build_workflow.py`,
@@ -336,8 +391,9 @@ paths write to it fail-open so logging never breaks the herder experience.
 **Live:** onboarding, advisories (SATVI/NDVI/BSI/VCI), species rings, pasture
 maps with direction guidance, water-point PIN validation + auto-build, weight &
 herd tools, services menu, voice-note replies, ground-truth capture, herder
-water-status reports that gate guidance, dated COG history, and the rain/drought
-outlook (`mvua`) built on a 30-year CHIRPS climatology + a cached 16-day forecast.
+water-status reports that gate guidance, dated COG history, the rain/drought
+outlook (`mvua`) built on a 30-year CHIRPS climatology + a cached 16-day forecast,
+and a grounded conversational layer (`/dev/chat` to probe it).
 
 **Known open items:**
 - Swahili message templates should be reviewed by native speakers before wide

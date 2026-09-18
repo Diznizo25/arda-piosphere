@@ -1,0 +1,92 @@
+# Arda Link — pastoral knowledge base (deliberately small and curated)
+#
+# WHY THIS FILE EXISTS: the advisory facts (water, pasture, rain) come from our own
+# data and the bot may state them plainly. But a bot that can ONLY quote sensor
+# facts refuses questions any herder or extension officer answers instantly
+# ("my 40 cattle need how much water?"). This file is the curated answer set for
+# exactly those questions — nothing else is allowed to enter a reply.
+#
+# RULES FOR EDITING — read before changing anything:
+#  1. Every entry MUST carry `source`. No source = delete the entry.
+#  2. `needs_review: true` entries are still delivered, WITH that marker shown to
+#     the herder, so the bot never presents unverified guidance as settled fact.
+#     Only a qualified person (county livestock officer, vet, ILRI/extension
+#     service) may flip it to false.
+#  3. NEVER add a diagnosis. Symptoms belong in disease_warning_signs, whose only
+#     answer is "contact a vet". Environment data cannot predict disease and a
+#     language model must never guess at it.
+#  4. Answers are 1-2 short sentences: read on a phone in a pasture. The model may
+#     quote these entries, never extend them.
+#
+# Units: litres are per animal per day unless stated otherwise.
+
+water_needs:
+  - id: water_cattle
+    keywords: ["ng'ombe", "ngombe", "cattle", "cow", "mifugo maji", "maji ngapi"]
+    sw: "Ng'ombe mmoja anahitaji takriban lita 30-45 kwa siku katika hali ya joto, na zaidi kama ananyonyesha."
+    en: "A cow needs roughly 30-45 litres a day in the heat, more if she is lactating."
+    source: "FAO / ILRI extension guidance (varies with heat and lactation)"
+    needs_review: true
+  - id: water_shoat
+    keywords: ["mbuzi", "kondoo", "shoat", "goat", "sheep", "mifugo maji"]
+    sw: "Mbuzi au kondoo mmoja anahitaji takriban lita 4-6 kwa siku."
+    en: "A goat or sheep needs roughly 4-6 litres a day."
+    source: "FAO / ILRI extension guidance"
+    needs_review: true
+  - id: water_camel
+    keywords: ["ngamia", "camel", "mifugo maji"]
+    sw: "Ngamia anaweza kunywa lita 60-100 kwa mkupuo, lakini anaweza kurudi kisima kila siku 2-3 kama maji ni mbali."
+    en: "A camel can drink 60-100 litres in one go, and can return to water every 2-3 days when water is far."
+    source: "FAO / ILRI extension guidance on camel husbandry"
+    needs_review: true
+
+water_treatment:
+  - id: treat_boil
+    keywords: ["kuchenjua", "chujio", "chemsha", "treat water", "safi maji", "klorini", "chlorine", "kuharisha"]
+    sw: "Maji ya kunywa: chemsha kwa dakika moja, au tumia klorini ya maji (dawa ya maji) kwa kipimo cha pakiti."
+    en: "Drinking water: boil for one minute, or use the chlorine dose on the packet label."
+    source: "Kenya Ministry of Health water treatment guidance"
+    needs_review: true
+
+husbandry:
+  - id: vaccination
+    keywords: ["chanjo", "vaccin", "kinga", "ugonjwa wa mifugo", "fmd", "ppr", "ccpp"]
+    sw: "Chanjo muhimu: ng'ombe — FMD na ugonjwa wa mapafu; mbuzi/kondoo — PPR na CCPP. Wasiliana na afisa wa mifugo wa ward kwa ratiba."
+    en: "Key vaccinations: cattle — FMD and CBPP; goats/sheep — PPR and CCPP. Contact your ward livestock officer for the schedule."
+    source: "Kenya Directorate of Veterinary Services schedule (confirm locally)"
+    needs_review: true
+  - id: dry_season_feeding
+    keywords: ["malisho kidogo", "ukame chakula", "mbolea ya mifugo", "crop residue", "mabaki", "hay", "nyasi kavu chakula"]
+    sw: "Wakati malisho ni machache: nyasi kavu iliyohifadhiwa, mabaki ya shamba (mahindi, maharagwe) na chumvi ya madini huongeza matumizi ya malisho mabaya."
+    en: "When forage is short: conserved hay, crop residues (maize, beans) and a mineral lick help animals use poor forage better."
+    source: "ILRI dry-season feeding guidance"
+    needs_review: true
+  - id: market_timing
+    keywords: ["soko", "bei", "sell", "kuuza", "mnada", "market"]
+    sw: "Kwa bei, jibu ni la mtaa: Arda Link haitoi bei ya soko bado. Uliza mnada wa karibu au chama cha wachungaji."
+    en: "On prices, Arda Link does not carry market prices yet. Ask your nearest livestock market or herder association."
+    source: "Arda Link scope statement"
+    needs_review: false
+
+# Symptoms are LANDMINES: the only permitted reply is "contact a vet", plus
+# practical containment. The chat layer returns this without ever consulting the
+# language model, because a plausible-sounding diagnosis can kill a herd.
+disease_warning_signs:
+  # Substring-matched on purpose (broad beats precise here), so the death words are
+  # listed in their full Swahili forms: "kufa" alone would match "kufanya".
+  keywords: ["ugonjwa", "mgonjwa", "wagonjwa", "homa", "kuhara", "kutapika", "damu",
+             "vidonda", "mafua", "kipindupindu", "amekufa", "wamekufa", "kufa ghafla",
+             "vifo", "sick", "disease", "fever", "diarrhoea", "diarrhea", "vomiting",
+             "abortion", "kuharibika mimba", "dead", "died", "death", "sudden death"]
+  sw: "Dalili za ugonjwa haziwezi kutambuliwa kwa simu — Arda Link haiwezi kusema
+Ugonjwa ni upi. Fanya hivi: (1) tenga mnyama mgonjwa mbali na wengine; (2) usimpeleke
+mnyama mgonjwa kwenye kisima cha umma — ugonjwa huenea kwa wanyama wengine hapo;
+(3) piga simu kwa afisa wa mifugo wa ward au vet haraka iwezekanavyo. Ukigundua vifo
+vingi ghafla, ripoti mara moja."
+  en: "Symptoms cannot be diagnosed over a phone — Arda Link will not guess which
+disease this is. Do this: (1) separate the sick animal from the herd; (2) do not take
+a sick animal to a public water point — disease spreads to other herds there;
+(3) call your ward livestock officer or vet as soon as possible. If several animals
+die suddenly, report it immediately."
+  source: "Kenya Directorate of Veterinary Services / WOAH disease-reporting guidance"
+  needs_review: false

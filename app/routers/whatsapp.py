@@ -315,7 +315,9 @@ MENU_MSG = {
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
                "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
                "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
-               "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.",
+               "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.\n"
+               "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
+               "'ng'ombe 40 wanahitaji maji ngapi?'.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
                "1. 📍 LOCATION — water & pasture info near you\n"
                "2. 🏷 PIN — register your new water point\n"
@@ -326,7 +328,9 @@ MENU_MSG = {
                "7. 🗣 VOICE — reply by voice / TEXT for text\n"
                "8. 🌧 RAIN — rain and drought outlook near you\n"
                "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
-               "Send the matching word (e.g. 'weight') or the number.",
+               "Send the matching word (e.g. 'weight') or the number.\n"
+               "You can also just ask a question — e.g. 'when will it rain?' or "
+               "'how much water do 40 cattle need?'.",
 }
 
 MENU_NUMBERS = {
@@ -822,6 +826,21 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             "english": "Thank you for the report! It will help us improve information for that area.",
         }[pastoralist.preferred_language]
         _send_reply(phone, pastoralist, thanks, voice=voice)
+        return
+
+    # Free text that matched no command and was not a ground-truth report is a
+    # real question ("ng'ombe wangu 40 wanahitaji maji ngapi?"). Answer it from our
+    # own facts + the curated knowledge base; only if there is nothing to ground on
+    # (and nothing to say) does the herder get the services menu.
+    try:
+        from app.services import chat
+
+        grounded = chat.answer(pastoralist, text)
+    except Exception:  # noqa: BLE001
+        log.exception("chat answer failed - falling back to the menu")
+        grounded = None
+    if grounded:
+        _send_reply(phone, pastoralist, grounded, voice=voice)
         return
 
     _show_menu(phone, pastoralist)

@@ -7,6 +7,10 @@
   a herder (text + rendered progress-bar image). Guarded by
   X-Build-Key == sha256(DATABASE_URL), a secret both the web service and the
   builder job already know, so no extra credential setup is required.
+- /dev/chat runs the grounded chat layer (app/services/chat.py) on a question and
+  returns what a herder WOULD get, without sending anything to WhatsApp. Same
+  X-Debug-Key guard as /dev/transcribe. This is how to sanity-check wording,
+  guardrails and the model's behaviour in production.
 """
 from __future__ import annotations
 
@@ -52,6 +56,81 @@ async def transcribe(request: Request, x_debug_key: str = Header(default="")) ->
         "duration_s": round(result.duration_s, 1),
         "too_long": result.duration_s > speech.MAX_DURATION_S,
     }
+
+
+@router.post("/chat")
+async def chat_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """Ask the grounded chat layer exactly what a herder would get, WITHOUT sending
+    anything to WhatsApp. Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN.
+
+    Body: {text, phone?, language?, species?, lat?, lon?}
+      - phone: look up a real herder (their water point/language/species are used);
+        omit it to probe as an anonymous herder.
+      - lat/lon: probe the advisory facts at explicit coordinates.
+
+    Returns the answer plus whether the language model was actually used (a false
+    `used_llm` means the deterministic path answered — worth knowing when judging
+    a reply).
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    payload = await request.json()
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "text is required"}
+
+    from app.services import ai, chat, pastoralists
+
+    phone = payload.get("phone") or "+254000000000"
+    herder = None
+    if payload.get("phone"):
+        try:
+            herder = pastoralists.get_pastoralist(phone)
+        except Exception:  # noqa: BLE001
+            log.exception("chat probe: herder lookup failed")
+    if herder is None:
+        herder = _StubHerder(
+            phone=phone,
+            language=payload.get("language", "swahili"),
+            species=payload.get("species", "cattle"),
+        )
+
+    lat, lon = payload.get("lat"), payload.get("lon")
+    sections = chat.intent_sections(text)
+
+    def gather(h, question, secs):
+        return chat.gather_facts(h, question, secs, lat=lat, lon=lon)
+
+    used = {"llm": False}
+
+    def llm(system: str, facts_json: str, question: str):
+        used["llm"] = True
+        return ai.grounded_answer(system, facts_json, question)
+
+    answer = chat.answer(herder, text, herder.preferred_language,
+                         gather=gather, llm=llm)
+    return {
+        "ok": True,
+        "answer": answer,
+        "would_show_menu": answer is None,
+        "sections": sections,
+        "used_llm": used["llm"],
+        "disease_guardrail": chat.is_disease_question(text),
+    }
+
+
+class _StubHerder:
+    """Minimal stand-in for an anonymous probe (matches the Pastoralist fields the
+    chat layer reads, so no database row is needed)."""
+
+    def __init__(self, phone: str, language: str, species: str) -> None:
+        self.phone_number = phone
+        self.preferred_language = language if language in ("swahili", "english") else "swahili"
+        self.primary_species = species
+        self.water_source_id = None
+        self.water_interval = "daily"
 
 
 def _valid_build_key(provided: str) -> bool:
