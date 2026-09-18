@@ -34,6 +34,56 @@ def cog_overview_key(water_source_id: str) -> str:
     return f"cogs/{water_source_id}/indices_ov8.tif"
 
 
+def cog_archive_key(water_source_id: str, as_of: str) -> str:
+    """Dated copy of a water point's index stack: cogs/<id>/archive/indices_<date>.tif.
+
+    Why this exists: the canonical key carries no date, so every 14-day refresh
+    overwrote the previous snapshot and the past was destroyed — which is exactly
+    what made any prediction (trend, recovery, green-up onset, drought onset)
+    impossible to build or validate. Archiving keeps the series without changing
+    the read path: live reads still use `indices.tif`, history accumulates beside it.
+
+    `as_of` is an ISO date (YYYY-MM-DD) — pass the snapshot date, not today's date,
+    so a re-run of an old export does not mislabel the archive.
+    """
+    return f"cogs/{water_source_id}/archive/indices_{as_of}.tif"
+
+
+def archive_current_cog(water_source_id: str, as_of: str) -> str | None:
+    """Server-side copy of the canonical COG + overview to their dated keys.
+
+    Server-side (S3 CopyObject) on purpose: no download/upload of a ~500 MB object,
+    so this costs a single cheap API call per water point per refresh. Never raises
+    — archiving history must not be able to break a satellite transfer.
+    """
+    settings = get_settings()
+    try:
+        client = get_s3_client()
+        for src, dst in (
+            (cog_key(water_source_id), cog_archive_key(water_source_id, as_of)),
+            (cog_overview_key(water_source_id),
+             cog_archive_key(water_source_id, as_of).replace(".tif", "_ov8.tif")),
+        ):
+            try:
+                client.copy_object(
+                    Bucket=settings.r2_bucket_name,
+                    CopySource={"Bucket": settings.r2_bucket_name, "Key": src},
+                    Key=dst,
+                    MetadataDirective="COPY",
+                    ContentType="image/tiff",
+                )
+            except Exception:  # noqa: BLE001  (the overview may not exist yet)
+                continue
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "COG archive failed for %s (non-fatal)", water_source_id)
+        return None
+    return cog_archive_key(water_source_id, as_of)
+
+
+
 def cog_uri(water_source_id: str) -> str:
     """rasterio-readable URI. Prefers a public/CDN base URL if configured
     (rasterio can stream-read over HTTP via /vsicurl/); falls back to the

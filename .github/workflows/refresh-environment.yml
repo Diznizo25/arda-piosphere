@@ -1,0 +1,43 @@
+name: refresh-environment
+
+# Twice-daily environmental refresh: observed rain/soil moisture + the 16-day rain
+# forecast for every water point, written to environment_daily /
+# environment_forecast. The advisory and the 'mvua' service only ever READ those
+# tables, so this run is what keeps the rain line current without any weather API
+# call on the request path (architecture principle #1).
+#
+# This is pure HTTP (Open-Meteo, no key) + DB writes: no GEE, no COGs, so it is
+# fast and cheap — unlike refresh-indices.yml, which is a 14-day satellite job.
+# A run that fails changes nothing: the advisory simply omits the rain line until
+# the data is fresh again (forecast.staleness drops anything expired).
+#
+# Setup: only DATABASE_URL is required (the same secret refresh-indices.yml uses).
+# Open-Meteo's free tier is non-commercial (10k calls/day): 9 points x 2 runs/day
+# is nowhere near it, but a commercial deployment must license or self-host it.
+
+on:
+  schedule:
+    # 04:15 and 16:15 UTC = 07:15 and 19:15 in Nairobi.
+    - cron: "15 4,16 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Keep in sync with .python-version and refresh-indices.yml.
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh rain series + forecast (all water points)
+        run: python scripts/refresh_environment.py --all
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

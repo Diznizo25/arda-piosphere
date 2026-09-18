@@ -134,6 +134,21 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
             head = (f"⚠️ This water: {label}"
                     + (f" ({round(age)} days ago)" if age is not None else ""))
             message = f"{head}\nConfirm before you set off.\n\n{message}"
+    # Rain outlook from the stored series + cached forecast (migration 010). Purely
+    # a DB read — never a weather API call on the request path. Fail-open: if we
+    # have nothing stored, no rain line is added and the advisory is unchanged.
+    outlook = None
+    try:
+        from app.services import environment, forecast as fc
+
+        outlook = environment.outlook(nearest.water_source_id, window_days=30)
+        line = fc.rain_line(outlook, req.language)
+        if line:
+            message = f"{message}\n{line}"
+    except Exception:  # noqa: BLE001
+        log.exception("rain outlook unavailable for %s (non-fatal)",
+                      nearest.water_source_id)
+
     # The LLM may only rephrase the deterministic text, never add facts; on any
     # failure the original message is returned (see app/services/ai.py).
     message = ai.rephrase_advisory(
@@ -157,4 +172,10 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         effective_radius_km=round(effective_radius_km, 1),
         message=message,
         raw_indices=forage.raw,
+        rain_dry_spell_days=(outlook.dry_spell_days if outlook else None),
+        rain_deficit_pct=(outlook.deficit_pct if outlook else None),
+        rain_forecast_mm=(outlook.forecast_total_mm if outlook else None),
+        rain_onset_date=(outlook.onset_date.isoformat()
+                         if outlook and outlook.onset_date else None),
+        rain_confidence=(outlook.confidence if outlook and outlook.has_forecast else None),
     )

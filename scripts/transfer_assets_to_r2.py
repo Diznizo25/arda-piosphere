@@ -24,7 +24,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import get_settings  # noqa: E402
 from app.db import get_pg_connection  # noqa: E402
 from app.services.gee_auth import init_earth_engine  # noqa: E402
-from app.services.storage import cog_key, cog_overview_key, get_s3_client, upload_file, upload_file_to_key  # noqa: E402
+from app.services.storage import (  # noqa: E402
+    archive_current_cog,
+    cog_key,
+    cog_overview_key,
+    get_s3_client,
+    upload_file,
+    upload_file_to_key,
+)
 
 # The advisory read path serves zone means from a tiny 8x overview COG
 # (cogs/<id>/indices_ov8.tif); the full-res COG is the archival source.
@@ -304,6 +311,24 @@ def _merge_tiles(tile_paths: list[Path], bounds: tuple[float, float, float, floa
 
 
 
+def _set_indices_as_of(water_source_id: str, as_of: str) -> None:
+    """Record which date this water point's satellite snapshot was taken.
+
+    Lets the system state how stale the pasture data is instead of implying it is
+    "now" (water_sources.indices_as_of, migration 010). Fail-open.
+    """
+    from app.db import get_pg_connection
+
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update water_sources set indices_as_of = %(as_of)s, "
+                "updated_at = now() where id = %(id)s",
+                {"as_of": as_of, "id": water_source_id},
+            )
+        conn.commit()
+
+
 def download_asset_to_r2(asset_id: str, fresh: bool = False) -> bool:
     """Download a GEE asset as GeoTIFF (tiled) and upload to R2.
 
@@ -372,6 +397,21 @@ def download_asset_to_r2(asset_id: str, fresh: bool = False) -> bool:
                 log.info(f"  uploaded {cog_overview_key(water_source_id)}")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"  overview build/upload failed (non-fatal): {e}")
+
+            # Keep a DATED copy of this snapshot + record its date. The canonical
+            # key has no date, so without this the 14-day refresh destroys the past
+            # and no trend/onset/recovery analysis can ever be built or validated
+            # (see storage.cog_archive_key). Server-side copy = one cheap API call.
+            try:
+                from datetime import date
+
+                as_of = date.today().isoformat()
+                archived = archive_current_cog(water_source_id, as_of)
+                if archived:
+                    log.info(f"  archived {archived}")
+                _set_indices_as_of(water_source_id, as_of)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"  archive/index-date step failed (non-fatal): {e}")
 
             return True
         except Exception as e:  # noqa: BLE001

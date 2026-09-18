@@ -32,6 +32,13 @@ class AdvisoryResult(BaseModel):
     effective_radius_km: float | None = None
     message: str
     raw_indices: dict[str, float] | None = None
+    # Rain outlook (migration 010). Always an ESTIMATE: dry_spell_days is observed,
+    # forecast_* is model output, and confidence says which horizon it is good for.
+    rain_dry_spell_days: int | None = None
+    rain_deficit_pct: float | None = None
+    rain_forecast_mm: float | None = None
+    rain_onset_date: str | None = None
+    rain_confidence: str | None = None
 
 
 class GroundTruthReportRequest(BaseModel):

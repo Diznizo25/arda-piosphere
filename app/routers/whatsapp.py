@@ -248,6 +248,11 @@ TEXT_KEYWORDS = ["maandishi", "text", "maandiko"]
 
 STATUS_KEYWORDS = ["status", "hali", "progress", "maendeleo", "uko wapi"]
 
+# Rain / drought outlook. Deliberately includes the words herders use for the
+# question they actually ask ("mvua itanyesha lini", "kuna ukame?").
+RAIN_KEYWORDS = ["mvua", "rain", "ukame", "drought", "kausha", "dry spell",
+                 "forecast", "utabiri", "weather", "hali ya hewa"]
+
 WEIGHT_KEYWORDS = ["weight", "uzito", "pima", "measure"]
 MENU_KEYWORDS = ["menu", "huduma", "services", "msaada", "help", "home",
                  "chagua", "options", "vitendo", "orodha", "help"]
@@ -308,7 +313,8 @@ MENU_MSG = {
                "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
                "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
-               "8. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
+               "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
+               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
                "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
                "1. 📍 LOCATION — water & pasture info near you\n"
@@ -318,13 +324,15 @@ MENU_MSG = {
                "5. 🗺 MAP — map of the grazing zones\n"
                "6. 📊 STATUS — your water point build progress\n"
                "7. 🗣 VOICE — reply by voice / TEXT for text\n"
-               "8. 🌍 SWAHILI / ENGLISH — change language\n\n"
+               "8. 🌧 RAIN — rain and drought outlook near you\n"
+               "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
                "Send the matching word (e.g. 'weight') or the number.",
 }
 
 MENU_NUMBERS = {
     "1": "location", "2": "pin", "3": "weight", "4": "herd",
-    "5": "map", "6": "status", "7": "voice", "8": "language",
+    "5": "map", "6": "status", "7": "voice", "8": "rain",
+    "9": "language",
 }
 
 WEIGHT_ANIMAL_BUTTONS = [
@@ -756,6 +764,11 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _start_weight_flow(phone, pastoralist)
         return
 
+    # Rain / drought request: outlook for the herder's water point (or nearest).
+    if any(k in text_lower for k in RAIN_KEYWORDS):
+        _handle_rain_request(phone, pastoralist)
+        return
+
     # Menu / help request: show all services.
     if any(k in text_lower for k in MENU_KEYWORDS):
         _show_menu(phone, pastoralist)
@@ -789,6 +802,8 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             set_voice_replies(phone, True)
             pastoralist.voice_replies = True
             _send_reply(phone, pastoralist, VOICE_ON_MSG[pastoralist.preferred_language], voice=True)
+        elif service in ("rain", "mvua"):
+            _handle_rain_request(phone, pastoralist)
         elif service == "language":
             whatsapp_client.send_text(
                 phone,
@@ -1013,6 +1028,60 @@ def _handle_map_request(phone: str, pastoralist) -> None:
         )
     except Exception:  # noqa: BLE001
         log.exception("live-map link send failed (non-fatal)")
+
+
+def _handle_rain_request(phone: str, pastoralist) -> None:
+    """'mvua'/'rain': the honest rain + drought outlook for the herder's area.
+
+    Reads ONLY stored data (rainfall series + cached 16-day forecast written by
+    scripts/refresh_environment.py) — never a weather API call while the herder
+    waits. Everything it says is labelled as an estimate where it is one, and the
+    fallback when we have no data is to say so plainly.
+    """
+    from app.services import environment, water_reach
+    from app.services.forecast import mvua_message
+
+    lang = pastoralist.preferred_language
+    ws_id = pastoralist.water_source_id
+    place: str | None = None
+
+    if ws_id:
+        try:
+            ws = get_water_source(phone)
+        except Exception:  # noqa: BLE001
+            ws = None
+        if ws:
+            place = ws.get("name") or ws.get("ward")
+
+    if not ws_id:
+        # No confirmed water point yet: fall back to the nearest known water point
+        # to their last shared location (their rain is that rain, within a few km).
+        loc = get_last_location(phone)
+        if loc:
+            lon, lat = loc
+            candidates = water_reach.find_nearest_reachable_water(
+                lon, lat, pastoralist.primary_species or "cattle", limit=1)
+            if candidates:
+                ws_id = candidates[0].water_source_id
+
+    if not ws_id:
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Ili nikupe hali ya mvua, tuma eneo lako (location) kwanza.",
+                "english": "To give you the rain outlook, send your location first.",
+            }[lang],
+        )
+        return
+
+    try:
+        outlook = environment.outlook(ws_id, window_days=30)
+    except Exception:  # noqa: BLE001
+        outlook = None
+
+    message = mvua_message(outlook, place=place, lang=lang)
+    _send_reply(phone, pastoralist, message,
+                voice=pastoralist.voice_replies)
 
 
 def _handle_pin_request(phone: str, pastoralist) -> None:
