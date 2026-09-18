@@ -405,6 +405,12 @@ and a grounded conversational layer (`/dev/chat` to probe it).
 - Rain-outlook thresholds (`app/services/forecast.py`: wet day, onset window,
   meaningful normal) are reasoned defaults, not yet validated against herder
   observations — the same ground-truth loop will tune them.
+- **When adding a field to a chat facts bundle, always encode the unit in the key
+  and supply herder wording.** The validator can prove a number is traceable, but
+  it cannot prove the model attached the right unit to it: a live probe turned
+  "siku 30" (30 days) into "miezi 30" (30 months) while every digit checked out.
+  The defence is structural — say the unit in words, translate enums at the
+  boundary, and offer a `suggested_reply` — not a better prompt.
 - Forage trend analysis becomes possible only once a few dated COG archives exist;
   drought onset, green-up timing and recovery should be built on that series.
 - Vet/disease-risk *hazard windows* (vector flush after sustained rain, crowding at
