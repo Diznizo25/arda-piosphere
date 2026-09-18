@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.services.advisory_logic import ForageCondition, WaterReliability
+from app.services.advisory_logic import ForageCondition, WaterPresence, WaterReliability
 
 Species = str  # "cattle" | "shoat" | "camel"
 
@@ -43,6 +43,20 @@ WATER_TEXT_EN = {
     WaterReliability.SEASONAL: "seasonal water — may not last all year",
     WaterReliability.UNRELIABLE: "water is unreliable right now — verify before going",
     WaterReliability.UNKNOWN: "water reliability unknown — verify before going",
+}
+
+#: Present-tense water, reported SEPARATELY from reliability so a climatology
+#: can never speak in the present tense. Only WATER_SEEN and NO_WATER_SEEN say
+#: anything; UNCERTAIN/UNKNOWN stay silent rather than guess.
+PRESENCE_TEXT_SW = {
+    WaterPresence.WATER_SEEN: "💧 Satelaiti iliona maji hapa {when}.",
+    WaterPresence.NO_WATER_SEEN: ("💧 Satelaiti haikuona maji hapa {when} — "
+                                  "huenda pamekauka. Uliza kabla ya kwenda."),
+}
+PRESENCE_TEXT_EN = {
+    WaterPresence.WATER_SEEN: "💧 The satellite saw water here {when}.",
+    WaterPresence.NO_WATER_SEEN: ("💧 The satellite saw no water here {when} — "
+                                  "it may be dry. Ask before you go."),
 }
 
 _SUPPORTED = ("swahili", "english")
@@ -151,6 +165,19 @@ def _direction_line(bearing_deg: float | None, distance_km: float | None,
             f"km {distance_km:.1f} kutoka ulipo.")
 
 
+def _presence_line(presence, observed_at: datetime | None, english: bool) -> str | None:
+    """What the satellite actually saw at the water point, and when."""
+    table = PRESENCE_TEXT_EN if english else PRESENCE_TEXT_SW
+    text = table.get(presence)
+    if text is None:
+        return None
+    if observed_at is None:
+        when = "recently" if english else "hivi karibuni"
+    else:
+        when = f"on {observed_at:%d %b}" if english else f"tarehe {observed_at:%d/%m}"
+    return text.format(when=when)
+
+
 def _age_line(observed_at: datetime | None, english: bool,
               now: datetime | None = None) -> str | None:
     """Tell the herder how old the satellite reading is.
@@ -185,6 +212,7 @@ def format_advisory_message(
     grazing_zone: str | None = None,
     effective_radius_km: float | None = None,
     dry_harsh: bool = False,
+    water_presence=None,
     class_fractions: dict[str, float] | None = None,
     patch_bearing_deg: float | None = None,
     patch_distance_km: float | None = None,
@@ -201,6 +229,7 @@ def format_advisory_message(
     direction = _direction_line(patch_bearing_deg, patch_distance_km, english,
                                 max_km=effective_radius_km)
     age = _age_line(observed_at, english, now=now)
+    presence = _presence_line(water_presence, observed_at, english)
 
     if english:
         species_label = SPECIES_LABEL_EN.get(species, species)
@@ -225,6 +254,8 @@ def format_advisory_message(
         if dry_harsh:
             lines.append(DRY_HARSH_EN)
         lines.append(f"Water: {water_text}.")
+        if presence:
+            lines.append(presence)
         if age:
             lines.append(age)
         return "\n".join(lines)
@@ -250,6 +281,8 @@ def format_advisory_message(
     if dry_harsh:
         lines.append(DRY_HARSH_SW)
     lines.append(f"Maji: {water_text}.")
+    if presence:
+        lines.append(presence)
     if age:
         lines.append(age)
     return "\n".join(lines)

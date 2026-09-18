@@ -28,6 +28,10 @@ class AdvisoryResult(BaseModel):
     seasonally_normal: bool | None = None
     curing_stage_note: str | None = None
     water_reliability: str | None = None
+    #: What the satellite SAW at the point (water_seen / no_water_seen /
+    #: uncertain / unknown). Separate from water_reliability, which is a
+    #: multi-decade climatology and says nothing about today.
+    water_presence: str | None = None
     grazing_zone: str | None = None
     effective_radius_km: float | None = None
     message: str

@@ -28,7 +28,7 @@ from shapely import contains_xy
 from shapely.geometry import shape
 
 from app.services import forage
-from app.services.forage import I_BSI, I_NDVI, I_SATVI, ForageClass
+from app.services.forage import I_BSI, I_NDVI, I_NDWI, I_SATVI, ForageClass
 from app.services.storage import (
     cog_key,
     cog_overview_key,
@@ -249,6 +249,60 @@ def _read_via_s3(water_source_id: str, geom) -> ZoneStats:
                 src.width / out_w, src.height / out_h
             )
     return _read_band_means(out, transform, geom)
+
+
+def read_water_signal(water_source_id: str, lon: float, lat: float,
+                      radius_m: float | None = None,
+                      percentile: float | None = None) -> tuple[float, int] | None:
+    """High-percentile NDWI in a small window at the water point itself.
+
+    Answers "did the satellite see open water HERE, last time it looked" — a
+    different question from `classify_water_reliability`, which reads the JRC
+    monthly-recurrence climatology and answers "is this usually wet in
+    September". See docs/adr/005-water-now-vs-usually.md.
+
+    Two deliberate choices:
+
+    * A small WINDOW, not the ring. A 25 km ring mean of NDWI is dominated by
+      dry land and would never cross any threshold, whatever the water did.
+    * A high PERCENTILE, not a mean. A borehole trough or a shrinking pan is far
+      smaller than one 80 m overview pixel, so the signal lives in the wettest
+      few pixels of the neighbourhood; a mean over 300 m buries it.
+
+    Returns (ndwi_value, sample_pixel_count), or None when nothing is readable.
+    """
+    from app.config import get_advisory_thresholds
+
+    t = get_advisory_thresholds().water
+    radius_m = radius_m if radius_m is not None else t["water_sample_radius_m"]
+    percentile = percentile if percentile is not None else t["water_sample_percentile"]
+
+    res = read_overview_array(water_source_id, max_dim=1024)
+    if res is None:
+        return None
+    arr, transform = res
+    if arr.shape[0] <= I_NDWI:
+        return None
+
+    # Degrees per metre at this latitude (equirectangular is ample at 150 m).
+    dlat = radius_m / 110_574.0
+    dlon = radius_m / (111_320.0 * max(0.05, math.cos(math.radians(lat))))
+
+    c0 = int((lon - dlon - transform.c) / transform.a)
+    c1 = int((lon + dlon - transform.c) / transform.a) + 1
+    r0 = int((lat + dlat - transform.f) / transform.e)
+    r1 = int((lat - dlat - transform.f) / transform.e) + 1
+    c0, c1 = max(0, c0), min(arr.shape[2], c1)
+    r0, r1 = max(0, r0), min(arr.shape[1], r1)
+    if c1 <= c0 or r1 <= r0:
+        return None
+
+    window = arr[I_NDWI][r0:r1, c0:c1]
+    window = np.ma.filled(window, np.nan) if np.ma.isMaskedArray(window) else np.asarray(window)
+    finite = window[np.isfinite(window)]
+    if finite.size == 0:
+        return None
+    return float(np.percentile(finite, percentile)), int(finite.size)
 
 
 def read_point_indices(water_source_id: str, lon: float, lat: float) -> dict[str, float] | None:

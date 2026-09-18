@@ -28,10 +28,38 @@ class ForageCondition(str, Enum):
 
 
 class WaterReliability(str, Enum):
+    """How often this spot USUALLY holds water in this calendar month.
+
+    Derived from JRC Global Surface Water monthly recurrence — a multi-decade
+    climatology. Historical, never present-tense. See WaterPresence below.
+    """
     RELIABLE = "reliable"
     SEASONAL = "seasonal"
     UNRELIABLE = "unreliable"
     UNKNOWN = "unknown"
+
+
+class WaterPresence(str, Enum):
+    """Whether open water was actually SEEN here when the satellite last looked.
+
+    A different question from WaterReliability, and reported separately. A pan
+    can be bone dry for three months and still be "reliable" for September,
+    because the climatology says September is usually wet — which is how a
+    herder ended up being told `maji ya kutegemewa kipindi hiki` about water
+    that was not there.
+
+    UNCERTAIN is a first-class state. NDWI between the two thresholds, or a
+    window too small to trust, means we cannot tell — which must never be
+    reported as "no water", since that would send a herd elsewhere on a guess.
+    """
+    WATER_SEEN = "water_seen"
+    NO_WATER_SEEN = "no_water_seen"
+    UNCERTAIN = "uncertain"
+    UNKNOWN = "unknown"
+
+
+#: Below this many valid pixels the window is too small to draw any conclusion.
+MIN_WATER_SAMPLE_PX = 4
 
 
 @dataclass
@@ -130,6 +158,29 @@ def classify_forage_condition(
         raw=raw,
         class_fractions=fractions,
     )
+
+
+def classify_water_presence(ndwi: float | None,
+                            sample_px: int = 0) -> WaterPresence:
+    """Present-tense open water at the point, from NDWI (McFeeters).
+
+    Deliberately conservative in both directions. Asymmetry matters here:
+    wrongly saying "no water" sends a herd on a longer trek than necessary,
+    while wrongly saying "water" sends them to a dry hole. So anything between
+    the two thresholds is UNCERTAIN, not a guess either way, and the herder's
+    own report always outranks this (see water_status.py).
+    """
+    if ndwi is None or math.isnan(ndwi):
+        return WaterPresence.UNKNOWN
+    if sample_px < MIN_WATER_SAMPLE_PX:
+        return WaterPresence.UNKNOWN
+
+    t = get_advisory_thresholds().water
+    if ndwi >= t["ndwi_open_water_threshold"]:
+        return WaterPresence.WATER_SEEN
+    if ndwi < t["ndwi_no_water_threshold"]:
+        return WaterPresence.NO_WATER_SEEN
+    return WaterPresence.UNCERTAIN
 
 
 def classify_water_reliability(gsw_monthly_recurrence: float | None) -> WaterReliability:
