@@ -50,33 +50,28 @@ def test_mercator_roundtrip() -> None:
 
 
 def test_classification() -> None:
+    """Delegates to the shared classifier (app/services/forage.py).
+
+    This used to duplicate the renderer's sequential-overwrite logic inline, so
+    it asserted the bug rather than the renderer: a green pixel with low SATVI
+    or high BSI was repainted "bare". See docs/adr/002-one-classifier.md and
+    tests/test_forage.py, which is now the real home for these checks.
+    """
     import numpy as np
 
-    t = __import__("app.config", fromlist=["get_advisory_thresholds"]).get_advisory_thresholds().vegetation
+    from app.services.forage import ForageClass, classify_array
+
     ndvi = np.array([[0.5, 0.1, 0.1], [0.2, 0.15, 0.3], [0.1, np.nan, 0.3]])
     satvi = np.array([[0.1, 0.3, 0.02], [0.2, 0.13, 0.1], [0.4, 0.1, 0.3]])
     bsi = np.array([[0.2, 0.05, 0.3], [0.08, 0.2, 0.1], [0.1, 0.2, 0.3]])
+    classes = classify_array(ndvi.ravel(), satvi.ravel(), bsi.ravel()).reshape(ndvi.shape)
 
-    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
-    classes = np.full(ndvi.shape, 0, dtype=np.uint8)
-    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1  # green
-    classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2  # dry
-    classes[good & (satvi < t["satvi_bare_threshold"])] = 3  # bare
-    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
-    classes[good & (classes == 0)] = 4  # uncertain
-
-    # (0,0): NDVI 0.5 -> green (1)
-    assert classes[0, 0] == 1, classes
-    # (0,1): NDVI 0.1, SATVI 0.3, BSI 0.05 -> dry (2)
-    assert classes[0, 1] == 2, classes
-    # (0,2): BSI 0.3 -> bare (3)
-    assert classes[0, 2] == 3, classes
-    # (1,0): SATVI 0.2, BSI 0.08 -> dry (2)
-    assert classes[1, 0] == 2, classes
-    # (2,1): nan -> nodata (0)
-    assert classes[2, 1] == 0, classes
-    print("classification OK")
+    assert classes[0, 0] == ForageClass.GREEN_GROWING, classes   # NDVI 0.5 wins
+    assert classes[0, 1] == ForageClass.DRY_FORAGE, classes      # cured grass
+    assert classes[0, 2] == ForageClass.BARE_DEGRADED, classes   # BSI 0.3
+    assert classes[1, 0] == ForageClass.DRY_FORAGE, classes
+    assert classes[2, 1] == ForageClass.NODATA, classes          # nan
+    print("classification OK (shared classifier)")
 
 
 def main() -> None:

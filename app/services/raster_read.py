@@ -18,7 +18,7 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import rasterio
@@ -27,6 +27,8 @@ from rasterio.io import MemoryFile
 from shapely import contains_xy
 from shapely.geometry import shape
 
+from app.services import forage
+from app.services.forage import I_BSI, I_NDVI, I_SATVI, ForageClass
 from app.services.storage import (
     cog_key,
     cog_overview_key,
@@ -44,12 +46,36 @@ DECIMATE = 4
 @dataclass
 class ZoneStats:
     means: dict[str, float]
-    valid_pixel_count: int
+    #: Pixels falling inside the ring polygon. This is what the old
+    #: `valid_pixel_count` actually counted, under a name that implied data.
+    in_ring_count: int
     total_pixel_count: int
+    #: Real finite-value count per band. Previously computed inside the loop and
+    #: discarded, which is why nothing could detect a clouded-out read.
+    valid_counts: dict[str, int] = field(default_factory=dict)
+    #: Pixels with usable data in EVERY band the classifier needs.
+    classified_count: int = 0
+    #: Share of classifiable pixels per forage class.
+    class_fractions: dict[ForageClass, float] = field(default_factory=dict)
 
     @property
     def coverage_ratio(self) -> float:
-        return self.valid_pixel_count / self.total_pixel_count if self.total_pixel_count else 0.0
+        """Share of in-ring pixels carrying usable data in every classifier band.
+
+        The old implementation returned in_ring / bounding-box, which is pi/4 for
+        any circle: measured at four radii over a 60%-clouded raster it returned
+        0.717, 0.775, 0.765, 0.775 — the same numbers it would return under a
+        clear sky. It could not detect the one failure it existed to catch.
+        """
+        return self.classified_count / self.in_ring_count if self.in_ring_count else 0.0
+
+    @property
+    def usable_fraction(self) -> float | None:
+        """Share of classifiable pixels an animal can graze, or None if unreadable."""
+        if not self.class_fractions:
+            return None
+        return (self.class_fractions[ForageClass.GREEN_GROWING]
+                + self.class_fractions[ForageClass.DRY_FORAGE])
 
 
 def _read_band_means(out: np.ndarray, transform, geom) -> ZoneStats:
@@ -72,7 +98,7 @@ def _read_band_means(out: np.ndarray, transform, geom) -> ZoneStats:
         # No overlap between the raster grid and the polygon.
         return ZoneStats(
             means={name: float("nan") for name in BAND_NAMES[: out.shape[0]]},
-            valid_pixel_count=0,
+            in_ring_count=0,
             total_pixel_count=0,
         )
 
@@ -82,16 +108,39 @@ def _read_band_means(out: np.ndarray, transform, geom) -> ZoneStats:
     mask = contains_xy(geom, X, Y)
 
     means: dict[str, float] = {}
-    total = mask.size
-    valid = int(mask.sum())
+    valid_counts: dict[str, int] = {}
+    columns: dict[int, np.ndarray] = {}
     for i in range(out.shape[0]):
         band_name = BAND_NAMES[i] if i < len(BAND_NAMES) else f"band_{i + 1}"
         data = out[i][r0:r1, c0:c1][mask]
-        data = data.compressed() if hasattr(data, "compressed") else np.asarray(data).flatten()
-        data = data[np.isfinite(data)]
-        means[band_name] = float(np.mean(data)) if data.size else float("nan")
+        # Fill rather than compress: the per-band vectors must stay ALIGNED so
+        # the three classifier bands can be read pixel-by-pixel. compressed()
+        # drops a different set of positions from each band, which would
+        # silently classify NDVI from one pixel against SATVI from another.
+        data = np.ma.filled(data, np.nan) if np.ma.isMaskedArray(data) else np.asarray(data)
+        data = data.ravel()
+        columns[i] = data
+        finite = data[np.isfinite(data)]
+        means[band_name] = float(finite.mean()) if finite.size else float("nan")
+        valid_counts[band_name] = int(finite.size)
 
-    return ZoneStats(means=means, valid_pixel_count=valid, total_pixel_count=total)
+    # Classify the ring pixel by pixel, using the same function the map uses.
+    # This is what lets the advisory report a DISTRIBUTION instead of the class
+    # of a mean — a ring that is 17% green riverine strip and 83% bare averages
+    # to "bare", a label that describes no pixel in it.
+    classes = np.array([], dtype=np.uint8)
+    if out.shape[0] > max(I_NDVI, I_SATVI, I_BSI):
+        classes = forage.classify_array(
+            columns[I_NDVI], columns[I_SATVI], columns[I_BSI])
+
+    return ZoneStats(
+        means=means,
+        in_ring_count=int(mask.sum()),
+        total_pixel_count=int(mask.size),
+        valid_counts=valid_counts,
+        classified_count=int((classes != ForageClass.NODATA).sum()) if classes.size else 0,
+        class_fractions=forage.class_fractions(classes) if classes.size else {},
+    )
 
 
 def read_zone_stats(water_source_id: str, species_zone_geojson: str) -> ZoneStats:
@@ -200,6 +249,34 @@ def _read_via_s3(water_source_id: str, geom) -> ZoneStats:
                 src.width / out_w, src.height / out_h
             )
     return _read_band_means(out, transform, geom)
+
+
+def read_point_indices(water_source_id: str, lon: float, lat: float) -> dict[str, float] | None:
+    """Index values at ONE point — the pixel a herder is standing on.
+
+    This is for labelling, not for advice. When a herder reports "the grazing
+    here is poor", the trainable label is the index vector at *their* location
+    paired with that report, not the mean over a 25 km ring that mostly
+    describes somewhere else.
+
+    Returns None when the COG is unavailable or the point falls outside it.
+    """
+    res = read_overview_array(water_source_id, max_dim=1024)
+    if res is None:
+        return None
+    arr, transform = res
+
+    col = int((lon - transform.c) / transform.a)
+    row = int((lat - transform.f) / transform.e)
+    if not (0 <= row < arr.shape[1] and 0 <= col < arr.shape[2]):
+        return None
+
+    out: dict[str, float] = {}
+    for i in range(min(arr.shape[0], len(BAND_NAMES))):
+        v = float(arr[i][row, col])
+        if math.isfinite(v):
+            out[BAND_NAMES[i]] = v
+    return out or None
 
 
 def read_overview_array(water_source_id: str, bands: list[int] | None = None,

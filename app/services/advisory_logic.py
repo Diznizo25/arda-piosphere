@@ -12,10 +12,12 @@ abnormal, since dry-season lows are usually not a problem.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
 from app.config import get_advisory_thresholds
+from app.services import forage
 
 
 class ForageCondition(str, Enum):
@@ -35,12 +37,42 @@ class WaterReliability(str, Enum):
 @dataclass
 class ForageAssessment:
     condition: ForageCondition
-    seasonally_normal: bool
+    #: True = normal for the season, False = abnormally poor, None = NOT KNOWN.
+    #: None matters: it is the difference between "this is worse than usual" and
+    #: "we could not tell", and only one of those should reach a herder.
+    seasonally_normal: bool | None
     curing_stage_note: str | None
     raw: dict[str, float]
+    #: Share of classifiable ring pixels per forage class, when the caller has
+    #: it. A ring that is 17% green riverine strip and 83% bare averages to
+    #: "bare" — a label describing no pixel in it — so the fractions, not the
+    #: mean, are what should be reported.
+    class_fractions: dict[str, float] | None = None
+    #: True when no band could be read at all.
+    no_data: bool = False
 
 
-def classify_forage_condition(band_means: dict[str, float]) -> ForageAssessment:
+#: Map the shared classifier's classes onto the advisory's public vocabulary.
+_CLASS_TO_CONDITION = {
+    forage.ForageClass.GREEN_GROWING: ForageCondition.GREEN_GROWING,
+    forage.ForageClass.DRY_FORAGE: ForageCondition.DRY_FORAGE_AVAILABLE,
+    forage.ForageClass.BARE_DEGRADED: ForageCondition.BARE_DEGRADED,
+    forage.ForageClass.UNCERTAIN: ForageCondition.UNCERTAIN,
+}
+
+
+def classify_forage_condition(
+    band_means: dict[str, float],
+    class_fractions: dict[forage.ForageClass, float] | None = None,
+) -> ForageAssessment:
+    """Classify a ring from its band means, and from its class distribution
+    when the caller has one.
+
+    `class_fractions` is strongly preferred. The means are kept because the
+    curing-stage and seasonal-normality signals (NDMI, VCI) are genuinely
+    ring-level questions, but the headline condition should come from what the
+    pixels actually are, not from what their average looks like.
+    """
     t = get_advisory_thresholds()
     veg = t.vegetation
     seasonal = t.seasonal
@@ -50,33 +82,53 @@ def classify_forage_condition(band_means: dict[str, float]) -> ForageAssessment:
     bsi = band_means.get("BSI", float("nan"))
     ndmi = band_means.get("NDMI", float("nan"))
     vci = band_means.get("VCI", float("nan"))
+    raw = {"NDVI": ndvi, "SATVI": satvi, "BSI": bsi, "NDMI": ndmi, "VCI": vci}
 
-    if ndvi >= veg["ndvi_green_threshold"]:
-        condition = ForageCondition.GREEN_GROWING
-    elif satvi >= veg["satvi_dry_forage_threshold"] and bsi < veg["bsi_high_threshold"]:
-        # The core correction this system exists to make: high SATVI alongside
-        # low NDVI is standing dry forage (bsi below the bare-soil cutoff), not
-        # bare/poor land.
-        condition = ForageCondition.DRY_FORAGE_AVAILABLE
-    elif satvi < veg["satvi_bare_threshold"] or bsi >= veg["bsi_high_threshold"]:
-        condition = ForageCondition.BARE_DEGRADED
+    if class_fractions:
+        dominant = max(class_fractions, key=lambda c: class_fractions[c])
+        condition = _CLASS_TO_CONDITION[dominant]
+        readable = True
+        fractions = {c.name.lower(): v for c, v in class_fractions.items()}
     else:
-        condition = ForageCondition.UNCERTAIN
+        cls = forage.classify_one(ndvi, satvi, bsi)
+        readable = cls is not forage.ForageClass.NODATA
+        condition = _CLASS_TO_CONDITION.get(cls, ForageCondition.UNCERTAIN)
+        fractions = None
 
-    # VCI: is "low" actually abnormal for this time of year, or just normal dry season?
-    seasonally_normal = True
+    # Nothing readable: say so, and do NOT fall through to a confident label.
+    # The previous version reached UNCERTAIN here and then set
+    # seasonally_normal=False, because `nan >= 35` is False — which told a
+    # herder conditions were "worse than usual for this season" on the strength
+    # of bands that were never read.
+    if not readable:
+        return ForageAssessment(
+            condition=ForageCondition.UNCERTAIN,
+            seasonally_normal=None,
+            curing_stage_note=None,
+            raw=raw,
+            class_fractions=None,
+            no_data=True,
+        )
+
+    # VCI: is "low" actually abnormal for this time of year, or just normal dry
+    # season? Unknown when VCI itself could not be read.
+    seasonally_normal: bool | None = True
     if condition in (ForageCondition.BARE_DEGRADED, ForageCondition.UNCERTAIN):
-        seasonally_normal = vci >= seasonal["vci_abnormally_poor_threshold"]
+        seasonally_normal = (
+            None if math.isnan(vci)
+            else vci >= seasonal["vci_abnormally_poor_threshold"]
+        )
 
     curing_note = None
-    if condition == ForageCondition.DRY_FORAGE_AVAILABLE:
+    if condition == ForageCondition.DRY_FORAGE_AVAILABLE and not math.isnan(ndmi):
         curing_note = "still_curing" if ndmi > veg["ndmi_curing_threshold"] else "fully_cured"
 
     return ForageAssessment(
         condition=condition,
         seasonally_normal=seasonally_normal,
         curing_stage_note=curing_note,
-        raw={"NDVI": ndvi, "SATVI": satvi, "BSI": bsi, "NDMI": ndmi, "VCI": vci},
+        raw=raw,
+        class_fractions=fractions,
     )
 
 
@@ -85,8 +137,6 @@ def classify_water_reliability(gsw_monthly_recurrence: float | None) -> WaterRel
     UNKNOWN state when the COG has no valid GSW data for the zone (NaN/None).
     Never report "unreliable" just because the data is missing — that would tell
     a herder a water point is bad when we simply don't know."""
-    import math
-
     t = get_advisory_thresholds()
     if gsw_monthly_recurrence is None or math.isnan(gsw_monthly_recurrence):
         return WaterReliability.UNKNOWN

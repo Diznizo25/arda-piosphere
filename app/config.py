@@ -163,7 +163,12 @@ class SpeciesRingConfig:
         if eff <= 0:
             return "critical"
         frac = distance_km / eff
-        if frac < self.zone_fracs["far"]:
+        # comfortable_frac, not far_frac. The map (map_renderer.py) and the river
+        # ribbons (river_zones.py) both DRAW the comfortable boundary at 0.5R,
+        # while this returned "comfortable" all the way to 0.8R — so a herder at
+        # 0.71R sat in the amber band on their own map while the text said
+        # nothing, because the warning lines only fire on far/critical.
+        if frac < self.zone_fracs["comfortable"]:
             return "comfortable"
         if frac < self.zone_fracs["critical"]:
             return "far"

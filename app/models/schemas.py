@@ -39,6 +39,18 @@ class AdvisoryResult(BaseModel):
     rain_forecast_mm: float | None = None
     rain_onset_date: str | None = None
     rain_confidence: str | None = None
+    #: Share of classifiable ring pixels per forage class. The headline number a
+    #: herder can act on — a ring mean of the same pixels can read "bare" while
+    #: a fifth of the ring is grazeable.
+    class_fractions: dict[str, float] | None = None
+    #: Share of the ring the satellite could actually read this cycle.
+    coverage_ratio: float | None = None
+    #: Imagery date behind the forage claim, so a caller can judge its age.
+    observed_at: datetime | None = None
+    #: Set when the forage half was deliberately withheld ("low_coverage",
+    #: "stale_data"). Distinguishes "we looked and it is bare" from "we could
+    #: not look" — which the old API could not express.
+    no_forage_reason: str | None = None
 
 
 class GroundTruthReportRequest(BaseModel):

@@ -40,7 +40,7 @@ from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import shape
 
 from app.config import get_advisory_thresholds
-from app.services import water_sources
+from app.services import forage, water_sources
 
 IMG_SIZE = 1024
 TILE = 256
@@ -1004,20 +1004,15 @@ def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     far-away global centroid. Falls back to the global weighted centroid when
     no herder position is supplied. score = 3 (grass) or 2 (dry forage).
     """
-    t = get_advisory_thresholds().vegetation
+    # One classifier, shared with the text advisory (app/services/forage.py).
+    # The previous version here assigned green first and then overwrote it with
+    # "bare" whenever SATVI was low or BSI high — which repainted riparian green
+    # canopy red while the words in the same reply called it good grazing.
     ndvi, satvi, bsi = arr[0], arr[1], arr[2]
+    classes = forage.classify_array(ndvi, satvi, bsi).reshape(ndvi.shape)
 
-    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
-    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
-    # 1 green | 2 dry forage | 3 bare | 4 uncertain
-    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
-    classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2
-    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
-    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
-    classes[good & (classes == 0)] = 4  # uncertain
-
-    score = np.where(classes == 1, 3.0, np.where(classes == 2, 2.0, 0.0))
+    score = np.where(classes == forage.ForageClass.GREEN_GROWING, 3.0,
+                     np.where(classes == forage.ForageClass.DRY_FORAGE, 2.0, 0.0))
     good_px = score > 0
     if not good_px.any():
         return None, classes
@@ -1067,12 +1062,10 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
 
     best, classes = _nearest_good_patch(arr, transform, herder_lon, herder_lat)
 
-    # Fraction of valid pixels that are usable forage (for the legend note).
-    usable = int((classes == 1).sum()) + int((classes == 2).sum())
-    valid_px = int((classes > 0).sum())
-    note = None
-    if valid_px:
-        note = f"{100 * usable / valid_px:.0f}% usable pasture"
+    # Share of CLASSIFIABLE pixels that are usable forage, from the same helper
+    # the advisory text uses — so the legend and the message cannot disagree.
+    usable = forage.usable_fraction(classes)
+    note = f"{100 * usable:.0f}% usable pasture" if usable is not None else None
 
     # Sample the classification into the IMG_SIZE viewport with an accurate
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
