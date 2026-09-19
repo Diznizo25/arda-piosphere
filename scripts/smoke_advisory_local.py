@@ -55,7 +55,7 @@ def main() -> int:
         m = stats.means
         print(
             f"{ws_id[:8]} [{r['species']:<6} r={r['radius_km']:>2}km] "
-            f"px={stats.valid_pixel_count:>6} NDVI={m.get('NDVI', float('nan')):+.3f} "
+            f"px={stats.classified_count:>6}/{stats.in_ring_count} NDVI={m.get('NDVI', float('nan')):+.3f} "
             f"SATVI={m.get('SATVI', float('nan')):+.3f} BSI={m.get('BSI', float('nan')):+.3f} "
             f"VCI={m.get('VCI', float('nan')):5.1f} GSW={m.get('GSW_MONTHLY_RECURRENCE', float('nan')):5.1f} "
             f"-> {forage.condition.value} (norm={forage.seasonally_normal}, "

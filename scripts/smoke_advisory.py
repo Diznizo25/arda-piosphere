@@ -57,7 +57,7 @@ def main() -> int:
                 continue
             m = stats.means
             print(
-                f"  [{species:<6} r={z['radius_km']:>2}km] px={stats.valid_pixel_count:>6} "
+                f"  [{species:<6} r={z['radius_km']:>2}km] px={stats.classified_count:>6}/{stats.in_ring_count} "
                 f"NDVI={m.get('NDVI', float('nan')):+.3f} SATVI={m.get('SATVI', float('nan')):+.3f} "
                 f"BSI={m.get('BSI', float('nan')):+.3f} VCI={m.get('VCI', float('nan')):5.1f} "
                 f"GSW={m.get('GSW_MONTHLY_RECURRENCE', float('nan')):5.1f} "

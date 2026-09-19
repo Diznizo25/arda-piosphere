@@ -1,0 +1,44 @@
+name: tests
+
+# Pure-logic gate. No network, no database, no credentials — so it can run on
+# every push and every PR. Anything needing live infrastructure stays in
+# scripts/ as an operator tool.
+#
+# The golden files under tests/golden/ are the point: a diff there is a
+# deliberate, reviewable change to the text a pastoralist reads on their phone.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Keep in sync with .python-version. requirements.txt pins
+          # rasterio==1.3.11 and osmium==3.7.0, which ship no cp312 wheels.
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Check golden files were not silently regenerated
+        # UPDATE_GOLDEN must never be set in CI: a run that rewrites the golden
+        # files would make every wording change pass review unseen.
+        run: |
+          if [ -n "${UPDATE_GOLDEN:-}" ]; then
+            echo "UPDATE_GOLDEN is set in CI — refusing" >&2; exit 1
+          fi
+          git diff --exit-code -- tests/golden/ || {
+            echo "golden files changed during the test run" >&2; exit 1; }

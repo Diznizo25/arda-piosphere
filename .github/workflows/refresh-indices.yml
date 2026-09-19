@@ -23,8 +23,10 @@ name: refresh-indices
 
 on:
   schedule:
-    # Every 14 days at 03:00 UTC.
-    - cron: "0 3 */14 * *"
+    # 03:00 UTC on the 1st and 15th. NOT "0 3 */14 * *" — day-of-month stepping
+    # fires on the 1st, 15th and 29th and then resets, so the real gap swings
+    # between 2 and 17 days while the comment claims a steady 14.
+    - cron: "0 3 1,15 * *"
   workflow_dispatch: {}
 
 jobs:

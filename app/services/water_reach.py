@@ -36,6 +36,7 @@ select
     ws.status_reports,
     st_x(ws.geom) as lon,
     st_y(ws.geom) as lat,
+    coalesce(ws.indices_as_of::timestamptz, pz.last_computed) as observed_at,
     st_asgeojson(pz.geom) as species_zone_geojson,
     st_distance(ws.geom::geography, st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography) as distance_m
 from piosphere_zones pz
@@ -63,6 +64,7 @@ select
     ws.status_reports,
     st_x(ws.geom) as lon,
     st_y(ws.geom) as lat,
+    coalesce(ws.indices_as_of::timestamptz, pz.last_computed) as observed_at,
     st_asgeojson(pz.geom) as species_zone_geojson,
     st_distance(ws.geom::geography, st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography) as distance_m
 from piosphere_zones pz
@@ -93,6 +95,15 @@ class ReachableWater:
     status_updated_at: datetime | None = None
     status_reports: int = 0
     needs_check: bool = True
+    #: The date the satellite snapshot was TAKEN — water_sources.indices_as_of,
+    #: falling back to piosphere_zones.last_computed where the archive predates
+    #: that column.
+    #:
+    #: The distinction matters: last_computed is set to now() when the transfer
+    #: finishes, so it is the PIPELINE RUN time, not the imagery date. They
+    #: diverge whenever a refresh runs late, and reporting the run time as the
+    #: observation date overstates freshness by exactly the amount that matters.
+    observed_at: datetime | None = None
 
 
 def _stale_days() -> int:
@@ -141,6 +152,7 @@ def find_nearest_reachable_water(lon: float, lat: float, species: str, limit: in
             water_type=r.get("water_type"),
             status=r.get("status"),
             status_updated_at=r.get("status_updated_at"),
+            observed_at=r.get("observed_at"),
             status_reports=int(r.get("status_reports") or 0),
             needs_check=water_status.needs_check(r.get("status"),
                                                  r.get("status_updated_at"),
