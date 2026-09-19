@@ -14,7 +14,7 @@ import json
 import logging
 
 from app.db import get_pg_connection
-from app.services import water_status
+from app.services import alerts, water_status
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +193,24 @@ def record_ground_truth(pastoralist, report_type: str, raw_text: str,
 
     log.info("Recorded ground truth report_type=%s pastoralist=%s water_source_id=%s status=%s",
              report_type, pastoralist.phone_number, water_source_id, status)
+
+    # Tell everyone else who drinks here. Deliberately AFTER the commit: the
+    # report is the durable thing, the broadcast is best-effort, and a herder
+    # submitting a report must never see a failure because a fan-out stumbled.
+    #
+    # This is the point of the whole alerting phase. Before it, a herder could
+    # report a borehole broken and nobody else was told — they walked there and
+    # found it dead. pastoralists.water_source_id already recorded who relies on
+    # each point, and it was never read for this.
+    if water_source_id and status in alerts.ALERTABLE_STATUSES:
+        try:
+            decisions = alerts.notify_water_status_change(
+                water_source_id, status,
+                reporter_pastoralist_id=pastoralist.id)
+            if decisions:
+                log.info("water-status alert fan-out: %s", alerts.summarise(decisions))
+        except Exception:  # noqa: BLE001
+            log.exception("alert fan-out failed (report was still recorded)")
 
 
 def water_status_for(water_source_id: str) -> dict | None:

@@ -35,6 +35,43 @@ def send_text(to: str, body: str) -> None:
     _post(payload)
 
 
+def send_template(to: str, template_name: str, language_code: str,
+                  body_params: list[str] | None = None) -> None:
+    """Send a pre-approved Meta template.
+
+    This is the ONLY message type WhatsApp permits more than 24 hours after the
+    herder's last inbound message, so it is what makes proactive alerting reach
+    everyone rather than only herders who happened to message today.
+
+    Templates are approved in Meta Business Manager and the name + language must
+    match the approved entry exactly. Approval takes days to weeks, so submit
+    before the alert logic that will use it is finished — it gates nothing else.
+
+    Keep the vocabulary small and event-shaped. Each template is a promise about
+    what kind of interruption it represents:
+      water_status_changed   a point this herder relies on was reported unusable
+      forage_declining       their ring crossed a depletion threshold
+      rain_upstream          rain fell within reach; forage expected in ~N days
+
+    Alert on CHANGE only. A message that arrives every day is a message nobody
+    reads, and one false alarm costs more trust here than ten correct ones earn.
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},   # e.g. "sw", "en"
+            "components": ([{
+                "type": "body",
+                "parameters": [{"type": "text", "text": p} for p in body_params],
+            }] if body_params else []),
+        },
+    }
+    _post(payload)
+
+
 def send_image_bytes_url(to: str, image_url: str, caption: str | None = None) -> None:
     """Send an image already reachable at a public URL (e.g. the generated
     map image, uploaded to R2/CDN first)."""
