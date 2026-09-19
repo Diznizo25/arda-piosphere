@@ -12,7 +12,9 @@ from app.models.schemas import AdvisoryRequest, AdvisoryResult
 from app.services import ai, water_reach, raster_read
 from app.services.advisory_logic import (
     ForageCondition,
+    WaterPresence,
     classify_forage_condition,
+    classify_water_presence,
     classify_water_reliability,
 )
 from app.services.i18n import format_advisory_message
@@ -190,6 +192,21 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
 
     assessment = classify_forage_condition(stats.means, stats.class_fractions)
     water_reliability = classify_water_reliability(stats.means.get("GSW_MONTHLY_RECURRENCE", 0.0))
+
+    # Present-tense water, from the NDWI band that has been computed, exported
+    # and stored in every COG since the beginning and read by nothing. Sampled
+    # at the point itself, not the ring: a 25 km ring mean of NDWI is dry land.
+    # Reported ALONGSIDE reliability, never instead of it — one is a
+    # climatology, the other an observation, and conflating them is how a herder
+    # gets told a dry pan is "reliable this season".
+    water_presence = WaterPresence.UNKNOWN
+    try:
+        signal = raster_read.read_water_signal(nearest.water_source_id,
+                                               nearest.lon, nearest.lat)
+        if signal is not None:
+            water_presence = classify_water_presence(signal[0], signal[1])
+    except Exception:  # noqa: BLE001 — never fail an advisory over a bonus signal
+        log.debug("water signal unavailable", exc_info=True)
     # Harsh/dry-season flag: degraded (overgrazed/bare) forage around this water
     # right now. We already classify it from the overview COG — no extra compute.
     dry_harsh = assessment.condition == ForageCondition.BARE_DEGRADED
@@ -218,6 +235,7 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         grazing_zone=grazing_zone,
         effective_radius_km=effective_radius_km,
         dry_harsh=dry_harsh,
+        water_presence=water_presence,
         class_fractions=assessment.class_fractions,
         patch_bearing_deg=patch[0] if patch else None,
         patch_distance_km=patch[1] if patch else None,
@@ -266,6 +284,7 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
         seasonally_normal=assessment.seasonally_normal,
         curing_stage_note=assessment.curing_stage_note,
         water_reliability=water_reliability.value,
+        water_presence=water_presence.value,
         grazing_zone=grazing_zone,
         effective_radius_km=round(effective_radius_km, 1),
         message=message,

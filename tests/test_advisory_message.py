@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.services.advisory_logic import ForageCondition, WaterReliability
+from app.services.advisory_logic import ForageCondition, WaterPresence, WaterReliability
 from app.services.i18n import format_advisory_message
 from tests.conftest import GOLDEN_DIR
 
@@ -105,6 +105,25 @@ SCENARIOS: dict[str, dict] = {
         "patch_bearing_deg": None, "patch_distance_km": None,
         "observed_at": None,
     },
+    # Phase 2: the climatology and the observation disagree. Both are reported,
+    # in that order, so the herder can see the contradiction instead of only the
+    # reassuring half.
+    "reliable_but_observed_dry_swa": {
+        **BASE, "language": "swahili",
+        "condition": ForageCondition.DRY_FORAGE_AVAILABLE, "seasonally_normal": True,
+        "class_fractions": MOSTLY_DRY_FORAGE,
+        "water_presence": WaterPresence.NO_WATER_SEEN,
+        "patch_bearing_deg": 200.0, "patch_distance_km": 2.4,
+        "observed_at": FRESH,
+    },
+    "water_seen_eng": {
+        **BASE, "language": "english",
+        "condition": ForageCondition.DRY_FORAGE_AVAILABLE, "seasonally_normal": True,
+        "class_fractions": MOSTLY_DRY_FORAGE,
+        "water_presence": WaterPresence.WATER_SEEN,
+        "patch_bearing_deg": 200.0, "patch_distance_km": 2.4,
+        "observed_at": FRESH,
+    },
     "far_from_water_warns_swa": {
         **BASE, "language": "swahili", "distance_km": 5.0,
         "grazing_zone": "far",
@@ -169,3 +188,12 @@ def test_a_patch_beyond_the_herders_reach_is_not_offered():
     camel = {**SCENARIOS["bare_and_abnormal_swa"],
              "species": "camel", "effective_radius_km": 25.0}
     assert "Malisho bora" in format_advisory_message(**camel)
+
+
+def test_the_climatology_never_speaks_alone_when_the_satellite_disagrees():
+    """A pan dry for three months still reads "reliable" from JRC recurrence.
+    The observation must appear alongside it, dated, so the herder sees both."""
+    msg = format_advisory_message(**SCENARIOS["reliable_but_observed_dry_swa"])
+    assert "maji ya kutegemewa" in msg        # the climatology, unchanged
+    assert "haikuona maji hapa" in msg        # ...and the contradiction
+    assert "Uliza kabla ya kwenda" in msg     # ...and what to do about it

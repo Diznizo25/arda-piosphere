@@ -52,9 +52,11 @@ class ForageClass(IntEnum):
 #: Classes an animal can actually eat.
 USABLE = (ForageClass.GREEN_GROWING, ForageClass.DRY_FORAGE)
 
-#: Band positions in the COG stack (see raster_read.BAND_NAMES). The three bands
-#: this classifier needs, as 0-based indexes into that stack.
-I_NDVI, I_SATVI, I_BSI = 0, 2, 3
+#: Band positions in the COG stack (see raster_read.BAND_NAMES), 0-based.
+#: I_NDWI is not used by the forage classifier — it answers the water question
+#: (raster_read.read_water_signal) — but it lives here so the band layout is
+#: declared in exactly one place.
+I_NDVI, I_NDRE, I_SATVI, I_BSI, I_NDMI, I_NDWI, I_VCI, I_GSW = range(8)
 
 
 def classify_array(ndvi, satvi, bsi) -> np.ndarray:
