@@ -284,10 +284,21 @@ Design rules the tests enforce:
 Probe it in production without WhatsApp:
 
 ```bash
+# resolve a place name on its own
 curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: application/json" \
   -d '{"text":"niko karibu na Kipsing"}' \
   https://arda-piosphere.onrender.com/dev/landmark
+
+# or run the whole chain the way WhatsApp does it: resolve the name first, then
+# answer from the resolved place (add "phone" to reuse one herder's memory)
+curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"text":"nipo Lengwenyi","resolve_landmark":true}' \
+  https://arda-piosphere.onrender.com/dev/chat
 ```
+
+`resolve_landmark: true` matters: without it the probe would report a bare place name
+as an unanswerable question, because the resolution happens in the WhatsApp handler
+*before* the chat layer — a mistake this flag exists to prevent.
 
 ## Containers (self-hosted deployment)
 
@@ -512,6 +523,14 @@ and a grounded conversational layer (`/dev/chat` to probe it).
   boundary, and offer a `suggested_reply` — not a better prompt.
 - Forage trend analysis becomes possible only once a few dated COG archives exist;
   drought onset, green-up timing and recovery should be built on that series.
+- **Coverage is the limit on every answer, not the plumbing.** A herder at Kipsing
+  (north Isiolo) asked for rain and got an honest "no data here" — there is no water
+  point within reach to anchor the outlook to, and the environmental series is keyed
+  by water point. More named water points is what turns that into an answer.
+- Landmark intake searches the gazetteer (384 names) plus our named water points.
+  Names herders actually use that are missing from both — e.g. "Oldonyo Sabor" — get
+  the honest "sijui eneo hilo, tuma eneo lako" reply; adding them to
+  `config/landmarks.geojson` (or as water points) is the fix, not better matching.
 - Vet/disease-risk *hazard windows* (vector flush after sustained rain, crowding at
   shrinking water) need a county veterinary partnership before we promise anything
   about disease; environment alone cannot predict outbreaks.

@@ -98,6 +98,27 @@ async def chat_probe(request: Request, x_debug_key: str = Header(default="")) ->
         )
 
     lat, lon = payload.get("lat"), payload.get("lon")
+    resolved = None
+    if payload.get("resolve_landmark"):
+        # Mirror what the WhatsApp handler does BEFORE the chat layer: a named place
+        # sets the herder's location. Without this the probe under-reports (a bare
+        # place name looks like an unanswerable question), which is exactly the
+        # mistake this flag exists to prevent.
+        from app.services import landmarks
+
+        res = landmarks.resolve(text, near=(lat, lon) if lat and lon else None)
+        if res.matched and res.best:
+            lat, lon = res.best.lat, res.best.lon
+            resolved = res.best.as_dict()
+        else:
+            return {
+                "ok": True, "answer": None, "would_show_menu": False,
+                "landmark": {"status": res.status, "reason": res.reason,
+                             "candidates": [m.as_dict() for m in res.candidates]},
+                "sections": chat.intent_sections(text), "used_llm": False,
+                "disease_guardrail": chat.is_disease_question(text),
+            }
+
     sections = chat.intent_sections(text)
     used = {"llm": False}
 
@@ -117,6 +138,8 @@ async def chat_probe(request: Request, x_debug_key: str = Header(default="")) ->
         "sections": sections,
         "used_llm": used["llm"],
         "disease_guardrail": chat.is_disease_question(text),
+        "resolved_landmark": resolved,
+        "coordinates_used": {"lat": lat, "lon": lon} if lat and lon else None,
     }
 
 
