@@ -317,7 +317,9 @@ MENU_MSG = {
                "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
                "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.\n"
                "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
-               "'ng'ombe 40 wanahitaji maji ngapi?'.",
+               "'ng'ombe 40 wanahitaji maji ngapi?'.\n"
+               "Au niambie mahali ulipo kwa jina unalojua — k.m. 'niko karibu na "
+               "Oldonyo Sabor'.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
                "1. 📍 LOCATION — water & pasture info near you\n"
                "2. 🏷 PIN — register your new water point\n"
@@ -330,7 +332,9 @@ MENU_MSG = {
                "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
                "Send the matching word (e.g. 'weight') or the number.\n"
                "You can also just ask a question — e.g. 'when will it rain?' or "
-               "'how much water do 40 cattle need?'.",
+               "'how much water do 40 cattle need?'.\n"
+               "Or tell me where you are using a name you know — e.g. 'I am near "
+               "Oldonyo Sabor'.",
 }
 
 MENU_NUMBERS = {
@@ -630,7 +634,18 @@ def _process_voice_note(phone: str, pastoralist, audio: dict) -> None:
 def _handle_location(phone: str, pastoralist, location: dict) -> None:
     lat, lon = location["latitude"], location["longitude"]
     update_last_location(phone, lon, lat)
+    _deliver_location_info(phone, pastoralist, lat, lon)
 
+
+def _deliver_location_info(phone: str, pastoralist, lat: float, lon: float,
+                           place_label: str | None = None) -> None:
+    """The full "everything about this place" reply.
+
+    Shared by the WhatsApp location pin AND the landmark intake, so a herder who
+    names a place gets exactly what a herder who shares coordinates gets — water
+    reach, pasture condition, the rain outlook, the map, and the one-tap question
+    the satellite cannot answer. One code path means they can never drift apart.
+    """
     if not pastoralist.primary_species:
         whatsapp_client.send_quick_reply_buttons(
             phone,
@@ -655,7 +670,12 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
         # Ask for the one thing the satellite cannot see: is there water TODAY?
         # One-tap answer ("2" = imekauka) -> ground truth -> gates future guidance.
         lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
-        msg = f"{result.message}\n\n{water_status.check_question(lang_key)}"
+        head = ""
+        if place_label:
+            head = (f"📍 Karibu na {place_label}.\n\n"
+                    if pastoralist.preferred_language == "swahili"
+                    else f"📍 You are near {place_label}.\n\n")
+        msg = f"{head}{result.message}\n\n{water_status.check_question(lang_key)}"
         _send_reply(phone, pastoralist, msg, voice=pastoralist.voice_replies)
         try:
             set_last_advisory_water_source(phone, result.water_source_id)
@@ -666,6 +686,98 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
     # No known water point reaches this location -> offer to register a new one.
     _send_reply(phone, pastoralist, NEW_WATER_POINT_OFFER[pastoralist.preferred_language],
                 voice=pastoralist.voice_replies)
+
+
+def _resolve_message_place(phone: str, pastoralist, text: str):
+    """Is this message telling us WHERE the herder is, in words?
+
+    Returns (landmark | None, handled):
+      - (None, False)  nothing recognisable: caller continues normal dispatch
+      - (mark, False)  recognised: location remembered, caller continues (so a
+                       service question about that place is still answered)
+      - (None, True)   ambiguous: we asked which one; caller must stop
+    """
+    from app.services import chat as chat_service
+    from app.services import landmarks
+
+    # Cheap gate first: only spend the name lookup when the message could plausibly
+    # be a place mention (a very short message, or one that says "I am near ...").
+    words = landmarks.tokens(text, keep_stopwords=True)
+    says_where = bool({"niko", "nipo", "hapa", "karibu", "near", "at"} &
+                      set(words))
+    if not says_where and len(words) > 4:
+        return None, False
+    # Use where we last saw them to pick between same-named places (a river runs
+    # for 100+ km and its name matches many points): knowing the herder is in
+    # Wamba beats asking "which Ewaso Nyiro?".
+    near = None
+    try:
+        loc = get_last_location(phone)
+        if loc:
+            near = (loc[1], loc[0])          # (lat, lon)
+    except Exception:  # noqa: BLE001
+        log.debug("last location unavailable for landmark context", exc_info=True)
+    try:
+        res = landmarks.resolve(text, near=near)
+    except TypeError:
+        res = landmarks.resolve(text)
+    except Exception:  # noqa: BLE001
+        log.exception("landmark resolve failed (non-fatal)")
+        return None, False
+
+    if res.status == "none":
+        return None, False
+
+    if res.status == "ambiguous":
+        candidates = res.candidates[:3]
+        set_state(phone, "landmark.confirm",
+                  {"candidates": [m.as_dict() for m in candidates]})
+        whatsapp_client.send_text(
+            phone, landmarks.describe(candidates, pastoralist.preferred_language))
+        return None, True
+
+    mark = res.best
+    update_last_location(phone, mark.lon, mark.lat)
+    try:
+        # Remember it for the chat layer too, so a follow-up ("na nihamie wapi?")
+        # is answered from this place without asking again.
+        chat_service.remember_place(phone, mark.lat, mark.lon, place=mark.label)
+    except Exception:  # noqa: BLE001
+        log.debug("could not remember place for chat (non-fatal)", exc_info=True)
+    return mark, False
+
+
+def _handle_landmark_confirm(phone: str, pastoralist, text: str | None) -> bool:
+    """Herder answered the "which one did you mean?" list with a number.
+
+    Returns True when the reply was consumed here (so nothing else acts on it).
+    """
+    _state, data = get_state(phone)
+    candidates = (data or {}).get("candidates") or []
+    if not candidates:
+        clear_state(phone)
+        return False
+
+    picked = _parse_int(text)
+    if picked is not None and 1 <= picked <= len(candidates):
+        mark = candidates[picked - 1]
+        clear_state(phone)
+        from app.services import chat as chat_service
+
+        update_last_location(phone, mark["lon"], mark["lat"])
+        try:
+            chat_service.remember_place(phone, mark["lat"], mark["lon"],
+                                        place=mark.get("name"))
+        except Exception:  # noqa: BLE001
+            log.debug("could not remember place (non-fatal)", exc_info=True)
+        _deliver_location_info(phone, pastoralist, mark["lat"], mark["lon"],
+                               place_label=mark.get("name"))
+        return True
+
+    # Anything else (a new question, "hakuna", a location pin) exits the flow so the
+    # herder is never trapped by our own question.
+    clear_state(phone)
+    return False
 
 
 def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> None:
@@ -693,6 +805,16 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     # Brand-new (or never-onboarded) users are guided through registration first.
     if not pastoralist.is_onboarded:
         _start_onboarding(phone, pastoralist, text, voice=voice)
+        return
+
+    # Landmark intake: "niko karibu na Oldonyo Sabor", "I am at Wamba market",
+    # "nipo Lengwenyi". It runs AFTER the guided flows on purpose — during the PIN
+    # flow the herder is literally typing a place NAME for a new water point, and
+    # hijacking that would be a bug. Here it recognises where they are, remembers it
+    # for whatever they ask next, and answers a bare place name with the full picture
+    # instead of a menu.
+    place, place_handled = _resolve_message_place(phone, pastoralist, text)
+    if place_handled:
         return
 
     # One-tap water-status reply. Only treated as a report when we JUST asked
@@ -826,6 +948,13 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             "english": "Thank you for the report! It will help us improve information for that area.",
         }[pastoralist.preferred_language]
         _send_reply(phone, pastoralist, thanks, voice=voice)
+        return
+
+    # A named place with no service request is a location statement: give the full
+    # picture (water reach + pasture + rain outlook + map + the one-tap question).
+    if place is not None:
+        _deliver_location_info(phone, pastoralist, place.lat, place.lon,
+                               place_label=place.label)
         return
 
     # Free text that matched no command and was not a ground-truth report is a
@@ -1351,6 +1480,12 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
     if state.startswith("pin."):
         _handle_pin_step(phone, pastoralist, state, data, text)
         return True
+    if state == "landmark.confirm":
+        if _handle_landmark_confirm(phone, pastoralist, text):
+            return True
+        # Not a number: the flow already cleared itself and the message falls
+        # through to normal dispatch (never trapped by our own question).
+        return False
     return False
 
 

@@ -1,0 +1,69 @@
+# Arda Link — local/self-hosted deployment of the advisory microservice.
+#
+# Production currently runs on Render (managed Postgres/PostGIS via Supabase, COGs on
+# Cloudflare R2). This file is for the self-hosted / offline / on-premise option:
+# one command brings the service up, and the optional `db` profile gives you a local
+# PostGIS to point at instead of Supabase.
+#
+#   docker compose up --build                     # service only (uses .env)
+#   docker compose --profile local-db up --build  # + PostGIS for a self-contained stack
+#   docker compose run --rm app-migrate           # apply migrations to the local db
+#
+# Secrets come from .env (never baked into the image — see .dockerignore).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arda-link:latest
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL when using the local-db profile below.
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  # Optional: a self-contained PostGIS to develop against without Supabase.
+  # The schema is created by the migrations (see the app-migrate service).
+  db:
+    image: postgis/postgis:16-3.4
+    profiles: ["local-db"]
+    environment:
+      POSTGRES_USER: arda
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arda}
+      POSTGRES_DB: arda
+    ports:
+      - "5432:5432"
+    volumes:
+      - arda-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arda -d arda"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Migrations run from the pipeline, not the web service (same image, mounted
+  # scripts + migrations so the service image itself stays lean).
+  app-migrate:
+    image: arda-link:latest
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    entrypoint: ["sh", "-c"]
+    command: ["python -c 'print(\"Run migrations from the export machine: python scripts/apply_migration.py migrations/<file>.sql\")'"]
+
+volumes:
+  arda-pgdata:

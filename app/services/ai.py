@@ -103,7 +103,8 @@ def classify_report(text: str) -> str | None:
     return keyword_hit
 
 
-def grounded_answer(system: str, facts_json: str, question: str) -> str | None:
+def grounded_answer(system: str, facts_json: str, question: str,
+                    context: str = "") -> str | None:
     """One grounded chat turn: phrase FACTS in answer to a herder's question.
 
     This is the ONLY place a herder's free-text question reaches a model, and the
@@ -111,13 +112,21 @@ def grounded_answer(system: str, facts_json: str, question: str) -> str | None:
     reply against the facts bundle (app/services/chat.py) and falls back to
     deterministic text if anything is invented, mistranslated or too long.
 
-    Returns None on any failure so the caller can fall back. Note the token
-    budget: this is a reasoning model, and a small max_completion_tokens gets
-    entirely consumed by the hidden reasoning pass, producing an EMPTY reply —
-    measured at 256-400 reasoning tokens per short exchange.
+    `context` is the recap of earlier turns, explicitly labelled as NOT a source of
+    facts — so a follow-up question ("and where should I go?") is understood without
+    letting the recap introduce numbers the bundle does not contain.
+
+    Returns None on any failure so the caller can fall back. Note the token budget:
+    this is a reasoning model, and a small max_completion_tokens gets entirely
+    consumed by the hidden reasoning pass, producing an EMPTY reply — measured at
+    256-400 reasoning tokens per short exchange.
     """
-    user = f"FACTS={facts_json}\n\nSWALI LA MCHUNGAJI / HERDER'S QUESTION: {question}"
-    return _chat(system, user)
+    parts = []
+    if context:
+        parts.append(context)
+    parts.append(f"FACTS={facts_json}")
+    parts.append(f"SWALI LA MCHUNGAJI / HERDER'S QUESTION: {question}")
+    return _chat(system, "\n\n".join(parts))
 
 
 def rephrase_advisory(language: str, base_message: str,

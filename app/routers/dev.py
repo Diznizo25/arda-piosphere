@@ -121,6 +121,40 @@ async def chat_probe(request: Request, x_debug_key: str = Header(default="")) ->
     }
 
 
+@router.post("/landmark")
+async def landmark_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """Resolve a place named in free text, exactly as the WhatsApp intake would.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Useful for checking a spelling
+    herders actually use before trusting it in the field.
+
+    Body: {text}
+    Returns matched / ambiguous / none, with candidates and how each scored.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    payload = await request.json()
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "error": "text is required"}
+
+    from app.services import landmarks
+
+    res = landmarks.resolve(text, include_water_points=payload.get("water_points", True))
+    return {
+        "ok": True,
+        "status": res.status,
+        "reason": res.reason,
+        "tokens": landmarks.tokens(text),
+        "best": res.best.as_dict() if res.best else None,
+        "candidates": [m.as_dict() for m in res.candidates],
+        "prompt": (landmarks.describe(res.candidates, "swahili")
+                   if res.status == "ambiguous" else None),
+    }
+
+
 class _StubHerder:
     """Minimal stand-in for an anonymous probe (matches the Pastoralist fields the
     chat layer reads, so no database row is needed)."""

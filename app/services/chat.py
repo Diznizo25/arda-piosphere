@@ -46,6 +46,14 @@ KNOWLEDGE_PATH = CONFIG_DIR / "pastoral_knowledge.yaml"
 MAX_ANSWER_CHARS = 550
 DAILY_LLM_LIMIT = 40
 
+# Multi-turn memory lives in the existing conversation_state table (no new table):
+# state = "chat.memory", data = {turns: [...], lat, lon, place, at}. Turns are few
+# and short on purpose — a WhatsApp herder sends one line at a time, and long
+# history costs tokens on every message.
+MEMORY_STATE = "chat.memory"
+MEMORY_TURNS = 4
+MEMORY_TTL_HOURS = 6
+
 # Which fact sections a question asks for. Keyword routing is deliberate: it is
 # deterministic, free, testable, and it never mis-routes a factual question into a
 # hallucination the way a classifier model could.
@@ -660,16 +668,23 @@ def llm_calls_today(phone: str) -> int:
 
 
 def answer(pastoralist, question: str, lang: str | None = None, *,
-           gather=None, llm=None, counter=None) -> str | None:
+           gather=None, llm=None, counter=None, memory: dict | None = None,
+           remember=None) -> str | None:
     """Answer one herder question, or return None so the caller shows the menu.
 
-    `gather`, `llm` and `counter` are injectable so the whole path is testable
-    without a database, a model or a network — see scripts/test_chat_layer.py.
+    `gather`, `llm`, `counter`, `memory` and `remember` are injectable so the whole
+    path is testable without a database, a model or a network — see
+    scripts/test_chat_layer.py.
     """
     lang = lang or getattr(pastoralist, "preferred_language", "swahili")
     question = (question or "").strip()
     if not question:
         return None
+    phone = getattr(pastoralist, "phone_number", "") or ""
+
+    # 0) Recall: the herder's last place and what we last told them. This is what
+    #    makes "na nihamie wapi?" work without them repeating where they are.
+    mem = memory if memory is not None else load_memory(phone)
 
     # 1) Disease questions never reach the model, and are never answered with a
     #    guess. This is the one place we deliberately answer less than asked.
@@ -677,11 +692,21 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
         reply = disease_reply(lang)
         _log_chat(pastoralist, question, reply, used_llm=False,
                   reason="disease_guardrail")
+        (remember or remember_turn)(phone, question, reply)
         return reply
 
     sections = intent_sections(question)
     collect = gather or gather_facts
+    # If we remember where they are (they sent a location or named a landmark), use
+    # that as the anchor for this question — it is the most recent thing they told
+    # us, and it is what "where am I / what is here" must be answered from.
+    coords: dict = {}
+    if isinstance(mem, dict) and mem.get("lat") is not None and mem.get("lon") is not None:
+        coords = {"lat": mem["lat"], "lon": mem["lon"]}
     try:
+        facts = collect(pastoralist, question, sections, **coords) or {}
+    except TypeError:
+        # A caller-injected gather() that does not accept coordinates.
         facts = collect(pastoralist, question, sections) or {}
     except Exception:  # noqa: BLE001
         log.exception("chat: fact gathering failed")
@@ -698,9 +723,20 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
     #    hidden thinking tokens, so the cap is about keeping a loop bounded, not
     #    about the per-answer price (which is a fraction of a cent).
     call_llm = llm or ai.grounded_answer
-    phone = getattr(pastoralist, "phone_number", "") or ""
+    context = memory_context(mem, lang) if isinstance(mem, dict) else ""
+    finish = remember or (lambda p, q, a: remember_turn(
+        p, q, a, lat=coords.get("lat"), lon=coords.get("lon"),
+        place=(mem or {}).get("place")))
     if (counter or llm_calls_today)(phone) < DAILY_LLM_LIMIT:
         try:
+            candidate = call_llm(
+                system_prompt(lang),
+                json.dumps(facts, ensure_ascii=False, default=str),
+                question,
+                context,
+            )
+        except TypeError:
+            # A caller-injected llm() with the older 3-argument signature.
             candidate = call_llm(
                 system_prompt(lang),
                 json.dumps(facts, ensure_ascii=False, default=str),
@@ -714,12 +750,118 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
                                       forbidden=code_tokens(facts))
             if ok:
                 _log_chat(pastoralist, question, candidate, used_llm=True)
+                finish(phone, question, candidate)
                 return candidate
             log.warning("chat: rejected model answer (%s)", why)
             _log_chat(pastoralist, question, fallback, used_llm=False,
                       reason=f"rejected:{why}")
+            finish(phone, question, fallback)
             return fallback
 
     _log_chat(pastoralist, question, fallback, used_llm=False, reason="deterministic")
+    finish(phone, question, fallback)
     return fallback
+
+
+
+# --- multi-turn memory -------------------------------------------------------
+# Stored in conversation_state (existing table, no migration). Everything here is
+# fail-open: a memory problem costs context, never an answer.
+
+def load_memory(phone: str) -> dict:
+    """Recent chat context for a herder: last turns + last known place."""
+    if not phone:
+        return {}
+    try:
+        from app.services import conversation
+
+        state, data = conversation.get_state(phone)
+        if state != MEMORY_STATE or not isinstance(data, dict):
+            return {}
+    except Exception:  # noqa: BLE001
+        log.debug("chat memory read failed (non-fatal)", exc_info=True)
+        return {}
+
+    at = data.get("at")
+    if at:
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            when = datetime.fromisoformat(str(at))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - when > timedelta(hours=MEMORY_TTL_HOURS):
+                return {}   # stale: better to forget than to answer from a week ago
+        except Exception:  # noqa: BLE001
+            pass
+    return data
+
+
+def save_memory(phone: str, memory: dict) -> None:
+    if not phone:
+        return
+    try:
+        from app.services import conversation
+
+        conversation.set_state(phone, MEMORY_STATE, memory)
+    except Exception:  # noqa: BLE001
+        log.debug("chat memory write failed (non-fatal)", exc_info=True)
+
+
+def remember_turn(phone: str, question: str, answer: str,
+                  lat: float | None = None, lon: float | None = None,
+                  place: str | None = None) -> dict:
+    """Record a question/answer pair, keeping the last known place."""
+    from datetime import datetime, timezone
+
+    memory = load_memory(phone)
+    turns = list(memory.get("turns") or [])
+    turns.append({"q": (question or "")[:160], "a": (answer or "")[:220]})
+    memory["turns"] = turns[-MEMORY_TURNS:]
+    if lat is not None and lon is not None:
+        memory["lat"], memory["lon"] = lat, lon
+    if place:
+        memory["place"] = place
+    memory["at"] = datetime.now(timezone.utc).isoformat()
+    save_memory(phone, memory)
+    return memory
+
+
+def remember_place(phone: str, lat: float, lon: float,
+                   place: str | None = None) -> None:
+    """Remember where the herder is, so follow-ups ("and where should I go?")
+    do not need them to repeat it. Called by the landmark intake too."""
+    from datetime import datetime, timezone
+
+    memory = load_memory(phone)
+    memory["lat"], memory["lon"] = lat, lon
+    if place:
+        memory["place"] = place
+    memory["at"] = datetime.now(timezone.utc).isoformat()
+    save_memory(phone, memory)
+
+
+def memory_context(memory: dict, lang: str = "swahili") -> str:
+    """A short, factual recap for the model prompt ("" when nothing to recall).
+
+    Only facts we already told the herder are included, so the model cannot use the
+    recap as a new source of truth — it is context, not data.
+    """
+    if not memory:
+        return ""
+    bits: list[str] = []
+    if memory.get("place"):
+        bits.append(("Herder said they are near: " if lang != "english"
+                     else "Herder said they are near: ") + str(memory["place"]))
+    for turn in (memory.get("turns") or [])[-2:]:
+        q = (turn.get("q") or "").strip()
+        a = (turn.get("a") or "").strip()
+        if q:
+            bits.append(f"- asked: {q}" + (f" | you answered: {a}" if a else ""))
+    if not bits:
+        return ""
+    header = ("MAZUNGUMZO YA AWALI (usitumie kama FACTS mpya):"
+              if lang != "english" else
+              "EARLIER IN THIS CONVERSATION (not a new source of facts):")
+    return header + "\n" + "\n".join(bits)
 

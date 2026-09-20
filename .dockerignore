@@ -1,0 +1,32 @@
+# Keep the build context small and free of secrets.
+#
+# NEVER let .env or secrets/ into an image: `.env` holds the Supabase service-role
+# key, the WhatsApp token and the Azure key. The container takes those as runtime
+# environment variables (docker run --env-file .env) or from the platform's secret
+# store — never baked into a layer.
+
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__/
+*.pyc
+
+# Secrets and local config
+.env
+.env.*
+secrets/
+
+# Batch pipeline code + artefacts the service never uses (see the Dockerfile header)
+scripts/
+migrations/
+data/
+dist/
+*.log
+*.out
+tile_test.tif
+
+# Docs / tooling noise
+*.md
+CLAUDE_CODE_PROMPT*

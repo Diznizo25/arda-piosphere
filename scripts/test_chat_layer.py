@@ -174,13 +174,16 @@ def llm_english(system, facts_json, question):
     return "There will be no rain in the next 15 days at all."
 
 
-def llm_empty(system, facts_json, question):
+def llm_empty(system, facts_json, question, context=""):
     return None
 
 
 herder = FakeHerder()
+# Injectable no-op memory keeps these tests pure (no DB); the memory behaviour
+# itself is covered in section 7c below.
+NO_MEM = dict(memory={}, remember=lambda phone, q, a: None)
 out = chat.answer(herder, "mvua itanyesha lini?", "swahili",
-                  gather=gather_rain, llm=llm_good, counter=lambda phone: 0)
+                  gather=gather_rain, llm=llm_good, counter=lambda phone: 0, **NO_MEM)
 assert out.startswith("Siku 30 bila mvua"), out
 print("accepted grounded model answer OK")
 
@@ -189,30 +192,60 @@ for bad, label in ((llm_hallucinating, "invented number"),
                    (llm_english, "wrong language"),
                    (llm_empty, "empty model reply")):
     out = chat.answer(herder, "mvua itanyesha lini?", "swahili",
-                      gather=gather_rain, llm=bad, counter=lambda phone: 0)
+                      gather=gather_rain, llm=bad, counter=lambda phone: 0, **NO_MEM)
     assert out and "240" not in out and "no rain in the next" not in out, (label, out)
     assert "siku 30 bila mvua" in out.lower(), (label, out)
 print("rejection -> deterministic fallback OK")
 
 # Over the daily cap the model is skipped entirely, but the herder still answers.
-def llm_must_not_be_called(system, facts_json, question):
+def llm_must_not_be_called(system, facts_json, question, context=""):
     raise AssertionError("the model must not be called over the daily cap")
 
 
 out = chat.answer(herder, "mvua itanyesha lini?", "swahili",
                   gather=gather_rain, llm=llm_must_not_be_called,
-                  counter=lambda phone: chat.DAILY_LLM_LIMIT)
+                  counter=lambda phone: chat.DAILY_LLM_LIMIT, **NO_MEM)
 assert out and "siku 30" in out.lower(), out
 print("daily cap respected OK")
 
 # No facts at all -> None, so the caller shows the services menu.
-assert chat.answer(herder, "habari yako", "swahili", gather=lambda *a: {},
-                   llm=llm_must_not_be_called, counter=lambda p: 0) is None
+assert chat.answer(herder, "habari yako", "swahili", gather=lambda *a, **k: {},
+                   llm=llm_must_not_be_called, counter=lambda p: 0, **NO_MEM) is None
 # A disease question never reaches the model, even with facts available.
 out = chat.answer(herder, "mbuzi wangu ana homa na kuhara", "swahili",
-                  gather=gather_rain, llm=llm_must_not_be_called, counter=lambda p: 0)
+                  gather=gather_rain, llm=llm_must_not_be_called,
+                  counter=lambda p: 0, **NO_MEM)
 assert "afisa wa mifugo" in out.lower(), out
 print("no-facts -> menu, disease -> vet route OK")
+
+# --- 8b) multi-turn memory --------------------------------------------------
+# A follow-up must be answered from where the herder last said they were, without
+# making them repeat it. This is the whole point of the memory.
+remembered: list[tuple] = []
+seen_coords: list[dict] = []
+
+
+def gather_recording(h, question, sections, **coords):
+    seen_coords.append(coords)
+    return {"rain": facts["rain"]}
+
+
+mem = {"lat": 0.979, "lon": 37.324, "place": "Wamba",
+       "turns": [{"q": "niko karibu na Wamba", "a": "Sawa, umbari wa Wamba."}]}
+out = chat.answer(herder, "na mvua itanyesha lini hapa?", "swahili",
+                  gather=gather_recording, llm=llm_good, counter=lambda p: 0,
+                  memory=mem, remember=lambda p, q, a: remembered.append((q, a)))
+assert seen_coords and seen_coords[0] == {"lat": 0.979, "lon": 37.324}, seen_coords
+assert remembered and remembered[0][0].startswith("na mvua"), remembered
+assert chat.memory_context(mem, "swahili").startswith("MAZUNGUMZO YA AWALI"), \
+    "the recap must be labelled as context, never as new facts"
+ctx = chat.memory_context(mem, "english")
+assert "Wamba" in ctx and "asked:" in ctx
+assert chat.memory_context({}) == "", "no memory must mean no recap, not empty noise"
+# A recap must not smuggle numbers in as facts: it is added to the prompt, but the
+# ALLOWED number set still comes from the facts bundle alone.
+assert "0.979" not in str(chat.allowed_numbers(facts, "na mvua itanyesha lini hapa?"))
+print("multi-turn memory OK")
 
 # --- 9) a herder with NO registered water point still gets a rain answer -----
 # Regression: asking "mvua itanyesha lini?" used to fall through to the services

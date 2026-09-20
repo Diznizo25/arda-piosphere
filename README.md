@@ -220,6 +220,89 @@ curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: applica
 The response says whether the model was used (`used_llm: false` means the
 deterministic path answered) and whether the disease guardrail fired.
 
+The chat layer remembers the conversation: the last few turns plus the herder's last
+known place live in `conversation_state` (state `chat.memory`, 6-hour expiry), so a
+follow-up ("na nihamie wapi?") is answered from where they last said they were
+without asking again. The recap is passed to the model explicitly labelled as
+**not** a new source of facts, and the number-validation allow-list still comes from
+the facts bundle alone — memory can add context, never evidence.
+
+## Saying where you are in words (landmark intake)
+
+Most herders will never send a WhatsApp location pin. They type what they say out
+loud, so `app/services/landmarks.py` resolves a named place to coordinates:
+
+```
+"niko karibu na Oldonyo Sabor"   → matched  (village, 0.979, 37.324)
+"I am at Wamba market"           → matched
+"nipo Lengwenyi"                 → matched  (a water point, not in the gazetteer)
+"habari yako"                    → none     (no false positives on chatter)
+```
+
+It searches **two** name spaces, because a herder's landmarks are a mix of both:
+the gazetteer (`config/landmarks.geojson`, 384 towns/villages/hamlets/markets/
+rivers/peaks built by `scripts/build_landmarks.py`) and **our own named water
+points** (`water_sources.name`) — "Lengwenyi well" is a landmark to the herder
+standing next to it even though it is not in the gazetteer.
+
+Design rules the tests enforce:
+
+- **Spelling tolerance, not guessing.** difflib + token-subset matching handles
+  "Oldonyo Sabo" vs "Oldonyo Sabor" and a place name inside a sentence. Ordinary
+  chatter scores low and resolves to nothing.
+- **Ambiguity is reported, never resolved by luck.** Two places with the same name
+  that are more than 5 km apart come back as a numbered question ("Nimeona maeneo
+  kadhaa yenye jina hilo. Ni yupi?") with the kind and distance of each. Two names
+  within 5 km are the same physical place (a village and the market inside it), so
+  they are not treated as ambiguous. Picking one silently would send a herd to the
+  wrong side of the county.
+- **One delivery path.** A named landmark goes through exactly the same
+  `_deliver_location_info()` as a WhatsApp location pin: water reach, pasture
+  condition, the rain outlook, the position on the map, and the one-tap water
+  question — so the two can never drift apart (there is a test for that).
+- **Ordering matters and is tested.** Landmark intake runs *after* the guided flows
+  (during the PIN flow the herder is typing a place name for a *new* water point —
+  hijacking that would break registration) and *before* the service keywords, so
+  "maji yapo wapi?" asked after naming a place means "here".
+
+Probe it in production without WhatsApp:
+
+```bash
+curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: application/json" \
+  -d '{"text":"niko karibu na Oldonyo Sabor"}' \
+  https://arda-piosphere.onrender.com/dev/landmark
+```
+
+## Containers (self-hosted deployment)
+
+```
+Dockerfile              multi-stage: deps (build-essential + wheels) → slim runtime
+requirements-web.txt    runtime-only deps, derived from app/ imports
+docker-compose.yml      service only, or service + local PostGIS (--profile local-db)
+.dockerignore           keeps .env, secrets/, scripts/ and data/ out of the image
+```
+
+```bash
+docker build -t arda-link:latest .
+docker run --rm -p 8000:8000 --env-file .env arda-link:latest
+curl http://localhost:8000/health
+docker compose --profile local-db up --build     # + PostGIS for a self-contained stack
+```
+
+Deliberate choices:
+
+- **The image is the web service, not the pipeline.** GEE exports, landmark/water
+  imports and migrations need `requirements.txt` (earthengine-api, osmium,
+  geopandas) and run from the export machine / GitHub Actions. `gee_auth` therefore
+  imports `ee` lazily, so the container does not carry a batch-compute dependency it
+  never uses.
+- **Secrets are runtime-only.** `.dockerignore` keeps `.env` and `secrets/` out of
+  the build context, so the Supabase service-role key cannot end up in a layer.
+- **Non-root, healthchecked.** Runs as uid 10001 and answers `/health`; it handles
+  other people's phone numbers and locations, so it should not be able to write to
+  its own code.
+
+
 
 
 

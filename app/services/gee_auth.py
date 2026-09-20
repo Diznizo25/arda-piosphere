@@ -1,11 +1,15 @@
 """Earth Engine service-account auth, isolated so it's called exactly once
 per process (scripts/gee_compute_export.py), never from request-serving code
-(see architecture principle #1: FastAPI never calls GEE live)."""
+(see architecture principle #1: FastAPI never calls GEE live).
+
+`ee` is imported INSIDE the function on purpose: the web service only needs it for
+the optional /health/gee diagnostic, and importing earthengine-api at module load
+would force every container (and every unit test) to carry a batch-compute
+dependency it never uses. ImportError is reported as "GEE unavailable", not a crash.
+"""
 from __future__ import annotations
 
 import logging
-
-import ee
 
 from app.config import get_settings
 
@@ -18,6 +22,8 @@ def init_earth_engine() -> None:
     global _initialized
     if _initialized:
         return
+
+    import ee  # lazy: see the module docstring
 
     settings = get_settings()
     if not settings.gee_service_account_email or not settings.gee_service_account_key_path:
