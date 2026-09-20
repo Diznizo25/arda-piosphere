@@ -264,6 +264,54 @@ def score_name(message_tokens: list[str], name: str,
 
 
 
+# Words owned by the OTHER services (water / pasture / herd / rain / tools). A
+# message containing these is not a bare place statement even if it starts with
+# "niko karibu na". Defined here rather than imported from chat.py so this module
+# stays standalone (and does not import a module that imports it).
+_OTHER_SERVICE_WORDS = (
+    "maji", "water", "kisima", "well", "borehole", "chanzo", "source", "bwawa",
+    "dam", "mto", "river",
+    "malisho", "pasture", "forage", "nyasi", "grass", "vci", "kijani",
+    "mifugo", "ng'ombe", "ngombe", "mbuzi", "kondoo", "ngamia", "cattle", "goat",
+    "sheep", "camel", "herd", "kundi",
+    "mvua", "rain", "ukame", "drought", "utabiri", "forecast", "hali ya hewa",
+    "ramani", "map", "uzito", "weight", "pima", "pin", "status", "hali", "menu",
+    "huduma",
+)
+
+
+def looks_like_place_statement(text: str) -> bool:
+    """Does this read as "I am at X" rather than a question about anything else?
+
+    Conservative on purpose: a false positive here means replying "I don't know that
+    place" to a legitimate question, which is worse than falling through to the chat
+    layer. So it must say where, be short, and mention nothing the other services own
+    (no digits, no water/pasture/herd/rain words).
+    """
+    words = tokens(text, keep_stopwords=True)
+    if not words or len(words) > 5:
+        return False
+    if any(ch.isdigit() for ch in text):
+        return False
+    if not ({"niko", "nipo", "hapa", "karibu", "near", "at"} & set(words)):
+        return False
+    normalised = normalise(text)
+    return not any(word in normalised for word in _OTHER_SERVICE_WORDS)
+
+
+def unknown_place_reply(text: str, lang: str = "swahili") -> str:
+    """Honest answer when the herder names a place we cannot find.
+
+    We do NOT guess and we do NOT silently show a menu: we say we don't know the
+    name and ask for the one thing that always works, a WhatsApp location pin.
+    """
+    sw = lang != "english"
+    return ("Samahani, sijui eneo hilo. Tuma eneo lako (location) kwa WhatsApp "
+            "ili nikupe taarifa za mahali ulipo — maji, malisho na mvua." if sw else
+            "Sorry, I do not know that place. Send your location on WhatsApp and I "
+            "will tell you about water, pasture and rain where you are.")
+
+
 def resolve(text: str, min_score: float = MIN_SCORE, limit: int = 5,
             include_water_points: bool = True,
             near: tuple[float, float] | None = None) -> Resolution:
@@ -355,8 +403,11 @@ def _distinct_places(candidates: list[Landmark], best: Landmark) -> list[Landmar
 def describe(marks: list[Landmark], lang: str = "swahili") -> str:
     """A numbered "which one did you mean?" list for the herder to answer.
 
-    Deliberately includes the kind and the distance from the best guess, because
-    two places with the same name are otherwise indistinguishable in a list.
+    Includes the kind and (when a reference point exists) the distance, because two
+    places with the same name are otherwise indistinguishable in a list. When even
+    that fails to distinguish them - four points along the same river, all called the
+    same thing - the list is replaced by a request for a location pin, which is the
+    only thing that can actually answer the question.
     """
     sw = lang != "english"
     kind_words = {
@@ -367,6 +418,19 @@ def describe(marks: list[Landmark], lang: str = "swahili") -> str:
         "well": "kisima" if sw else "well", "borehole": "kisima" if sw else "borehole",
         "pan": "bwawa" if sw else "pan", "dam": "bwawa" if sw else "dam",
     }
+
+    # Same name AND same kind AND no distinguishing distance = the list is useless
+    # (e.g. four points along "Ewaso Nyiro"). Ask for the location instead.
+    same_label = len({(normalise(m.name), m.kind) for m in marks}) == 1
+    no_distance = all(m.dist_km is None for m in marks)
+    if marks and same_label and no_distance:
+        return ("Jina hilo linaonekana sehemu kadhaa (k.m. mto huo huo unapita maeneo "
+                "mengi), na siwezi kuwaambia ni sehemu ipi bila kujua ulipo. Tuma eneo "
+                "lako (location) kwa WhatsApp." if sw else
+                "That name appears in several places (the same river passes many "
+                "areas), and I cannot tell which part you mean without knowing where "
+                "you are. Send your location on WhatsApp.")
+
     lines = [("Nimeona maeneo kadhaa yenye jina hilo. Ni yupi?" if sw
               else "I found several places with that name. Which one?")]
     for i, mark in enumerate(marks, start=1):

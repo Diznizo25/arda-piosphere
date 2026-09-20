@@ -247,6 +247,37 @@ assert chat.memory_context({}) == "", "no memory must mean no recap, not empty n
 assert "0.979" not in str(chat.allowed_numbers(facts, "na mvua itanyesha lini hapa?"))
 print("multi-turn memory OK")
 
+# --- 8c) explicit coordinates are remembered, so the next turn needs none ----
+# Regression from a LIVE probe: /dev/chat passed coordinates through a closure, so
+# they were never persisted and the follow-up question came back with a menu.
+remembered2: list[dict] = []
+out = chat.answer(herder, "niko karibu na Kipsing", "swahili", lat=0.979, lon=37.324,
+                  gather=gather_rain, llm=llm_good, counter=lambda p: 0,
+                  memory={}, remember=lambda p, q, a: remembered2.append("turn1"))
+assert remembered2 == ["turn1"]
+# Now a second turn that supplies NO coordinates must still be answerable from memory.
+mem2 = {"lat": 0.979, "lon": 37.324, "place": "Kipsing"}
+coords_seen: list[dict] = []
+
+
+def gather_second(h, question, sections, **coords):
+    coords_seen.append(coords)
+    return {"rain": facts["rain"]}
+
+
+out2 = chat.answer(herder, "na mvua itanyesha lini hapa?", "swahili",
+                   gather=gather_second, llm=llm_good, counter=lambda p: 0,
+                   memory=mem2, remember=lambda p, q, a: None)
+assert coords_seen == [{"lat": 0.979, "lon": 37.324}], coords_seen
+assert out2, "a follow-up with no coordinates must still be answered"
+# An explicit coordinate OVERRIDES memory (the herder just told us something newer).
+coords_seen.clear()
+chat.answer(herder, "na hapa?", "swahili", lat=1.0, lon=38.0,
+            gather=gather_second, llm=llm_good, counter=lambda p: 0,
+            memory=mem2, remember=lambda p, q, a: None)
+assert coords_seen == [{"lat": 1.0, "lon": 38.0}], coords_seen
+print("explicit coordinates win and are remembered OK")
+
 # --- 9) a herder with NO registered water point still gets a rain answer -----
 # Regression: asking "mvua itanyesha lini?" used to fall through to the services
 # menu for anyone who had not confirmed a water point, even though their location

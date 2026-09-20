@@ -99,18 +99,17 @@ async def chat_probe(request: Request, x_debug_key: str = Header(default="")) ->
 
     lat, lon = payload.get("lat"), payload.get("lon")
     sections = chat.intent_sections(text)
-
-    def gather(h, question, secs):
-        return chat.gather_facts(h, question, secs, lat=lat, lon=lon)
-
     used = {"llm": False}
 
-    def llm(system: str, facts_json: str, question: str):
+    def llm(system: str, facts_json: str, question: str, context: str = ""):
         used["llm"] = True
-        return ai.grounded_answer(system, facts_json, question)
+        return ai.grounded_answer(system, facts_json, question, context)
 
-    answer = chat.answer(herder, text, herder.preferred_language,
-                         gather=gather, llm=llm)
+    # lat/lon go through the real API (not a closure) so this probe exercises the
+    # same memory behaviour as WhatsApp: a follow-up without coordinates is answered
+    # from the place the previous message established.
+    answer = chat.answer(herder, text, herder.preferred_language, lat=lat, lon=lon,
+                         llm=llm)
     return {
         "ok": True,
         "answer": answer,

@@ -668,9 +668,15 @@ def llm_calls_today(phone: str) -> int:
 
 
 def answer(pastoralist, question: str, lang: str | None = None, *,
+           lat: float | None = None, lon: float | None = None,
            gather=None, llm=None, counter=None, memory: dict | None = None,
            remember=None) -> str | None:
     """Answer one herder question, or return None so the caller shows the menu.
+
+    `lat`/`lon` are the coordinates this question is ABOUT (the caller knows them: a
+    WhatsApp pin, a resolved landmark). They are used for the facts AND remembered,
+    so the next question does not need them again — that is what makes "na nihamie
+    wapi?" work after "niko karibu na Wamba".
 
     `gather`, `llm`, `counter`, `memory` and `remember` are injectable so the whole
     path is testable without a database, a model or a network — see
@@ -682,8 +688,7 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
         return None
     phone = getattr(pastoralist, "phone_number", "") or ""
 
-    # 0) Recall: the herder's last place and what we last told them. This is what
-    #    makes "na nihamie wapi?" work without them repeating where they are.
+    # 0) Recall: the herder's last place and what we last told them.
     mem = memory if memory is not None else load_memory(phone)
 
     # 1) Disease questions never reach the model, and are never answered with a
@@ -697,11 +702,12 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
 
     sections = intent_sections(question)
     collect = gather or gather_facts
-    # If we remember where they are (they sent a location or named a landmark), use
-    # that as the anchor for this question — it is the most recent thing they told
-    # us, and it is what "where am I / what is here" must be answered from.
+    # Explicit coordinates win (most recent thing the herder told us); otherwise fall
+    # back to what we remember.
     coords: dict = {}
-    if isinstance(mem, dict) and mem.get("lat") is not None and mem.get("lon") is not None:
+    if lat is not None and lon is not None:
+        coords = {"lat": lat, "lon": lon}
+    elif isinstance(mem, dict) and mem.get("lat") is not None and mem.get("lon") is not None:
         coords = {"lat": mem["lat"], "lon": mem["lon"]}
     try:
         facts = collect(pastoralist, question, sections, **coords) or {}

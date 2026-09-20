@@ -319,7 +319,7 @@ MENU_MSG = {
                "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
                "'ng'ombe 40 wanahitaji maji ngapi?'.\n"
                "Au niambie mahali ulipo kwa jina unalojua — k.m. 'niko karibu na "
-               "Oldonyo Sabor'.",
+               "Kipsing' au jina la kisima chako.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
                "1. 📍 LOCATION — water & pasture info near you\n"
                "2. 🏷 PIN — register your new water point\n"
@@ -334,7 +334,7 @@ MENU_MSG = {
                "You can also just ask a question — e.g. 'when will it rain?' or "
                "'how much water do 40 cattle need?'.\n"
                "Or tell me where you are using a name you know — e.g. 'I am near "
-               "Oldonyo Sabor'.",
+               "Kipsing', or the name of your water point.",
 }
 
 MENU_NUMBERS = {
@@ -726,6 +726,14 @@ def _resolve_message_place(phone: str, pastoralist, text: str):
         return None, False
 
     if res.status == "none":
+        # It reads as "I am at X" but X is not a place we know: say so honestly and
+        # ask for the one thing that always works (a location pin). Guessing from a
+        # near-match here would be worse than admitting we don't know.
+        if landmarks.looks_like_place_statement(text):
+            whatsapp_client.send_text(
+                phone, landmarks.unknown_place_reply(
+                    text, pastoralist.preferred_language))
+            return None, True
         return None, False
 
     if res.status == "ambiguous":

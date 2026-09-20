@@ -233,11 +233,18 @@ Most herders will never send a WhatsApp location pin. They type what they say ou
 loud, so `app/services/landmarks.py` resolves a named place to coordinates:
 
 ```
-"niko karibu na Oldonyo Sabor"   → matched  (village, 0.979, 37.324)
-"I am at Wamba market"           → matched
-"nipo Lengwenyi"                 → matched  (a water point, not in the gazetteer)
-"habari yako"                    → none     (no false positives on chatter)
+"niko karibu na Kipsing"     → matched    (Kipsing, village, 0.979, 37.324)
+"niko karibu na Kipsin"      → matched    (typo tolerated, score 0.94)
+"I am at Wamba market"       → matched
+"nipo Lengwenyi"             → matched    (a water point, not in the gazetteer)
+"niko karibu na Ewaso Nyiro" → ambiguous  (4 places share the name)
+"niko karibu na Oldonyo Sabor" → not found (we say so, and ask for a location)
+"habari yako"                → none       (no false positives on chatter)
 ```
+
+Examples in the docs are names from *our* gazetteer on purpose: "Oldonyo Sabor" is a
+real place in Isiolo but not (yet) in `config/landmarks.geojson`, and shipping an
+example the system cannot resolve is worse than shipping none.
 
 It searches **two** name spaces, because a herder's landmarks are a mix of both:
 the gazetteer (`config/landmarks.geojson`, 384 towns/villages/hamlets/markets/
@@ -248,14 +255,23 @@ standing next to it even though it is not in the gazetteer.
 Design rules the tests enforce:
 
 - **Spelling tolerance, not guessing.** difflib + token-subset matching handles
-  "Oldonyo Sabo" vs "Oldonyo Sabor" and a place name inside a sentence. Ordinary
-  chatter scores low and resolves to nothing.
-- **Ambiguity is reported, never resolved by luck.** Two places with the same name
-  that are more than 5 km apart come back as a numbered question ("Nimeona maeneo
-  kadhaa yenye jina hilo. Ni yupi?") with the kind and distance of each. Two names
-  within 5 km are the same physical place (a village and the market inside it), so
-  they are not treated as ambiguous. Picking one silently would send a herd to the
-  wrong side of the county.
+  "Kipsin" for "Kipsing" and a place name inside a sentence. Ordinary chatter scores
+  low and resolves to nothing.
+- **A name we don't know is admitted, never guessed.** "niko karibu na Oldonyo Sabor"
+  (not in our gazetteer) replies *"Samahani, sijui eneo hilo. Tuma eneo lako
+  (location)..."* rather than showing a menu or inventing a near-match. Detection is
+  conservative (must say where, be short, and mention nothing the other services own)
+  so it can never hijack "niko na ng'ombe 40".
+- **Ambiguity is reported, never resolved by luck.** Duplicate names are the NORMAL
+  case — 194 names in our own gazetteer repeat in places >5 km apart, because a
+  river's name follows its whole course. If we know roughly where the herder is
+  (their last pin, their water point) the nearest matching place wins; otherwise we
+  ask. Two names within 5 km are the same physical place (a village and the market
+  inside it), so they are not treated as ambiguous. Picking one silently would send a
+  herd to the wrong side of the county.
+- **An unhelpful list becomes a request.** Four identical "Ewaso Nyiro (mto)" options
+  distinguish nothing, so that case replies "that name appears in several places —
+  send your location" instead of pretending to offer a choice.
 - **One delivery path.** A named landmark goes through exactly the same
   `_deliver_location_info()` as a WhatsApp location pin: water reach, pasture
   condition, the rain outlook, the position on the map, and the one-tap water
@@ -269,7 +285,7 @@ Probe it in production without WhatsApp:
 
 ```bash
 curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: application/json" \
-  -d '{"text":"niko karibu na Oldonyo Sabor"}' \
+  -d '{"text":"niko karibu na Kipsing"}' \
   https://arda-piosphere.onrender.com/dev/landmark
 ```
 

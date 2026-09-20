@@ -123,6 +123,36 @@ assert "Ni yupi?" in listing and "1. Wamba" in listing, listing
 assert "kijiji" in listing, listing            # kind shown in Swahili
 eng = lm.describe(same, "english")
 assert "Which one?" in eng and "town" in eng, eng
+# --- 7b) unknown place names are admitted, not guessed ----------------------
+# "niko karibu na mahali ambao hatujui" must not be answered with a menu or a guess.
+assert lm.looks_like_place_statement("niko karibu na Oldonyo Sabor")
+assert lm.looks_like_place_statement("nipo kijiji fulani")
+assert lm.looks_like_place_statement("I am near Somewhere")
+# ...but never hijack a real question: these must fall through to the other services.
+assert not lm.looks_like_place_statement("niko na ng'ombe 40")
+assert not lm.looks_like_place_statement("niko karibu na maji?")
+assert not lm.looks_like_place_statement("niko karibu na malisho mazuri")
+assert not lm.looks_like_place_statement("mvua itanyesha lini hapa")
+assert not lm.looks_like_place_statement("habari yako")          # does not say where
+assert not lm.looks_like_place_statement(
+    "niko karibu na kijiji kimoja kikubwa sana cha wachungaji")   # too long to be a place name
+reply = lm.unknown_place_reply("niko karibu na Nowhere", "swahili")
+assert "sijui eneo hilo" in reply and "location" in reply, reply
+assert "do not know that place" in lm.unknown_place_reply("I am near Nowhere", "english")
+print("unknown-place handling OK")
+
+# --- 7c) an unhelpful list is replaced by a request for a location -----------
+river = [lm.Landmark("Ewaso Nyiro", 0.70, 37.23, "river", score=1.0),
+         lm.Landmark("Ewaso Nyiro", 0.66, 36.99, "river", score=1.0),
+         lm.Landmark("Ewaso Nyiro", 0.58, 37.48, "river", score=1.0)]
+collapsed = lm.describe(river, "swahili")
+assert "Tuma eneo lako" in collapsed and "1." not in collapsed, collapsed
+# Two different KINDS with the same name do stay a list (the kind distinguishes them).
+mixed = [lm.Landmark("Kamanga", 0.76, 37.90, "peak", score=1.0),
+         lm.Landmark("Kamanga", -0.32, 38.24, "river", score=1.0)]
+mixed[1].dist_km = 40.0
+as_list = lm.describe(mixed, "swahili")
+assert "1. Kamanga (mlima)" in as_list and "2. Kamanga (mto" in as_list, as_list
 print("ambiguity prompt OK")
 
 print("landmark tests OK")
