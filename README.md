@@ -300,7 +300,43 @@ curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: applica
 as an unanswerable question, because the resolution happens in the WhatsApp handler
 *before* the chat layer — a mistake this flag exists to prevent.
 
-## Containers (self-hosted deployment)
+## Writing that reads and SPEAKS like a person
+
+Herder feedback was blunt: advisories and voice notes were hard to follow — odd
+punctuation, stilted wording, and one question that made no sense at all ("Majina
+hayo ni ya kweli?" — *are those names real?* — asked after an advisory about water,
+copy-pasted from the water-point confirm flow). Investigating the real strings and the
+TTS path found five separate causes, all now fixed and enforced by
+`scripts/test_message_style.py`:
+
+1. **The model "rephrase" was destroying structure.** A 5-line advisory came back as
+   one 309-character line with six colons. A rephrase is now sent ONLY if every
+   number survives, there are no semicolons, no line has two colons, no lines were
+   merged and the distance is intact — otherwise the deterministic text goes out.
+   `ADVISORY_REPHRASE_ENABLED=false` turns it off entirely without a deploy.
+2. **The voice note read artifacts.** Emoji (⚠️ ☀️ 🌧 ⏳) and bullet glyphs were
+   spoken aloud, newlines were flattened into one breathless stream, and parentheses
+   were *deleted* — which silently removed "(makadirio)" from audio only, so the
+   spoken advice lost its uncertainty while the written advice kept it. Now
+   `speech_segments()` strips emoji/bullets, expands units (`4.3 km` → "4.3
+   kilomita", `40%` → "asilimia 40", `30-45` → "30 hadi 45", `~7` → "takriban 7"),
+   keeps every line as its own sentence, and the TTS joins them with 300 ms pauses so
+   one idea does not run into the next.
+3. **Wording built for a dashboard, not an ear.** Nested colons, repeated nouns
+   ("Maji: uhakika wa maji", "Water: water reliability"), a grammar break
+   ("Malisho karibu na maji ni nyasi kavu nzuri ya malisho ipo."), and a missing full
+   stop that ran two sentences together in audio. All templates, the water-status
+   prose (`status_sentence()` instead of terse labels like "imekauka") and the rain
+   lines are now short sentences with units spelled out.
+4. **Uncertainty is a sentence, not a bracket** — "Huu ni makadirio." survives into
+   the voice note, unlike a parenthetical.
+5. **The one-tap question asks about water** at the point described, and a test
+   asserts it mentions water/chanzo and never "majina".
+
+The rule for anyone editing these strings: one idea per line, short sentences, no
+semicolons, at most one colon per line, spell out units, and never leave a line
+without terminal punctuation. The tests check ~256 generated advisories mechanically.
+
 
 ```
 Dockerfile              multi-stage: deps (build-essential + wheels) → slim runtime
