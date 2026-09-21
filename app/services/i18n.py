@@ -83,6 +83,23 @@ DRY_HARSH_EN = ("☀️ It is a dry season and forage is scarce. Water your anim
                 "force long walks every day.")
 
 
+# A herder standing AT their water point is the common case, and "kilomita 0.0" is
+# not something anyone would say aloud. Below ~100 m we say "right here" instead.
+_NEAR_KM = 0.1
+
+
+def _distance_clause_sw(distance_km: float) -> str:
+    if distance_km < _NEAR_KM:
+        return "maji yapo hapa karibu nawe."
+    return f"maji ya karibu yapo kilomita {distance_km:.1f} kutoka hapa."
+
+
+def _distance_clause_en(distance_km: float) -> str:
+    if distance_km < _NEAR_KM:
+        return "the water is right here next to you."
+    return f"the nearest water is {distance_km:.1f} km away."
+
+
 def format_advisory_message(
     language: str,
     species: Species,
@@ -102,10 +119,7 @@ def format_advisory_message(
         species_label = SPECIES_LABEL_EN.get(species, species)
         condition_text = CONDITION_TEXT_EN[condition]
         water_text = WATER_TEXT_EN[water_reliability]
-        lines = [
-            f"For your {species_label}, the nearest water is {distance_km:.1f} km away.",
-            condition_text,
-        ]
+        lines = [f"For your {species_label}, {_distance_clause_en(distance_km)}", condition_text]
         if condition == ForageCondition.BARE_DEGRADED and not seasonally_normal:
             lines.append("That is worse than usual for this season, so consider other areas.")
         elif condition == ForageCondition.BARE_DEGRADED and seasonally_normal:
@@ -124,7 +138,7 @@ def format_advisory_message(
     condition_text = CONDITION_TEXT_SW[condition]
     water_text = WATER_TEXT_SW[water_reliability]
     lines = [
-        f"Kwa {species_label} wako, maji ya karibu yapo kilomita {distance_km:.1f} kutoka hapa.",
+        f"Kwa {species_label} wako, {_distance_clause_sw(distance_km)}",
         condition_text,
     ]
     if condition == ForageCondition.BARE_DEGRADED and not seasonally_normal:

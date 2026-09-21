@@ -78,6 +78,15 @@ assert "Hali ya malisho karibu na maji hayo:" not in sample, sample  # label col
 assert "nyasi kavu nzuri ya malisho ipo." not in sample, sample      # broken grammar
 assert "kilomita 4.3" in sample, sample                       # unit spelled in Swahili
 assert "~" not in sample, sample                              # no spoken form for "~"
+# Standing at your own water point is the common case: nobody says "kilomita 0.0".
+at_water = format_advisory_message(
+    language="swahili", species="cattle", distance_km=0.0,
+    condition=ForageCondition.DRY_FORAGE_AVAILABLE, seasonally_normal=True,
+    curing_stage_note=None, water_reliability=WaterReliability.UNKNOWN,
+    grazing_zone=None, effective_radius_km=7.0, dry_harsh=False)
+assert "maji yapo hapa karibu nawe" in at_water, at_water
+assert "kilomita 0.0" not in at_water, at_water
+assert "0.0" not in at_water, at_water
 assert "ambao" not in sample, sample
 print("wording fixes in place OK")
 
