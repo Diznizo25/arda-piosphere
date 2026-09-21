@@ -121,19 +121,24 @@ def _get_advisory_impl(req: AdvisoryRequest) -> AdvisoryResult:
     # Herder-reported water status beats the satellite for "is there water TODAY":
     # if this point has never been confirmed, or was last confirmed long ago, say
     # so plainly instead of implying the water is fine.
+    #
+    # Wording: plain sentences, no colon construction, and every sentence ends with
+    # a full stop — the voice note joins lines, and a missing stop runs two
+    # sentences together ("...not yet confirmed Confirm before...").
     if nearest.needs_check:
         from app.services import water_status as ws
 
-        label = ws.status_label(nearest.status, "swa" if req.language == "swahili" else "eng")
+        lang = "swa" if req.language == "swahili" else "eng"
         age = ws.age_days(nearest.status_updated_at) or ws.age_days(nearest.last_confirmed)
-        if req.language == "swahili":
-            head = (f"⚠️ Maji haya: {label}"
-                    + (f" (siku {round(age)} zilizopita)" if age is not None else ""))
-            message = f"{head}\nHakikisha yapo kabla ya kuanza safari.\n\n{message}"
-        else:
-            head = (f"⚠️ This water: {label}"
-                    + (f" ({round(age)} days ago)" if age is not None else ""))
-            message = f"{head}\nConfirm before you set off.\n\n{message}"
+        # A complete sentence, not a label: "Maji ya chanzo hiki yamekauka."
+        head = "⚠️ " + ws.status_sentence(nearest.status, lang)
+        if age is not None:
+            head += (" Ilithibitishwa mara ya mwisho siku "
+                     f"{round(age)} zilizopita." if lang == "swa"
+                     else f" It was last confirmed {round(age)} days ago.")
+        tail = ("Hakikisha maji yapo kabla ya kuanza safari." if lang == "swa"
+                else "Confirm the water before you set off.")
+        message = f"{head}\n{tail}\n\n{message}"
     # Rain outlook from the stored series + cached forecast (migration 010). Purely
     # a DB read — never a weather API call on the request path. Fail-open: if we
     # have nothing stored, no rain line is added and the advisory is unchanged.

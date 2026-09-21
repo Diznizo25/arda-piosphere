@@ -129,29 +129,72 @@ def grounded_answer(system: str, facts_json: str, question: str,
     return _chat(system, "\n\n".join(parts))
 
 
+def _nums(text: str) -> set[str]:
+    """Numeric tokens in a message, comma-decimals normalised (4,3 == 4.3)."""
+    return {m.replace(",", ".") for m in re.findall(r"\d+(?:[.,]\d+)?", text or "")}
+
+
+def rephrase_advisory_ok(base: str, out: str, distance_km: float | None) -> tuple[bool, str]:
+    """May this rephrasing be sent instead of the original? (ok, reason-if-not)
+
+    The model is allowed to improve the PHRASING of an advisory, nothing else — and
+    a live inspection showed it happily destroying the structure instead: five clean
+    lines came back as one 309-character run with six colons. So the guard is
+    structural, not just factual:
+
+      * every number in the original must survive (a dropped number is a lost fact),
+      * no semicolons and at most one colon per line (the tell-tale of an LLM
+        collapsing a list into a sentence),
+      * it may not merge lines — the original line breaks ARE the formatting,
+      * the distance must still be there.
+
+    On rejection the caller sends the deterministic text, which is now written to be
+    read aloud in the first place.
+    """
+    if not out.strip():
+        return False, "empty"
+    missing = _nums(base) - _nums(out)
+    if missing:
+        return False, f"dropped_number:{sorted(missing)[0]}"
+    if ";" in out:
+        return False, "semicolon"
+    for line in out.splitlines():
+        if line.count(":") > 1:
+            return False, "colon_run"
+    if len(out.splitlines()) < len(base.splitlines()):
+        return False, "lines_merged"
+    if distance_km is not None:
+        forms = {f"{distance_km:.1f}", f"{distance_km:g}"}
+        if not any(form in out for form in forms):
+            return False, "distance_lost"
+    return True, ""
+
+
 def rephrase_advisory(language: str, base_message: str,
                       distance_km: float | None = None) -> str:
-    """Reword the deterministic advisory without adding or changing facts.
+    """Reword the deterministic advisory without changing or losing any fact.
 
-    Safety guardrail: if the LLM output drops the distance figure, or the LLM
-    is unavailable, the original deterministic message is returned untouched.
+    Fail-open twice over: if the model is unavailable OR its output fails the
+    structural guard above, the original deterministic message is returned.
     """
     if not base_message or distance_km is None:
         return base_message
+    if not get_settings().advisory_rephrase_enabled:
+        return base_message
     system = (
-        "You are the text rewriter for a pastoralist water-and-pasture advisory "
-        "bot. Rewrite the message you are given in natural, friendly plain "
-        "language for a pastoralist. Hard rules: keep the SAME language as the "
-        "input; do not add, remove, or change any fact, number, distance, or "
-        "recommendation; no markdown, no emojis, no bullet points; max 2 short "
-        "lines."
+        "You are the text editor for a pastoralist water-and-pasture advisory bot. "
+        "Rewrite the message you are given in natural, friendly plain language for a "
+        "pastoralist. HARD RULES: keep the SAME language as the input; keep EVERY "
+        "number exactly as written; keep the SAME number of lines (the line breaks "
+        "are deliberate); never use semicolons, and never use colons to join clauses; "
+        "no markdown, no URLs; do not add or remove a fact, distance or "
+        "recommendation."
     )
     out = _chat(system, base_message)
     if not out:
         return base_message
-    distance_forms = {f"{distance_km:.1f}", f"{distance_km:g}"}
-    if not any(form in out for form in distance_forms):
-        log.warning("LLM rephrase dropped the distance (%s) - keeping deterministic text",
-                    distance_km)
+    ok, why = rephrase_advisory_ok(base_message, out, distance_km)
+    if not ok:
+        log.warning("LLM rephrase rejected (%s) - keeping the deterministic text", why)
         return base_message
     return out[:600]

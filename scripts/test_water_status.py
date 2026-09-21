@@ -65,7 +65,9 @@ assert ws.status_colour(ws.STATUS_UNKNOWN) == "#6b7280"
 q = ws.check_question("swa")
 assert "1 maji yapo" in q and "imekauka" in q
 assert "Asante" in ws.thanks_for_report("water_dry", "swa")
-assert "Recorded" in ws.thanks_for_report("water_dry", "eng")
+# Acknowledges the recorded status in a full sentence ("We recorded that it is dry.")
+assert "We recorded that it is" in ws.thanks_for_report("water_dry", "eng")
+assert "dry" in ws.thanks_for_report("water_dry", "eng").lower()
 print("labels/question/thanks OK")
 
 # --- 6) the guidance queries must actually carry the gate --------------------

@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     azure_openai_model: str = "gpt-5-mini"
+    # Advisory rephrasing. ON by default, but a single env var can switch it off
+    # without a deploy: the deterministic text is now written to be read aloud, and
+    # a rephrase is only sent when it passes the structural guard in ai.py.
+    advisory_rephrase_enabled: bool = True
 
     # Azure AI Speech — for transcribing herders' WhatsApp voice notes.
     azure_speech_key: str = ""

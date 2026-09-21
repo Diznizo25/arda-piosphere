@@ -79,13 +79,15 @@ assert o.has_forecast and o.onset_date == date(2026, 10, 4)
 # Onset is 17 days out -> NOT high confidence, and must not be stated as a date.
 assert o.confidence == "moderate"
 line = f.rain_line(o, "swahili")
-assert line.startswith("Mvua: "), line
-assert "Siku 30 bila mvua" in line, line
+# Written as plain sentences now: no "Mvua:" label, no parentheticals — the same
+# text is spoken by the voice note, and a parenthetical vanishes when spoken.
+assert "Mvua: " not in line and "(" not in line, line
+assert "Siku 30 zimepita bila mvua" in line, line
 assert "pungufu sana" in line, line
-assert "makadirio" in line and "Utabiri" in line, line
+assert "makadirio" in line, line
 assert "Oktoba" not in line and "10-04" not in line, line  # no bare date promise
 eng = f.rain_line(o, "english")
-assert eng.startswith("Rain: ") and "rough estimate" in eng, eng
+assert "Rain: " not in eng and "This is an estimate." in eng, eng
 print("assembled outlook + wording OK")
 
 # --- 6) severity buckets are conservative ------------------------------------
@@ -130,9 +132,12 @@ print("fail-open with no data OK")
 # --- 8) the 'mvua' answer carries numbers + an action ------------------------
 msg = f.mvua_message(o, place="Lengwenyi", lang="swahili")
 assert "MVUA (Lengwenyi)" in msg
-assert "kawaida 23 mm" in msg
+assert "kawaida ni milimita 23" in msg          # units spelled for reading aloud
 assert "Ushauri:" in msg and "hamia taratibu" in msg
-assert "Utabiri" in msg and "makadirio" in msg
+# Uncertainty must be stated IN WORDS (this outlook has an onset, so it says
+# "utabiri, si uhakika" rather than "makadirio").
+assert any(w in msg for w in ("makadirio", "uhakika", "utabiri")), msg
+assert "(" not in msg.replace("(Lengwenyi)", ""), msg
 print("mvua message OK")
 
 print("rain-outlook tests OK")

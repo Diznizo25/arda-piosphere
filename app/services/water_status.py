@@ -137,7 +137,39 @@ def needs_check(status: Optional[str], status_updated_at=None,
 
 
 def status_label(status: Optional[str], lang: str = "swa") -> str:
+    """Short label for lists and map popups ('imekauka', 'not yet confirmed')."""
     table = _STATUS_LABEL_SWA if lang in ("swa", "swahili") else _STATUS_LABEL_ENG
+    return table.get(status or STATUS_UNKNOWN, table[STATUS_UNKNOWN])
+
+
+# Full sentences about a water point, for prose that must read and SPEAK naturally.
+# The terse labels above are fragments ("imekauka"), and embedding one in a sentence
+# produces broken Swahili ("Maji ya chanzo hiki ni imekauka"). Anything that goes
+# into an advisory or a voice note uses THIS table.
+_STATUS_SENTENCE_SWA = {
+    STATUS_UNKNOWN: "Hatuwezi kuthibitisha kama maji yapo kwenye chanzo hiki.",
+    STATUS_FLOWING: "Maji yanatiririka kwenye chanzo hiki.",
+    STATUS_FUNCTIONAL: "Maji yanapatikana kwenye chanzo hiki.",
+    STATUS_INTERMITTENT: "Maji ya chanzo hiki ni ya vipindi.",
+    STATUS_DRY: "Maji ya chanzo hiki yamekauka.",
+    STATUS_BROKEN: "Pampu au mfumo wa chanzo hiki umeharibika.",
+    STATUS_NOT_FOUND: "Chanzo hiki hakipatikani tena.",
+}
+_STATUS_SENTENCE_ENG = {
+    STATUS_UNKNOWN: "We cannot confirm that there is water at this point.",
+    STATUS_FLOWING: "Water is flowing at this point.",
+    STATUS_FUNCTIONAL: "Water is available at this point.",
+    STATUS_INTERMITTENT: "The water at this point is seasonal.",
+    STATUS_DRY: "The water at this point has dried up.",
+    STATUS_BROKEN: "The pump or system at this point is broken.",
+    STATUS_NOT_FOUND: "This point can no longer be found.",
+}
+
+
+def status_sentence(status: Optional[str], lang: str = "swa") -> str:
+    """A complete sentence about a point's water status (never a bare fragment)."""
+    table = (_STATUS_SENTENCE_SWA if lang in ("swa", "swahili")
+             else _STATUS_SENTENCE_ENG)
     return table.get(status or STATUS_UNKNOWN, table[STATUS_UNKNOWN])
 
 
@@ -153,12 +185,18 @@ def status_colour(status: Optional[str]) -> str:
 
 
 def check_question(lang: str = "swa") -> str:
-    """The one-line question appended to an advisory so status gets reported."""
+    """The one-line question appended to an advisory so status gets reported.
+
+    Wording matters more than it looks: this is the ONLY thing we ask a herder to
+    do, and it must be about the water point we just described. (It used to ask
+    "Majina hayo ni ya kweli?" - "are those names real?" - which referred to
+    nothing in the advisory at all.)
+    """
     if lang in ("swa", "swahili"):
-        return ("Majina hayo ni ya kweli? Jibu namba moja:\n"
+        return ("Je, maji yapo kwenye chanzo hicho sasa? Jibu namba moja.\n"
                 "1 maji yapo\n2 imekauka\n3 haipo tena\n4 pampu imeharibika\n"
                 "5 maji ya vipindi")
-    return ("Is that right? Reply with one number:\n"
+    return ("Is there water at that point right now? Reply with one number.\n"
             "1 water is there\n2 it is dry\n3 no longer there\n"
             "4 pump broken\n5 seasonal water")
 
@@ -169,10 +207,10 @@ def thanks_for_report(report_type: str, lang: str = "swa") -> str:
     label_swa = status_label(status, "swa")
     label_eng = status_label(status, "eng")
     if lang in ("swa", "swahili"):
-        return (f"Asante! Tumerekodi: {label_swa}. Wachungaji wengine wataona hii.\n"
-                "Maji ninayoona karibu nawe yanaboreshwa na taarifa zako.")
-    return (f"Thank you! Recorded: {label_eng}. Other herders will see this.\n"
-            "Water guidance near you improves with your reports.")
+        return (f"Asante! Tumerekodi kuwa {label_swa}.\n"
+                "Taarifa zako zinasaidia wachungaji wengine wa eneo lako.")
+    return (f"Thank you! We recorded that it is {label_eng}.\n"
+            "Your reports help other herders near you.")
 
 
 __all__ = [

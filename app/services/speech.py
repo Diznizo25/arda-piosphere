@@ -87,16 +87,107 @@ def _xml_escape(text: str) -> str:
                 .replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def _tts_clean(text: str) -> str:
-    """Make a reply safe/pleasant to speak aloud: drop technical
-    parentheticals (COG_READ_ERROR: ...), URLs, and markdown; normalize
-    punctuation. Never strips the advisory facts themselves."""
-    text = re.sub(r"\([^)]*\)", "", text)
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"[\u2014\u2013]", ", ", text)  # em/en dash -> comma (reads better)
-    text = text.replace("*", "")
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+# Emoji/pictographs and bullet glyphs: WhatsApp shows them, a voice must not read
+# them. "<" and ">" also cover flag/keycap emoji sequences.
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F900-\U0001F9FF"
+    "\U00002190-\U000021FF\U00002B00-\U00002BFF\uFE0F\u200d]",
+    flags=re.UNICODE,
+)
+_BULLET_RE = re.compile(r"^\s*[•·\-\u2013\u2014\*\u25CF\u25AA]+\s*", flags=re.MULTILINE)
+
+# Spoken forms. Units and symbols are the difference between "four point three k m"
+# and a sentence a herder understands; "%"/"~" have no spoken form at all.
+# NOTE the numeral group captures the WHOLE number: a pattern like (\d)\s*km matches
+# only the last digit and turns "4.3 km" into "4.kilomita 3".
+_NUM = r"(\d+(?:[.,]\d+)?)"
+_SPEECH_UNIT_SW = [
+    (re.compile(_NUM + r"\s*km\b"), r"\1 kilomita"),
+    (re.compile(_NUM + r"\s*mm\b"), r"\1 milimita"),
+    (re.compile(_NUM + r"\s*L\b"), r"\1 lita"),
+    (re.compile(_NUM + r"\s*%"), r"asilimia \1"),
+    (re.compile(_NUM + r"\s*[-\u2013]\s*" + _NUM), r"\1 hadi \2"),  # 30-45 -> 30 hadi 45
+    (re.compile(r"\s*~\s*"), " takriban "),
+]
+_SPEECH_UNIT_EN = [
+    (re.compile(_NUM + r"\s*km\b"), r"\1 kilometres"),
+    (re.compile(_NUM + r"\s*mm\b"), r"\1 millimetres"),
+    (re.compile(_NUM + r"\s*L\b"), r"\1 litres"),
+    (re.compile(_NUM + r"\s*%"), r"\1 percent"),
+    (re.compile(_NUM + r"\s*[-\u2013]\s*" + _NUM), r"\1 to \2"),
+    (re.compile(r"\s*~\s*"), " about "),
+]
+# Latin abbreviations a Swahili voice reads as letters.
+_SPEECH_WORDS_SW = [(re.compile(r"\bVCI\b"), "hali ya mimea"),
+                    (re.compile(r"\bID\b"), "namba"),
+                    (re.compile(r"\bCOG_READ_ERROR[^.]*\.?"), "")]
+
+
+def speech_segments(text: str, language: str = "swahili") -> list[str]:
+    """The written reply split into spoken segments (one per idea).
+
+    Segments are the caller's chance to insert pauses: a voice note that reads four
+    short segments with brief silences is far easier to follow than one continuous
+    stream, which is exactly what herders complained about.
+    """
+    if not text:
+        return []
+    out = _EMOJI_RE.sub(" ", text)
+    out = out.replace("*", "").replace("`", "")
+    out = _BULLET_RE.sub("", out)
+    raw_lines = [ln.strip() for ln in out.splitlines()]
+
+    segments: list[str] = []
+    for line in raw_lines:
+        if not line:
+            continue
+        # Drop technical parentheticals (codes) but inline human ones: the
+        # uncertainty markers are part of the advice, so "(makadirio)" becomes
+        # "makadirio" rather than disappearing from audio only.
+        line = re.sub(r"\(\s*COG_READ_ERROR[^)]*\)", "", line)
+        line = re.sub(r"\(\s*([^)]{1,40})\)", r", \1,", line)
+        line = re.sub(r"\s+([.,])", r"\1", line)
+        line = re.sub(r",\s*,", ",", line)
+        line = re.sub(r",+\s*([.!?])", r"\1", line)     # tidy ",." left by inlining
+        line = re.sub(r"\s{2,}", " ", line).strip(" ,")
+        if not line:
+            continue
+        # A line is a sentence: make sure it ends like one.
+        if line[-1] not in ".!?":
+            line += "."
+        line = re.sub(r"([.!?])\1+", r"\1", line)
+        segments.append(line)
+    if not segments:
+        return []
+
+    rules = _SPEECH_UNIT_SW if language == "swahili" else _SPEECH_UNIT_EN
+    cleaned: list[str] = []
+    for segment in segments:
+        for pattern, repl in rules:
+            segment = pattern.sub(repl, segment)
+        if language == "swahili":
+            for pattern, repl in _SPEECH_WORDS_SW:
+                segment = pattern.sub(repl, segment)
+        cleaned.append(re.sub(r"\s{2,}", " ", segment).strip(" ,"))
+    return [s for s in cleaned if s]
+
+
+def speech_text(text: str, language: str = "swahili") -> str:
+    """Turn a written reply into something a person would SAY aloud.
+
+    Why this exists: a herder reported that voice notes were hard to follow. The
+    causes were mechanical — emoji and bullet glyphs being read out, "km"/"mm"/"~"
+    spoken as letters, ASCII line joining sentences together, and the old code
+    deleting parentheticals (which silently removed "(makadirio)" from audio only).
+
+    What it does:
+      * drops emoji, bullets and markdown (never content),
+      * expands units, ranges and symbols into spoken words,
+      * keeps LINE STRUCTURE as sentence boundaries, adding a full stop where a line
+        ended without one, so the voice does not run two ideas together,
+      * collapses whitespace and stray punctuation.
+    """
+    return " ".join(speech_segments(text, language))
 
 
 def synthesize_speech(text: str, language: str = "swahili") -> bytes | None:
@@ -108,14 +199,17 @@ def synthesize_speech(text: str, language: str = "swahili") -> bytes | None:
     settings = get_settings()
     if not settings.azure_speech_key or not settings.azure_speech_region:
         return None
-    clean = _tts_clean(text)
-    if not clean:
+    segments = speech_segments(text, language)
+    if not segments:
         return None
     voice = TTS_VOICES.get(language, "sw-KE-RafikiNeural")
     xml_lang = "sw-KE" if voice.startswith("sw-") else "en-US"
+    # Short pauses BETWEEN segments: the advisory is several ideas, and reading them
+    # as one breathless stream is what made voice notes hard to follow.
+    body = "<break time='300ms'/>".join(_xml_escape(s) for s in segments)
     ssml = (
         f"<speak version='1.0' xml:lang='{xml_lang}'>"
-        f"<voice name='{voice}'>{_xml_escape(clean)}</voice></speak>"
+        f"<voice name='{voice}'>{body}</voice></speak>"
     )
     try:
         resp = httpx.post(

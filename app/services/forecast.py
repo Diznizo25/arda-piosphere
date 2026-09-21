@@ -248,8 +248,10 @@ _SEV_EN = {
 def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
     """One short, honest line for the advisory. None when we have nothing to say.
 
-    Swahili is the default (primary audience). Never emits a bare onset date
-    without calling it an estimate outside the high-confidence window.
+    Written as complete sentences with NO leading label and NO parentheticals: this
+    text is also spoken by the voice note, and "(makadirio)" disappears when spoken,
+    which would silently drop the uncertainty from audio only. Uncertainty is a
+    sentence here, so it survives both channels.
     """
     if o is None:
         return None
@@ -260,49 +262,47 @@ def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
         if o.dry_spell_days == 0:
             parts.append("Mvua ilinyesha leo." if sw else "It rained today.")
         else:
-            parts.append(f"Siku {o.dry_spell_days} bila mvua ya maana." if sw
-                         else f"{o.dry_spell_days} days without real rain.")
+            parts.append((f"Siku {o.dry_spell_days} zimepita bila mvua ya maana." if sw
+                          else f"No real rain for {o.dry_spell_days} days."))
     if o.deficit_pct is not None:
         sev = outlook_severity(o)
         sev_text = _SEV_SW[sev] if sw else _SEV_EN[sev]
-        # Capitalised and terminated: it becomes its own sentence inside the line.
         parts.append(sev_text[:1].upper() + sev_text[1:] + ".")
 
     if o.has_forecast and o.horizon_days:
-        conf = (CONFIDENCE_SW if sw else CONFIDENCE_EN)[o.confidence]
         if o.onset_date:
             days = max(0, (o.onset_date - (o.generated_on or o.onset_date)).days)
             if o.confidence == "high":
                 parts.append(
-                    (f"Utabiri: mvua inaweza kuanza baada ya siku {days} ({conf})." if sw
-                     else f"Forecast: rain may start in about {days} days ({conf})."))
+                    (f"Mvua inaweza kuanza baada ya siku {days}. Huu ni utabiri "
+                     f"wa siku chache, wa kuaminika." if sw
+                     else f"Rain may start in about {days} days. This is a "
+                          f"short-range forecast, fairly reliable."))
             else:
                 parts.append(
-                    (f"Utabiri (siku {o.horizon_days}): ishara za mvua baadaye, si ya "
-                     f"uhakika ({conf})." if sw else
-                     f"Forecast ({o.horizon_days} days): signs of rain later, not "
-                     f"certain ({conf})."))
+                    (f"Katika siku {o.horizon_days} zijazo kuna ishara za mvua, "
+                     f"lakini si ya uhakika. Huu ni makadirio." if sw
+                     else f"Over the next {o.horizon_days} days there are signs of "
+                          f"rain, but it is not certain. This is an estimate."))
+        elif outlook_severity(o) == "dry_season":
+            parts.append(
+                (f"Katika siku {o.horizon_days} zijazo hakuna mvua inayotarajiwa. "
+                 f"Huu ni makadirio." if sw
+                 else f"No rain is expected over the next {o.horizon_days} days. "
+                      f"This is an estimate."))
         else:
-            # A negligible-normal month needs no second dry-spell warning: the
-            # season already said it, so just state that no rain is expected.
-            if outlook_severity(o) == "dry_season":
-                parts.append(
-                    (f"Utabiri (siku {o.horizon_days}): hakuna mvua inayotarajiwa "
-                     f"({conf})." if sw else
-                     f"Forecast ({o.horizon_days} days): no rain expected ({conf})."))
-            else:
-                parts.append(
-                    (f"Utabiri (siku {o.horizon_days}): mvua kidogo, jumla "
-                     f"{o.forecast_total_mm:.0f} mm — kausha linaendelea ({conf})." if sw else
-                     f"Forecast ({o.horizon_days} days): little rain, "
-                     f"{o.forecast_total_mm:.0f} mm total — the dry spell continues ({conf})."))
+            parts.append(
+                (f"Katika siku {o.horizon_days} zijazo mvua inayotarajiwa ni "
+                 f"milimita {o.forecast_total_mm:.0f} pekee. Huu ni makadirio." if sw
+                 else f"Only {o.forecast_total_mm:.0f} mm of rain is expected over "
+                      f"the next {o.horizon_days} days. This is an estimate."))
     elif o.forecast_age_days is not None:
         parts.append("Utabiri wa mvua haupatikani kwa sasa." if sw
-                     else "No rain forecast available right now.")
+                     else "No rain forecast is available right now.")
 
     if not parts:
         return None
-    return ("Mvua: " if sw else "Rain: ") + " ".join(parts)
+    return " ".join(parts)
 
 
 
@@ -311,12 +311,13 @@ def mvua_message(o: RainOutlook | None, place: str | None = None,
     """The fuller answer for the 'mvua' service request.
 
     Same honesty rules as rain_line, with the numbers spelled out and an action
-    attached. Never claims more than the data supports.
+    attached. Written as sentences rather than label:value rows because the same
+    text is spoken aloud by a voice note, and spoken parentheticals vanish.
     """
     sw = lang != "english"
     if o is None:
         return ("Samahani, hatuna data ya mvua kwa eneo hili bado. Tuma eneo lako "
-                "(location) tena baadaye." if sw else
+                "tena baadaye." if sw else
                 "Sorry, we do not have rain data for this area yet. Send your "
                 "location again later.")
 
@@ -324,40 +325,42 @@ def mvua_message(o: RainOutlook | None, place: str | None = None,
     lines: list[str] = [("🌧 MVUA" if sw else "🌧 RAIN") + where]
 
     if o.dry_spell_days is not None:
-        lines.append(f"• Siku {o.dry_spell_days} bila mvua ya maana." if sw
-                     else f"• {o.dry_spell_days} days without real rain.")
+        lines.append((f"Siku {o.dry_spell_days} zimepita bila mvua ya maana." if sw
+                      else f"No real rain for {o.dry_spell_days} days."))
     if o.deficit_pct is not None and o.normal_30d_mm:
         recent_days = o.extras.get("recent_days", 30)
         lines.append(
-            (f"• Siku {recent_days} zilizopita: {o.rain_30d_mm:.0f} mm "
-             f"(kawaida {o.normal_30d_mm:.0f} mm).") if sw else
-            (f"• Last {recent_days} days: {o.rain_30d_mm:.0f} mm "
-             f"(normal {o.normal_30d_mm:.0f} mm)."))
+            (f"Katika siku {recent_days} zilizopita mvua ilikuwa milimita "
+             f"{o.rain_30d_mm:.0f}, wakati kawaida ni milimita "
+             f"{o.normal_30d_mm:.0f}." if sw else
+             f"Over the past {recent_days} days there was {o.rain_30d_mm:.0f} mm of "
+             f"rain, when the normal is {o.normal_30d_mm:.0f} mm."))
         sev = outlook_severity(o)
         sev_text = _SEV_SW[sev] if sw else _SEV_EN[sev]
-        lines.append("• " + sev_text[:1].upper() + sev_text[1:] + ".")
+        lines.append(sev_text[:1].upper() + sev_text[1:] + ".")
     if o.has_forecast and o.horizon_days:
-        conf = (CONFIDENCE_SW if sw else CONFIDENCE_EN)[o.confidence]
         if o.onset_date:
             days = max(0, (o.onset_date - (o.generated_on or o.onset_date)).days)
             lines.append(
-                (f"• ⏳ Utabiri: mvua inaweza kuanza baada ya siku {days} ({conf})." if sw
-                 else f"• ⏳ Forecast: rain may start in about {days} days ({conf})."))
+                (f"Mvua inaweza kuanza baada ya siku {days}. Huu ni utabiri, si "
+                 f"uhakika." if sw else
+                 f"Rain may start in about {days} days. This is a forecast, not a "
+                 f"certainty."))
+        elif outlook_severity(o) == "dry_season":
+            lines.append(
+                (f"Katika siku {o.horizon_days} zijazo hakuna mvua inayotarajiwa. "
+                 f"Huu ni makadirio." if sw else
+                 f"No rain is expected over the next {o.horizon_days} days. This is "
+                 f"an estimate."))
         else:
-            if outlook_severity(o) == "dry_season":
-                lines.append(
-                    (f"• ⏳ Utabiri wa siku {o.horizon_days}: hakuna mvua "
-                     f"inayotarajiwa ({conf})." if sw else
-                     f"• ⏳ {o.horizon_days}-day forecast: no rain expected ({conf})."))
-            else:
-                lines.append(
-                    (f"• ⏳ Utabiri wa siku {o.horizon_days}: mvua kidogo "
-                     f"({o.forecast_total_mm:.0f} mm) — kausha linaendelea ({conf})." if sw else
-                     f"• ⏳ {o.horizon_days}-day forecast: little rain "
-                     f"({o.forecast_total_mm:.0f} mm) — the dry spell continues ({conf})."))
+            lines.append(
+                (f"Katika siku {o.horizon_days} zijazo mvua inayotarajiwa ni "
+                 f"milimita {o.forecast_total_mm:.0f} pekee. Huu ni makadirio." if sw
+                 else f"Only {o.forecast_total_mm:.0f} mm of rain is expected over "
+                      f"the next {o.horizon_days} days. This is an estimate."))
     lines.append(
-        ("• Ushauri: usisubiri mvua ianze ndipo usogeze mifugo — kama malisho karibu "
-         "na maji yanaisha, hamia taratibu sasa." if sw else
-         "• Advice: do not wait for the rains before you move the herd — if the "
+        ("Ushauri: usisubiri mvua ianze ndipo usogeze mifugo. Kama malisho karibu na "
+         "maji yanaisha, hamia taratibu sasa." if sw else
+         "Advice: do not wait for the rains before you move the herd. If the "
          "pasture near water is running out, move gradually now."))
     return "\n".join(lines)
