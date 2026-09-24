@@ -40,11 +40,17 @@ print("age maths OK")
 # --- 3) the cadences match what the pipelines actually promise ---------------
 expected = {k: secs for k, _l, _d, secs in ds.FRESHNESS_SOURCES}
 assert expected["satellite"] == 14 * DAY, "must match refresh-indices.yml cron"
-assert expected["rain_observed"] == 12 * HOUR, "must match refresh-environment cron"
-assert expected["rain_forecast"] == 12 * HOUR
+assert expected["rain_observed"] == DAY, (
+    "observed_on is a DATE column: expecting less than a day would show a permanent "
+    "false 'aging' (today's rows are stored at 00:00)"
+)
+assert expected["rain_forecast"] == 12 * HOUR, "must match refresh-environment cron"
 assert expected["climatology"] == 365 * DAY
 assert expected["herder_reports"] == 7 * DAY
 assert len(ds.FRESHNESS_SOURCES) == 5
+# A real day-old observation must read as FRESH, not aging: that was the bug.
+assert ds.freshness_status(int(13.7 * HOUR), expected["rain_observed"]) == "fresh"
+assert ds.freshness_status(int(30 * HOUR), expected["rain_observed"]) == "aging"
 print("cadences match the scheduled jobs OK")
 
 # --- 4) the panel + template contract ---------------------------------------

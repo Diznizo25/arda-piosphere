@@ -471,7 +471,11 @@ FRESHNESS_SOURCES = (
     # key, label, detail, expected seconds between updates
     ("satellite", "Satellite pasture (COG)",
      "Sentinel-2 index stack per water point", 14 * 86400),
-    ("rain_observed", "Rain observed", "Open-Meteo 90-day series", 12 * 3600),
+    # NOTE: environment_daily.observed_on is a DATE, so it is structurally up to 24 h
+    # old (today's rows are stored as 00:00). Expecting 12 h here would show a
+    # permanent amber "aging" that is actually normal — a false alarm in a monitoring
+    # panel costs more than it warns. A day is the right cadence for a daily series.
+    ("rain_observed", "Rain observed", "Open-Meteo 90-day series (daily dates)", 86400),
     ("rain_forecast", "Rain forecast", "16-day outlook cache", 12 * 3600),
     ("climatology", "Rain climatology", "CHIRPS 30-year normals", 365 * 86400),
     ("herder_reports", "Herder reports", "water status + ground truth", 7 * 86400),
