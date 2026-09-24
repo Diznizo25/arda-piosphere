@@ -300,7 +300,36 @@ curl -X POST -H "X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>" -H "Content-Type: applica
 as an unanswerable question, because the resolution happens in the WhatsApp handler
 *before* the chat layer — a mistake this flag exists to prevent.
 
-## Writing that reads and SPEAKS like a person
+## Data freshness (and how to see it)
+
+Trust depends on the data being current, so freshness is a first-class dashboard
+panel rather than something you check by hand (`/dashboard` → **Data freshness**,
+`/dashboard/api/freshness` for JSON). Each source is compared with the cadence it is
+supposed to have, and classified `fresh` → `aging` → `stale` → `missing`:
+
+| Source | Expected every | Where the age comes from |
+|---|---|---|
+| Satellite pasture (COG) | 14 days | **R2 object upload time** — the file the advisory actually reads |
+| Rain observed | 12 h | `max(environment_daily.observed_on)` |
+| Rain forecast | 12 h | `max(environment_forecast.generated_at)` |
+| Rain climatology | 365 days | `max(rainfall_climatology.updated_at)` |
+| Herder reports | 7 days | `ground_truth_reports` + water status freshness |
+
+It also lists which scheduled pipelines last reported in (they log to `query_log`),
+so a job that silently stops shows up as a stale row instead of a surprise later.
+
+At the time of writing, measured: rain observed **13.6 h**, forecast **4.3 h**,
+climatology **6.1 days**, satellite COGs **9.1 days** (inside the 14-day cadence, no
+dated archive yet), and **0 herder reports** — the one row that is red, and a product
+signal rather than a pipeline fault: nobody has answered the one-tap water question
+yet.
+
+`scripts/backfill_indices_as_of.py` repairs the one field that had drifted: the COG
+upload time is authoritative, so it writes it into
+`water_sources.indices_as_of` (it is otherwise only set by the transfer pipeline, so
+it was NULL for every point until the next refresh ran).
+
+
 
 Herder feedback was blunt: advisories and voice notes were hard to follow — odd
 punctuation, stilted wording, and one question that made no sense at all ("Majina

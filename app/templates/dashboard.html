@@ -74,6 +74,11 @@
 <main>
   <section class="kpis" id="kpis"></section>
 
+  <section class="panel">
+    <h3>Data freshness · how current is what we tell herders?</h3>
+    <div id="freshness"><span class="muted">loading…</span></div>
+  </section>
+
   <section class="grid2">
     <div class="panel">
       <h3>Water points (live) · click a pin for details &amp; species rings</h3>
@@ -167,6 +172,33 @@ function renderHealth(h) {
   add('Env', '', h.environment || '');
   document.getElementById('envline').textContent = 'instance ' + (h.instance || '') +
     ' · generated ' + new Date().toLocaleTimeString();
+}
+
+function renderFreshness(f) {
+  const el = document.getElementById('freshness');
+  if (!el) return;
+  const cls = { fresh: 'ok', aging: 'warn', stale: 'err', missing: 'err' };
+  const word = { fresh: 'fresh', aging: 'aging', stale: 'STALE', missing: 'never received' };
+  const hours = s => s == null ? '—' : (s < 3600 ? Math.round(s / 60) + ' min'
+    : s < 86400 ? (s / 3600).toFixed(1) + ' h' : (s / 86400).toFixed(1) + ' d');
+  const rows = (f.sources || []).map(s => `<tr>
+      <td><b>${esc(s.label)}</b><div class="muted">${esc(s.detail)}</div></td>
+      <td>${rel(s.newest) || '<span class="muted">never</span>'}</td>
+      <td>${hours(s.age_seconds)}</td>
+      <td class="muted">every ${hours(s.expected_seconds)}</td>
+      <td class="${cls[s.status] || ''}"><b>${esc(word[s.status] || s.status)}</b></td>
+      <td class="muted">${esc(s.extra || '')}</td>
+    </tr>`).join('');
+  const sat = f.satellite || {};
+  const pipes = (f.pipelines || []).map(p =>
+    `${esc(p.pipeline)}: ${rel(p.last_run) || 'never'} (${p.runs} runs)`).join(' · ');
+  el.innerHTML =
+    `<table><thead><tr><th>Source</th><th>Latest data</th><th>Age</th><th>Expected</th>` +
+    `<th>Status</th><th>Coverage</th></tr></thead><tbody>${rows}</tbody></table>` +
+    `<div class="muted" style="margin-top:8px">Satellite snapshots: ${sat.built ?? 0}/${sat.total ?? 0} ` +
+    `water points built${sat.oldest ? ` · oldest ${rel(sat.oldest)}` : ''}. ` +
+    `Oldest is the one to watch: it is what the pasture advice reads.</div>` +
+    `<div class="muted" style="margin-top:4px">Scheduled pipelines: ${pipes || 'none reported yet'}</div>`;
 }
 
 function renderKPIs(s) {
@@ -309,12 +341,14 @@ async function refreshAll() {
   const done = (fn, name) => fn().then(v => (window['_' + name] = v)).catch(e => toast(name + ': ' + e.message));
   await done(() => getJSON('/dashboard/api/health'), 'h');
   await done(() => getJSON('/dashboard/api/summary'), 's');
+  await done(() => getJSON('/dashboard/api/freshness'), 'f');
   await done(() => getJSON('/dashboard/api/water-sources'), 'w');
   await done(() => getJSON('/dashboard/api/activity'), 'a');
   await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
   h = window._h || {}; s = window._s || {}; gj = window._w || { features: [] };
   a = window._a || {}; ts = window._t || {};
   renderHealth(h);
+  renderFreshness(window._f || {});
   renderKPIs(s);
   renderMap(gj);
   renderActivity(a);

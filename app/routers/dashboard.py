@@ -55,6 +55,14 @@ def api_health():
     return _json(dashboard_service.system_health())
 
 
+@router.get("/api/freshness", dependencies=[Depends(require_auth)])
+def api_freshness():
+    """How old the data behind an answer is: satellite snapshot, rain series,
+    forecast cache, climatology and the herder-report loop, each compared with the
+    cadence it is supposed to have."""
+    return _json(dashboard_service.data_freshness())
+
+
 @router.get("/api/summary", dependencies=[Depends(require_auth)])
 def api_summary():
     return _json(dashboard_service.summary())

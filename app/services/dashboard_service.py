@@ -11,6 +11,7 @@ import io
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 from PIL import Image
@@ -18,7 +19,7 @@ from PIL import Image
 from app.config import get_settings
 from app.db import get_pg_connection
 from app.services import raster_read
-from app.services.storage import get_s3_client
+from app.services.storage import cog_key, get_s3_client
 
 log = logging.getLogger(__name__)
 
@@ -458,6 +459,176 @@ def system_health() -> dict:
     health["environment"] = get_settings().environment
     health["generated_at"] = _now_iso()
     return health
+
+
+# --- data freshness -----------------------------------------------------------
+# "How old is the data behind an answer?" — the question a herder's trust depends
+# on, and one that stays invisible unless we surface it. Each source is compared
+# with the cadence it is SUPPOSED to have. The satellite snapshot comes from the R2
+# object's upload time, because that is the file the advisory actually reads.
+
+FRESHNESS_SOURCES = (
+    # key, label, detail, expected seconds between updates
+    ("satellite", "Satellite pasture (COG)",
+     "Sentinel-2 index stack per water point", 14 * 86400),
+    ("rain_observed", "Rain observed", "Open-Meteo 90-day series", 12 * 3600),
+    ("rain_forecast", "Rain forecast", "16-day outlook cache", 12 * 3600),
+    ("climatology", "Rain climatology", "CHIRPS 30-year normals", 365 * 86400),
+    ("herder_reports", "Herder reports", "water status + ground truth", 7 * 86400),
+)
+
+
+def freshness_status(age_seconds: int | None, expected_seconds: int) -> str:
+    """missing | fresh | aging | stale — for one source (pure, testable)."""
+    if age_seconds is None:
+        return "missing"
+    if age_seconds <= expected_seconds:
+        return "fresh"
+    if age_seconds <= expected_seconds * 2:
+        return "aging"
+    return "stale"
+
+
+def _as_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:  # noqa: BLE001
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def age_seconds(value, now: datetime | None = None) -> int | None:
+    dt = _as_dt(value)
+    if dt is None:
+        return None
+    return int(((now or datetime.now(timezone.utc)) - dt).total_seconds())
+
+
+def _cog_age() -> dict:
+    """Satellite snapshot age from R2 (what the reader actually opens).
+
+    Cached for a few minutes: the dashboard polls, and HEAD-ing nine ~500 MB COGs on
+    every poll is wasteful even though HEAD itself is cheap.
+    """
+    cached = _cache_get("cog_ages")
+    if cached:
+        return cached
+    settings = get_settings()
+    out = {"newest": None, "oldest": None, "built": 0, "total": 0, "missing": []}
+    try:
+        client = get_s3_client()
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select id, name from water_sources order by created_at")
+                points = cur.fetchall()
+        out["total"] = len(points)
+        for p in points:
+            try:
+                head = client.head_object(Bucket=settings.r2_bucket_name,
+                                          Key=cog_key(str(p["id"])))
+                lm = head["LastModified"]
+                out["built"] += 1
+                out["newest"] = lm if out["newest"] is None or lm > out["newest"] else out["newest"]
+                out["oldest"] = lm if out["oldest"] is None or lm < out["oldest"] else out["oldest"]
+            except Exception:  # noqa: BLE001
+                out["missing"].append(p["name"] or str(p["id"])[:8])
+    except Exception:  # noqa: BLE001
+        log.exception("cog age check failed")
+    _cache_put("cog_ages", out)
+    return out
+
+def data_freshness() -> dict:
+    """Per-source freshness: what we hold, how old it is, and whether that is within
+    the cadence we promised. This is the panel that answers "is the data current?"
+    without anyone having to query the database by hand."""
+    observed: dict[str, dict] = {}
+    try:
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                observed["rain_observed"] = {
+                    "newest": _scalar(cur, "select max(observed_on)::timestamp from environment_daily"),
+                    "rows": _scalar(cur, "select count(*) from environment_daily"),
+                }
+                observed["rain_forecast"] = {
+                    "newest": _scalar(cur, "select max(generated_at) from environment_forecast"),
+                    "rows": _scalar(cur, "select count(*) from environment_forecast"),
+                }
+                observed["climatology"] = {
+                    "newest": _scalar(cur, "select max(updated_at) from rainfall_climatology"),
+                    "rows": _scalar(cur, "select count(*) from rainfall_climatology"),
+                }
+                if _table_exists(cur, "ground_truth_reports"):
+                    observed["herder_reports"] = {
+                        "newest": _scalar(cur, "select max(reported_at) from ground_truth_reports"),
+                        "rows": _scalar(cur, "select count(*) from ground_truth_reports"),
+                        "status_rows": _scalar(cur,
+                                               "select count(status_updated_at) from water_sources"),
+                    }
+    except Exception:  # noqa: BLE001
+        log.exception("freshness DB read failed")
+
+    cog = _cog_age()
+    sources: list[dict] = []
+    for key, label, detail, expected in FRESHNESS_SOURCES:
+        if key == "satellite":
+            newest = cog["newest"]
+            extra = (f"{cog['built']}/{cog['total']} water points built"
+                     if cog["total"] else "no water points")
+            if cog["missing"]:
+                extra += f" · missing: {', '.join(cog['missing'][:2])}"
+        else:
+            info = observed.get(key) or {}
+            newest = info.get("newest")
+            extra = f"{info['rows']} rows" if info.get("rows") is not None else ""
+            if key == "herder_reports" and info:
+                extra += f" · status set on {info.get('status_rows', 0)} points"
+        age = age_seconds(newest)
+        sources.append({
+            "key": key, "label": label, "detail": detail,
+            "newest": _iso(newest), "age_seconds": age,
+            "expected_seconds": expected,
+            "status": freshness_status(age, expected),
+            "extra": extra,
+        })
+
+    return {
+        "generated_at": _now_iso(),
+        "sources": sources,
+        "satellite": {"built": cog["built"], "total": cog["total"],
+                      "oldest": _iso(cog["oldest"]),
+                      "oldest_age_seconds": age_seconds(cog["oldest"])},
+        "pipelines": _pipeline_runs(),
+    }
+
+
+def _pipeline_runs() -> list[dict]:
+    """When each scheduled pipeline last reported in (they log to query_log)."""
+    out: list[dict] = []
+    try:
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select detail->>'pipeline' as pipeline,
+                              max(created_at) as last_run,
+                              count(*) as runs
+                       from query_log
+                       where detail ? 'pipeline'
+                       group by 1 order by 1"""
+                )
+                for row in cur.fetchall():
+                    out.append({"pipeline": row["pipeline"],
+                                "last_run": _iso(row["last_run"]),
+                                "age_seconds": age_seconds(row["last_run"]),
+                                "runs": row["runs"]})
+    except Exception:  # noqa: BLE001
+        log.exception("pipeline run lookup failed")
+    return out
+
+
 
 
 # --- small helpers ------------------------------------------------------------
