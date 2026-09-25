@@ -3,372 +3,930 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Arda Link · Ops Dashboard</title>
+<title>Arda Link · Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root {
-    --bg:#0f172a; --panel:#1e293b; --panel2:#263449; --text:#e2e8f0; --muted:#94a3b8;
-    --green:#22c55e; --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6; --teal:#14b8a6;
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text);
-         font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding:14px 20px; background:var(--panel); border-bottom:1px solid #334155;
-           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
-  header h1 { font-size:18px; margin:0; font-weight:700; }
-  header .sub { color:var(--muted); font-size:12px; }
-  #chips { display:flex; gap:8px; flex-wrap:wrap; padding:10px 20px 0; }
-  .chip { background:var(--panel2); border:1px solid #334155; border-radius:20px;
-          padding:4px 12px; font-size:12px; color:var(--muted); }
-  .chip b { color:var(--text); }
-  .ok { color:var(--green); } .err { color:var(--red); } .warn { color:var(--amber); }
-  main { padding:14px 20px 40px; display:grid; gap:14px; }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
-  .kpi { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:12px 14px; }
-  .kpi .n { font-size:26px; font-weight:800; margin-top:2px; }
-  .kpi .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
-  .grid2 { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; }
-  @media (max-width:1000px){ .grid2{ grid-template-columns:1fr; } }
-  .panel { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:12px 14px; }
-  .panel h3 { margin:0 0 8px; font-size:14px; }
-  #map { height:460px; border-radius:10px; background:#223; }
-  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
-  .chartbox { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:10px 12px; }
-  .chartbox h3 { margin:0 0 6px; font-size:13px; }
-  .chartbox canvas { max-height:220px; }
-  table { width:100%; border-collapse:collapse; font-size:12.5px; }
-  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #29374a; }
-  th { color:var(--muted); font-size:11px; text-transform:uppercase; }
-  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:700; }
-  .t-ok{background:#052e16;color:#4ade80} .t-err{background:#450a0a;color:#f87171}
-  .t-not_found{background:#422006;color:#fbbf24} .t-pending{background:#422006;color:#fbbf24}
-  .t-running{background:#172554;color:#60a5fa} .t-done{background:#052e16;color:#4ade80}
-  .t-built{background:#052e16;color:#4ade80} .t-failed{background:#450a0a;color:#f87171}
-  .t-seed{background:#334155;color:#cbd5e1} .t-query{background:#312e81;color:#a5b4fc}
-  .t-wtype{background:#083344;color:#67e8f9}
-  .t-build{background:#1e3a2f;color:#34d399} .t-report{background:#3f1d38;color:#f0abfc}
-  select, button { background:var(--panel2); color:var(--text); border:1px solid #475569;
-                   border-radius:8px; padding:6px 10px; font-size:13px; }
-  .flex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .muted { color:var(--muted); font-size:12px; }
-  #activity { max-height:420px; overflow:auto; }
-  .cogimg { border:1px solid #334155; border-radius:10px; max-width:240px; height:auto; background:#000; }
-  .cogstats { overflow:auto; max-height:300px; }
-  #toast { position:fixed; bottom:16px; right:16px; background:#7f1d1d; color:#fecaca;
-           padding:10px 16px; border-radius:10px; display:none; font-size:13px; }
+/* ============================================================================
+   Arda Link operations console.
+
+   Two decisions shape this whole page.
+
+   1. FRESHNESS IS THE HEADLINE, not a count. The product promise is timing —
+      "know first, act in time" — so the question that matters is whether what we
+      are telling herders is current, and whether the pipelines that refresh it
+      are alive. Counts of water points are vanity; a stale satellite read is a
+      herder walking to the wrong place. So the top of the page is a ledger where
+      each source's POSITION encodes its age against its own promised cadence.
+      Five sources with wildly different cadences (satellite fortnightly, rain
+      daily, climatology yearly) cannot be compared as five numbers; they can be
+      compared as five marks on one scale.
+
+   2. COLOUR IS VALIDATED, NOT CHOSEN BY EYE. The categorical ramp below passed
+      the lightness-band, chroma, CVD-separation, normal-vision and contrast
+      checks against THIS surface (#1F1B15, dark, adjacent pairlist). Status
+      hues are reserved and never reused as a series colour, and every status
+      ships with a word beside it so meaning is never carried by colour alone.
+      If you change a colour here, re-run the validator against this surface.
+   ========================================================================== */
+:root {
+  /* warm dark — deliberately not the blue-slate of every admin template */
+  --ground:#16130F; --panel:#1F1B15; --raised:#2A241B;
+  --rule:#342C21; --rule-soft:#282218;
+  --ink:#EDE6DA; --muted:#9A9083; --faint:#6E665C;
+
+  /* accents: the system's own forage ochre, and water */
+  --accent:#D98A4A; --water:#4FB6C4;
+
+  /* status — reserved, never a series colour */
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b; --absent:#7A7268;
+
+  /* categorical — fixed order, never cycled. Validated on this surface. */
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  --s-other:#6E665C;
+
+  --f-ui:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body {
+  background:var(--ground); color:var(--ink);
+  font-family:var(--f-ui); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.num { font-family:var(--f-mono); font-variant-numeric:tabular-nums; }
+
+/* ---------- status rail ---------- */
+.rail {
+  display:flex; align-items:center; gap:0; flex-wrap:wrap;
+  background:var(--panel); border-bottom:1px solid var(--rule);
+  padding:0 18px; min-height:46px;
+  position:sticky; top:0; z-index:500;
+}
+.rail .brand {
+  font-family:var(--f-ui); font-weight:700; font-size:15px; letter-spacing:-.01em;
+  padding-right:16px; margin-right:16px; border-right:1px solid var(--rule);
+  display:flex; align-items:center; gap:9px;
+}
+.rail .brand i {
+  width:8px; height:8px; border-radius:50%; background:var(--absent);
+  box-shadow:0 0 0 3px rgba(122,114,104,.18); flex:none;
+}
+.rail .brand.state-ok i { background:var(--good); box-shadow:0 0 0 3px rgba(12,163,12,.2); }
+.rail .brand.state-warn i { background:var(--warning); box-shadow:0 0 0 3px rgba(250,178,25,.2); }
+.rail .brand.state-bad i { background:var(--critical); box-shadow:0 0 0 3px rgba(208,59,59,.22); }
+.rail .spacer { flex:1 1 auto; }
+.rail-item {
+  font-family:var(--f-mono); font-size:11.5px; color:var(--muted);
+  padding:4px 14px 4px 0; white-space:nowrap;
+}
+.rail-item b { color:var(--ink); font-weight:500; }
+.rail-item.bad b { color:var(--critical); }
+.rail-item.warn b { color:var(--warning); }
+.rail-item.ok b { color:var(--good); }
+.rail button {
+  font-family:var(--f-mono); font-size:11.5px; color:var(--muted);
+  background:transparent; border:1px solid var(--rule); border-radius:3px;
+  padding:4px 10px; cursor:pointer;
+}
+.rail button:hover { color:var(--ink); border-color:var(--faint); }
+.rail button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* ---------- layout ---------- */
+main { padding:18px; display:grid; gap:18px; max-width:1560px; margin:0 auto; }
+section { background:var(--panel); border:1px solid var(--rule); }
+.sec-head {
+  display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+  padding:13px 16px; border-bottom:1px solid var(--rule-soft);
+}
+.sec-head h2 {
+  margin:0; font-size:13px; font-weight:600; letter-spacing:.02em;
+}
+.sec-head .why { font-size:12px; color:var(--muted); font-weight:400; }
+.sec-head .right { margin-left:auto; font-family:var(--f-mono); font-size:11px; color:var(--faint); }
+.sec-body { padding:16px; }
+.sec-body.tight { padding:10px 16px 16px; }
+
+.cols { display:grid; grid-template-columns:1.45fr 1fr; gap:18px; }
+.cols-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+@media (max-width:1180px){ .cols,.cols-3 { grid-template-columns:1fr; } }
+
+/* ---------- freshness ledger (the hero) ---------- */
+#ledger { width:100%; height:auto; display:block; }
+.legend-row {
+  display:flex; gap:20px; flex-wrap:wrap; align-items:center;
+  padding:12px 16px 0; font-family:var(--f-mono); font-size:11px; color:var(--muted);
+}
+.legend-row .sw { display:inline-flex; align-items:center; gap:6px; }
+.legend-row .sw i { width:10px; height:10px; border-radius:2px; flex:none; }
+
+/* ---------- metric strip: dense, not big vanity cards ---------- */
+.strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); }
+.metric {
+  padding:13px 16px; border-right:1px solid var(--rule-soft);
+  display:flex; flex-direction:column; gap:3px; min-width:0;
+}
+.metric:last-child { border-right:none; }
+.metric .l {
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--faint); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.metric .v {
+  font-family:var(--f-mono); font-size:22px; font-weight:500; line-height:1.15;
+  font-variant-numeric:tabular-nums;
+}
+.metric .x { font-family:var(--f-mono); font-size:11px; color:var(--muted); }
+.metric.alert .v { color:var(--critical); }
+.metric.warn .v { color:var(--warning); }
+
+/* ---------- map ---------- */
+#map { height:520px; background:var(--raised); }
+.maplegend {
+  display:flex; gap:14px; flex-wrap:wrap; padding:10px 16px;
+  border-top:1px solid var(--rule-soft);
+  font-family:var(--f-mono); font-size:11px; color:var(--muted);
+}
+.maplegend i { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:5px; }
+.leaflet-container { background:var(--raised); font-family:var(--f-mono); font-size:11px; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background:var(--raised); color:var(--ink); border:1px solid var(--rule);
+  border-radius:3px; box-shadow:0 8px 26px rgba(0,0,0,.5);
+}
+.leaflet-popup-content { margin:10px 12px; font-size:12px; }
+.leaflet-popup-content b { color:var(--accent); }
+.leaflet-bar a { background:var(--raised); color:var(--ink); border-color:var(--rule); }
+.leaflet-bar a:hover { background:var(--panel); }
+
+/* ---------- feed ---------- */
+.feed { max-height:520px; overflow-y:auto; }
+.ev {
+  display:grid; grid-template-columns:70px 1fr auto; gap:0 12px;
+  padding:9px 16px; border-bottom:1px solid var(--rule-soft); align-items:baseline;
+}
+.ev:last-child { border-bottom:none; }
+.ev .k {
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--faint); padding-top:2px;
+}
+.ev .d { font-size:12.5px; min-width:0; overflow-wrap:anywhere; }
+.ev .t { font-family:var(--f-mono); font-size:10.5px; color:var(--faint); white-space:nowrap; }
+.ev .d .who { color:var(--muted); }
+.pill {
+  font-family:var(--f-mono); font-size:10px; font-weight:500; padding:1px 5px;
+  border-radius:2px; border:1px solid currentColor; white-space:nowrap;
+}
+.p-ok { color:var(--good); } .p-err { color:var(--critical); }
+.p-warn { color:var(--warning); } .p-info { color:var(--water); }
+.p-none { color:var(--faint); }
+
+/* ---------- charts ---------- */
+.chart { width:100%; height:auto; display:block; overflow:visible; }
+.tip {
+  position:fixed; z-index:900; pointer-events:none; opacity:0;
+  transition:opacity .08s linear;
+  background:var(--raised); border:1px solid var(--rule);
+  padding:8px 10px; border-radius:3px; box-shadow:0 10px 30px rgba(0,0,0,.55);
+  font-family:var(--f-mono); font-size:11.5px; color:var(--ink);
+  max-width:260px;
+}
+.tip b { color:var(--accent); font-weight:500; }
+.tip .r { display:flex; justify-content:space-between; gap:14px; }
+.tip .r i { width:8px; height:8px; border-radius:2px; flex:none; margin-right:6px; }
+
+/* ---------- tables ---------- */
+table { width:100%; border-collapse:collapse; font-family:var(--f-mono); font-size:11.5px; }
+th {
+  text-align:left; padding:7px 10px 7px 0; color:var(--faint); font-weight:500;
+  letter-spacing:.06em; text-transform:uppercase; font-size:10px;
+  border-bottom:1px solid var(--rule);
+}
+td { padding:7px 10px 7px 0; border-bottom:1px solid var(--rule-soft); }
+tr:last-child td { border-bottom:none; }
+td.n { text-align:right; font-variant-numeric:tabular-nums; }
+.scroll { overflow-x:auto; }
+
+/* ---------- COG explorer ---------- */
+.cog-controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+select {
+  font-family:var(--f-mono); font-size:11.5px; background:var(--raised);
+  color:var(--ink); border:1px solid var(--rule); border-radius:3px; padding:5px 8px;
+}
+select:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+#cogImg {
+  width:100%; max-width:100%; image-rendering:pixelated; display:block;
+  border:1px solid var(--rule); background:var(--raised); aspect-ratio:1;
+}
+.empty { color:var(--faint); font-family:var(--f-mono); font-size:11.5px; padding:6px 0; }
+
+#toast {
+  position:fixed; right:16px; bottom:16px; z-index:1000; display:none;
+  background:var(--raised); border:1px solid var(--critical); color:var(--ink);
+  padding:10px 14px; border-radius:3px; font-family:var(--f-mono); font-size:11.5px;
+  max-width:min(420px,90vw); box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+@media (prefers-reduced-motion:reduce){ *{ transition:none!important; animation:none!important; } }
+@media (max-width:640px){
+  main { padding:12px; gap:12px; }
+  .sec-body { padding:12px; }
+  #map { height:380px; }
+  .ev { grid-template-columns:62px 1fr; }
+  .ev .t { grid-column:2; }
+}
 </style>
-
+</head>
 <body>
-<header>
-  <h1>Arda Link · Piosphere Ops</h1>
-  <span class="sub" id="envline"></span>
-  <span class="sub" id="uptime"></span>
-  <div style="margin-left:auto" class="flex">
-    <span class="muted">Auto-refresh 30s</span>
-    <button onclick="refreshAll()">Refresh now</button>
-  </div>
-</header>
 
-<div id="chips"></div>
+<div class="rail">
+  <div class="brand" id="brand"><i></i>Arda Link</div>
+  <div class="rail-item" id="railDb">db <b>—</b></div>
+  <div class="rail-item" id="railR2">r2 <b>—</b></div>
+  <div class="rail-item" id="railCommit">build <b>—</b></div>
+  <div class="rail-item" id="railUptime">up <b>—</b></div>
+  <div class="spacer"></div>
+  <div class="rail-item" id="railUpdated">—</div>
+  <button id="btnRefresh" type="button">refresh</button>
+</div>
 
 <main>
-  <section class="kpis" id="kpis"></section>
 
-  <section class="panel">
-    <h3>Data freshness · how current is what we tell herders?</h3>
-    <div id="freshness"><span class="muted">loading…</span></div>
+  <!-- ============ 1. FRESHNESS LEDGER — the headline ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Data freshness</h2>
+      <span class="why">Is what we are telling herders current? Each mark is one source's age against its own promised cadence.</span>
+      <span class="right" id="satSummary"></span>
+    </div>
+    <div class="legend-row">
+      <span class="sw"><i style="background:var(--good)"></i>on time</span>
+      <span class="sw"><i style="background:var(--warning)"></i>overdue</span>
+      <span class="sw"><i style="background:var(--critical)"></i>stale</span>
+      <span class="sw"><i style="background:var(--absent)"></i>never received</span>
+      <span style="color:var(--faint)">│ dashed line = cadence we promised</span>
+    </div>
+    <div class="sec-body tight">
+      <svg id="ledger" role="img" aria-label="Freshness of each data source against its expected refresh cadence"></svg>
+    </div>
   </section>
 
-  <section class="grid2">
-    <div class="panel">
-      <h3>Water points (live) · click a pin for details &amp; species rings</h3>
+  <!-- ============ 2. PIPELINES ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Pipelines</h2>
+      <span class="why">The scheduled jobs that keep the above fresh. A red run here becomes a stale row above.</span>
+    </div>
+    <div class="sec-body"><div class="scroll" id="pipelines"></div></div>
+  </section>
+
+  <!-- ============ 3. OPERATIONAL METRICS ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Service</h2>
+      <span class="why">What the herder-facing path did in the last 24 hours and 7 days.</span>
+    </div>
+    <div class="strip" id="metrics"></div>
+  </section>
+
+  <!-- ============ 4. MAP + FEED ============ -->
+  <div class="cols">
+    <section>
+      <div class="sec-head">
+        <h2>Water points</h2>
+        <span class="why">Click a point for its rings and satellite bands.</span>
+        <span class="right" id="mapCount"></span>
+      </div>
       <div id="map"></div>
+      <div class="maplegend" id="mapLegend"></div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <h2>Activity</h2>
+        <span class="why">Newest first.</span>
+      </div>
+      <div class="feed" id="feed"></div>
+    </section>
+  </div>
+
+  <!-- ============ 5. CHARTS ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Requests per day, by kind</h2>
+      <span class="why">14 days. Hover a day for the breakdown.</span>
+      <span class="right" id="qTotal"></span>
     </div>
-    <div class="panel">
-      <h3>Recent activity</h3>
-      <div id="activity"></div>
+    <div class="sec-body">
+      <div class="legend-row" id="qLegend" style="padding:0 0 12px"></div>
+      <svg id="chQueries" class="chart" role="img" aria-label="Stacked bars of requests per day by kind"></svg>
+      <details style="margin-top:12px">
+        <summary style="font-family:var(--f-mono);font-size:11px;color:var(--muted);cursor:pointer">table view</summary>
+        <div class="scroll" id="qTable" style="margin-top:10px"></div>
+      </details>
     </div>
   </section>
 
-  <section class="charts">
-    <div class="chartbox"><h3>Queries per day (by kind)</h3><canvas id="chQueries"></canvas></div>
-    <div class="chartbox"><h3>Water points by source</h3><canvas id="chSources"></canvas></div>
-    <div class="chartbox"><h3>Builds by status</h3><canvas id="chBuilds"></canvas></div>
-    <div class="chartbox"><h3>Herder feedback</h3><canvas id="chReports"></canvas></div>
+  <div class="cols-3">
+    <section>
+      <div class="sec-head"><h2>Builds by status</h2></div>
+      <div class="sec-body"><svg id="chBuilds" class="chart" role="img" aria-label="Water point builds by status"></svg></div>
+    </section>
+    <section>
+      <div class="sec-head"><h2>Water points by type</h2></div>
+      <div class="sec-body"><svg id="chTypes" class="chart" role="img" aria-label="Water points by type"></svg></div>
+    </section>
+    <section>
+      <div class="sec-head"><h2>Herder reports</h2><span class="why">all time</span></div>
+      <div class="sec-body"><svg id="chReports" class="chart" role="img" aria-label="Herder ground-truth reports by type"></svg></div>
+    </section>
+  </div>
+
+  <!-- ============ 6. COG EXPLORER ============ -->
+  <section>
+    <div class="sec-head">
+      <h2>Satellite bands</h2>
+      <span class="why">Read straight from the COG in R2 — what the advisory actually sees.</span>
+    </div>
+    <div class="sec-body">
+      <div class="cog-controls">
+        <select id="cogSource" aria-label="Water point"></select>
+        <select id="cogBand" aria-label="Band">
+          <option value="1">1 · NDVI</option><option value="2">2 · NDRE</option>
+          <option value="3" selected>3 · SATVI</option><option value="4">4 · BSI</option>
+          <option value="5">5 · NDMI</option><option value="6">6 · NDWI</option>
+          <option value="7">7 · VCI</option><option value="8">8 · GSW</option>
+        </select>
+        <span class="empty" id="cogMeta"></span>
+      </div>
+      <div class="cols" style="margin-top:14px">
+        <div class="scroll"><table id="cogStats"></table></div>
+        <img id="cogImg" alt="Colour-mapped preview of the selected satellite band">
+      </div>
+    </div>
   </section>
 
-  <section class="panel">
-    <h3>COG explorer (satellite indices from R2)</h3>
-    <div class="flex">
-      <select id="cogSource" onchange="loadCog()"></select>
-      <select id="cogBand" onchange="loadCog()">
-        <option value="0">NDVI (greenness)</option>
-        <option value="1">NDRE (leaf nitrogen)</option>
-        <option value="2">SATVI (dry forage)</option>
-        <option value="3">BSI (bare soil)</option>
-        <option value="4">NDMI (moisture)</option>
-        <option value="5">NDWI (water)</option>
-        <option value="6">VCI (condition index)</option>
-        <option value="7">GSW (water recurrence)</option>
-      </select>
-      <span class="muted" id="cogMeta"></span>
-    </div>
-    <div class="flex" style="margin-top:10px">
-      <div><img id="cogImg" class="cogimg" alt="band preview" src=""></div>
-      <div class="cogstats"><table id="cogStats"></table></div>
-    </div>
-  </section>
 </main>
 
+<div class="tip" id="tip"></div>
 <div id="toast"></div>
 
-</head>
-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
-'use strict';
+/* ===========================================================================
+   API plumbing — unchanged contract with app/routers/dashboard.py
+   ========================================================================= */
 const KEY = new URLSearchParams(location.search).get('key') || '';
-function api(path) { return path + (KEY ? (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : ''); }
-async function getJSON(path) {
-  const r = await fetch(api(path));
-  if (!r.ok) throw new Error(path + ' -> ' + r.status);
+const api = p => p + (KEY ? (p.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : '');
+async function getJSON(p) {
+  const r = await fetch(api(p));
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
   return r.json();
 }
-function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : '—'; }
-function rel(iso) {
-  if (!iso) return '';
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return Math.round(s) + 's ago';
-  if (s < 3600) return Math.round(s / 60) + 'm ago';
-  if (s < 86400) return Math.round(s / 3600) + 'h ago';
-  return Math.round(s / 86400) + 'd ago';
-}
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 5000); }
-
-let map = null, ringsLayer = null, charts = {};
-const STATUS_COLORS = { built:'#22c55e', done:'#22c55e', running:'#f59e0b', pending:'#f59e0b',
-                        failed:'#ef4444', seed:'#64748b' };
-
-function initMap() {
-  if (!window.L) { document.getElementById('map').textContent = 'Leaflet CDN unavailable — map disabled.'; return; }
-  map = L.map('map').setView([0.35, 37.7], 9);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { attribution: '© OpenStreetMap', maxZoom: 17 }).addTo(map);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const CSS = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function toast(m) {
+  const t = document.getElementById('toast');
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 6000);
 }
 
-function renderHealth(h) {
-  const chips = document.getElementById('chips');
-  chips.innerHTML = '';
-  const add = (label, cls, text) => chips.insertAdjacentHTML('beforeend',
-    `<span class="chip">${esc(label)} <b class="${cls}">${esc(text)}</b></span>`);
-  add('DB', h.checks && h.checks.db === 'ok' ? 'ok' : 'err', (h.checks && h.checks.db) || 'unknown');
-  add('R2', h.checks && h.checks.r2 === 'ok' ? 'ok' : 'err', (h.checks && h.checks.r2) || 'unknown');
-  add('COGs in R2', 'ok', h.cog_count ?? 0);
-  add('Last build update', '', rel(h.last_build_update) || '—');
-  add('Last query', '', rel(h.last_query) || '—');
-  add('Deploy', '', (h.deploy_commit || '').slice(0, 7));
-  add('Env', '', h.environment || '');
-  document.getElementById('envline').textContent = 'instance ' + (h.instance || '') +
-    ' · generated ' + new Date().toLocaleTimeString();
+/* Durations read the way an operator says them out loud. */
+function dur(s) {
+  if (s == null) return '—';
+  if (s < 90) return Math.round(s) + 's';
+  if (s < 5400) return Math.round(s / 60) + 'm';
+  if (s < 172800) return (s / 3600).toFixed(s < 36000 ? 1 : 0) + 'h';
+  return (s / 86400).toFixed(s < 864000 ? 1 : 0) + 'd';
+}
+const ago = iso => iso ? dur((Date.now() - new Date(iso).getTime()) / 1000) + ' ago' : 'never';
+const clock = iso => iso ? new Date(iso).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
+const stamp = iso => iso ? new Date(iso).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+
+/* Shared tooltip. Every chart mark gets one (SVG charts are interactive by default). */
+const tip = document.getElementById('tip');
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.style.opacity = '1';
+  const r = tip.getBoundingClientRect();
+  let x = ev.clientX + 14, y = ev.clientY - 10;
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - 14;
+  if (y + r.height > innerHeight - 8) y = innerHeight - r.height - 8;
+  tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
+}
+const hideTip = () => { tip.style.opacity = '0'; };
+function hoverable(el, html) {
+  el.addEventListener('mousemove', e => showTip(html, e));
+  el.addEventListener('mouseleave', hideTip);
+  el.style.cursor = 'default';
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function mk(tag, attrs = {}, parent = null) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
 }
 
-function renderFreshness(f) {
-  const el = document.getElementById('freshness');
-  if (!el) return;
-  const cls = { fresh: 'ok', aging: 'warn', stale: 'err', missing: 'err' };
-  const word = { fresh: 'fresh', aging: 'aging', stale: 'STALE', missing: 'never received' };
-  const hours = s => s == null ? '—' : (s < 3600 ? Math.round(s / 60) + ' min'
-    : s < 86400 ? (s / 3600).toFixed(1) + ' h' : (s / 86400).toFixed(1) + ' d');
-  const rows = (f.sources || []).map(s => `<tr>
-      <td><b>${esc(s.label)}</b><div class="muted">${esc(s.detail)}</div></td>
-      <td>${rel(s.newest) || '<span class="muted">never</span>'}</td>
-      <td>${hours(s.age_seconds)}</td>
-      <td class="muted">every ${hours(s.expected_seconds)}</td>
-      <td class="${cls[s.status] || ''}"><b>${esc(word[s.status] || s.status)}</b></td>
-      <td class="muted">${esc(s.extra || '')}</td>
-    </tr>`).join('');
+/* ===========================================================================
+   1. FRESHNESS LEDGER
+   One scale, five marks. x encodes age relative to that source's OWN cadence,
+   so sources refreshed fortnightly and hourly are comparable on one axis.
+
+   The scale is piecewise on purpose: a linear axis would crush the entire
+   healthy range into the first few pixels for any source that is badly overdue,
+   and "how far past due" is exactly what an operator is looking for.
+     0 .. 1x expected  -> 0 .. 55%   (on time)
+     1x .. 2x          -> 55 .. 80%  (overdue)
+     beyond 2x         -> 80 .. 100% (stale, compressed)
+   ========================================================================= */
+const DUE_X = 0.55, STALE_X = 0.80;
+function freshPos(age, expected) {
+  if (age == null || !expected) return null;
+  const r = age / expected;
+  if (r <= 1) return DUE_X * r;
+  if (r <= 2) return DUE_X + (STALE_X - DUE_X) * (r - 1);
+  return STALE_X + (1 - STALE_X) * Math.min(1, (r - 2) / 2);
+}
+const STATUS_COLOR = { fresh:'--good', aging:'--warning', stale:'--critical', missing:'--absent' };
+// Short enough for the value column; the legend and tooltip carry the full phrasing.
+const STATUS_WORD  = { fresh:'on time', aging:'overdue', stale:'STALE', missing:'never' };
+
+function renderLedger(f) {
+  const svg = document.getElementById('ledger');
+  svg.innerHTML = '';
+  const sources = f.sources || [];
+  if (!sources.length) {
+    svg.setAttribute('viewBox', '0 0 800 40');
+    mk('text', { x:0, y:22, fill:CSS('--faint'), 'font-family':CSS('--f-mono'), 'font-size':12 }, svg)
+      .textContent = 'no freshness data';
+    return;
+  }
+
+  const W = 900, LBL = 168, PAD_R = 92, ROW = 42, TOP = 10;
+  const trackX = LBL, trackW = W - LBL - PAD_R;
+  const H = TOP + sources.length * ROW + 34;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  /* zone bands — drawn once, behind every row, because they are the shared scale */
+  const bands = [
+    [0, DUE_X, '--good', 'on time'],
+    [DUE_X, STALE_X, '--warning', 'overdue'],
+    [STALE_X, 1, '--critical', 'stale'],
+  ];
+  for (const [a, b, tok] of bands) {
+    mk('rect', { x: trackX + a * trackW, y: TOP, width: (b - a) * trackW,
+                 height: sources.length * ROW - 8, fill: CSS(tok), opacity: .055 }, svg);
+  }
+  /* the promise line */
+  const dueX = trackX + DUE_X * trackW;
+  mk('line', { x1:dueX, y1:TOP - 2, x2:dueX, y2:TOP + sources.length*ROW - 8,
+               stroke:CSS('--muted'), 'stroke-width':1, 'stroke-dasharray':'3 3', opacity:.7 }, svg);
+
+  sources.forEach((s, i) => {
+    const y = TOP + i * ROW + ROW / 2 - 6;
+    const col = CSS(STATUS_COLOR[s.status] || '--absent');
+
+    /* label + what it is */
+    const lt = mk('text', { x:0, y:y + 1, fill:CSS('--ink'), 'font-family':CSS('--f-ui'),
+                            'font-size':12.5, 'font-weight':600 }, svg);
+    lt.textContent = s.label || s.key;
+    const dt = mk('text', { x:0, y:y + 15, fill:CSS('--faint'), 'font-family':CSS('--f-mono'),
+                            'font-size':10 }, svg);
+    // 25 chars is what fits the 168px label gutter at 10px mono; the full
+    // string is in the tooltip.
+    dt.textContent = (s.detail || '').slice(0, 25);
+
+    /* the track */
+    mk('line', { x1:trackX, y1:y, x2:trackX + trackW, y2:y,
+                 stroke:CSS('--rule'), 'stroke-width':2 }, svg);
+
+    const px = freshPos(s.age_seconds, s.expected_seconds);
+    if (px == null) {
+      /* never received — an open ring at the far end, never a filled mark that
+         could read as a real measurement */
+      mk('circle', { cx:trackX + trackW, cy:y, r:5, fill:'none',
+                     stroke:CSS('--absent'), 'stroke-width':2 }, svg);
+    } else {
+      const mx = trackX + px * trackW;
+      /* filled bar from origin to the mark: length is readable even in greyscale */
+      mk('line', { x1:trackX, y1:y, x2:mx, y2:y, stroke:col, 'stroke-width':2 }, svg);
+      /* 2px surface ring so the mark stays separate from the bar under it */
+      mk('circle', { cx:mx, cy:y, r:6, fill:CSS('--panel') }, svg);
+      mk('circle', { cx:mx, cy:y, r:4.5, fill:col }, svg);
+    }
+
+    /* direct label — every mark is labelled, so identity is never colour-alone */
+    const vt = mk('text', { x:W - PAD_R + 10, y:y + 1, fill:col,
+                            'font-family':CSS('--f-mono'), 'font-size':11.5,
+                            'font-weight':500 }, svg);
+    vt.textContent = s.age_seconds == null ? 'never' : dur(s.age_seconds);
+    const wt = mk('text', { x:W - PAD_R + 10, y:y + 15, fill:CSS('--faint'),
+                            'font-family':CSS('--f-mono'), 'font-size':9.5 }, svg);
+    wt.textContent = STATUS_WORD[s.status] || s.status;
+
+    /* generous hit target, bigger than the mark */
+    const hit = mk('rect', { x:0, y:y - ROW/2 + 4, width:W, height:ROW - 6,
+                             fill:'transparent' }, svg);
+    hoverable(hit, `<b>${esc(s.label || s.key)}</b><br>`
+      + `${esc(s.detail || '')}<br><br>`
+      + `<div class="r"><span>age</span><span>${s.age_seconds == null ? 'never received' : dur(s.age_seconds)}</span></div>`
+      + `<div class="r"><span>cadence</span><span>${dur(s.expected_seconds)}</span></div>`
+      + `<div class="r"><span>newest</span><span>${esc(stamp(s.newest))}</span></div>`
+      + (s.extra ? `<br>${esc(s.extra)}` : ''));
+  });
+
+  /* shared axis: every tick names a value the scale actually reaches */
+  const axY = TOP + sources.length * ROW + 6;
+  mk('line', { x1:trackX, y1:axY, x2:trackX + trackW, y2:axY,
+               stroke:CSS('--rule-soft'), 'stroke-width':1 }, svg);
+  const ticks = [[0,'now'], [DUE_X,'due'], [STALE_X,'2× due'], [1,'far past due']];
+  for (const [p, lab] of ticks) {
+    const x = trackX + p * trackW;
+    mk('line', { x1:x, y1:axY, x2:x, y2:axY + 4, stroke:CSS('--rule'), 'stroke-width':1 }, svg);
+    const t = mk('text', { x, y:axY + 16, fill:CSS('--faint'), 'font-family':CSS('--f-mono'),
+                           'font-size':9.5, 'text-anchor': p === 0 ? 'start' : p === 1 ? 'end' : 'middle' }, svg);
+    t.textContent = lab;
+  }
+
   const sat = f.satellite || {};
-  const pipes = (f.pipelines || []).map(p =>
-    `${esc(p.pipeline)}: ${rel(p.last_run) || 'never'} (${p.runs} runs)`).join(' · ');
-  el.innerHTML =
-    `<table><thead><tr><th>Source</th><th>Latest data</th><th>Age</th><th>Expected</th>` +
-    `<th>Status</th><th>Coverage</th></tr></thead><tbody>${rows}</tbody></table>` +
-    `<div class="muted" style="margin-top:8px">Satellite snapshots: ${sat.built ?? 0}/${sat.total ?? 0} ` +
-    `water points built${sat.oldest ? ` · oldest ${rel(sat.oldest)}` : ''}. ` +
-    `Oldest is the one to watch: it is what the pasture advice reads.</div>` +
-    `<div class="muted" style="margin-top:4px">Scheduled pipelines: ${pipes || 'none reported yet'}</div>`;
+  document.getElementById('satSummary').textContent = sat.total
+    ? `${sat.built}/${sat.total} water points built · oldest snapshot ${dur(sat.oldest_age_seconds)}`
+    : '';
 }
 
-function renderKPIs(s) {
-  const k = document.getElementById('kpis');
-  const ws = s.water_sources || {}, p = s.pastoralists || {}, b = s.builds || {},
-        q = s.queries || {}, gt = s.ground_truth || {}, w = s.weights || {};
-  const card = (label, n, extra) => `<div class="kpi"><div class="l">${esc(label)}</div><div class="n">${n ?? '—'}</div>${extra || ''}</div>`;
-  k.innerHTML =
-    card('Water points', ws.total, `<div class="muted">${ws.with_zones ?? 0} with rings · ${ws.zones_total ?? 0} rings</div>`) +
-    card('COGs built', (s.cogs && s.cogs.available) ?? 0) +
-    card('Herders', p.total, `<div class="muted">${p.onboarded ?? 0} onboarded</div>`) +
-    card('Queries 24h', q.today ?? 0, `<div class="muted">avg ${q.avg_latency_7d ?? '—'} ms · ${q.errors_7d ?? 0} err/7d</div>`) +
-    card('Builds', Object.values(b.by_status || {}).reduce((a, c) => a + c, 0),
-         `<div class="muted">${Object.entries(b.by_status || {}).map(([k2, v]) => k2 + ':' + v).join(' · ')}</div>`) +
-    card('Feedback', gt.total ?? 0, `<div class="muted">${gt.last_14d ?? 0} in 14d</div>`) +
-    card('Weights', w.records ?? 0, `<div class="muted">${w.herd_estimates ?? 0} herd est.</div>`) +
-    card('Active flows', s.active_flows ?? 0) +
-    card('Uptime', Math.round((s.uptime_seconds || 0) / 3600) + 'h');
+/* ===========================================================================
+   2. PIPELINES
+   ========================================================================= */
+function renderPipelines(f) {
+  const el = document.getElementById('pipelines');
+  const runs = f.pipelines || [];
+  if (!runs.length) { el.innerHTML = '<div class="empty">no pipeline runs recorded</div>'; return; }
+  const cls = c => /success|built|ok/i.test(c || '') ? 'p-ok'
+    : /fail|error/i.test(c || '') ? 'p-err'
+    : /running|progress|pending/i.test(c || '') ? 'p-warn' : 'p-none';
+  el.innerHTML = '<table><thead><tr><th>Pipeline</th><th>Result</th><th>When</th><th>Detail</th></tr></thead><tbody>'
+    + runs.map(p => {
+        const out = p.conclusion || p.status || p.result || '';
+        const when = p.at || p.created_at || p.updated_at || p.run_at;
+        return `<tr><td>${esc(p.name || p.workflow || p.kind || '—')}</td>`
+          + `<td><span class="pill ${cls(out)}">${esc(out || 'unknown')}</span></td>`
+          + `<td style="color:var(--muted)">${esc(when ? ago(when) : '—')}</td>`
+          + `<td style="color:var(--muted)">${esc(p.detail || p.stage || p.note || '')}</td></tr>`;
+      }).join('')
+    + '</tbody></table>';
 }
 
+/* ===========================================================================
+   3. SERVICE METRICS — dense strip, not vanity cards.
+   Error rate and latency are given state (colour + position) because they are
+   the two an operator acts on.
+   ========================================================================= */
+function renderMetrics(s) {
+  const q = s.queries || {}, ws = s.water_sources || {}, p = s.pastoralists || {},
+        b = s.builds || {}, gt = s.ground_truth || {};
+  const errs = q.errors_7d || 0, wk = q.last_7d || 0;
+  const errPct = wk ? (errs / wk * 100) : 0;
+  const lat = q.avg_latency_7d;
+  const failed = (b.by_status || {}).failed || 0;
 
+  const cells = [
+    ['requests today', q.today ?? 0, `${wk} in 7 days`, ''],
+    ['errors 7d', errs, wk ? errPct.toFixed(1) + '% of requests' : 'no traffic',
+      errPct >= 5 ? 'alert' : errPct >= 1 ? 'warn' : ''],
+    ['avg latency 7d', lat != null ? Math.round(lat) + 'ms' : '—', 'advisory + map',
+      lat > 4000 ? 'alert' : lat > 2000 ? 'warn' : ''],
+    ['herders', p.total ?? 0, `${p.onboarded ?? 0} onboarded`, ''],
+    ['water points', ws.total ?? 0, `${ws.with_zones ?? 0} with rings`, ''],
+    ['builds failed', failed, `${(b.by_status||{}).built ?? 0} built`, failed ? 'warn' : ''],
+    ['herder reports', gt.total ?? 0, `${gt.last_14d ?? 0} in 14 days`, ''],
+    ['weights logged', s.weights?.records ?? 0, `${s.weights?.herd_estimates ?? 0} herd est.`, ''],
+  ];
+  document.getElementById('metrics').innerHTML = cells.map(([l, v, x, st]) =>
+    `<div class="metric ${st}"><div class="l">${esc(l)}</div>`
+    + `<div class="v">${esc(v)}</div><div class="x">${esc(x)}</div></div>`).join('');
+}
+
+/* ===========================================================================
+   4. MAP
+   ========================================================================= */
+let map, pointLayer, ringLayer;
+const BUILD_STATE = {
+  built:['--good','built'], done:['--good','built'],
+  running:['--warning','running'], pending:['--warning','pending'],
+  failed:['--critical','failed'], error:['--critical','failed'],
+};
+function initMap() {
+  if (!window.L) { document.getElementById('map').innerHTML =
+    '<div class="empty" style="padding:16px">Leaflet unavailable — map disabled.</div>'; return; }
+  map = L.map('map', { zoomControl:true, attributionControl:false }).setView([0.6, 37.4], 9);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    { maxZoom:18, subdomains:'abcd' }).addTo(map);
+  pointLayer = L.layerGroup().addTo(map);
+  ringLayer = L.layerGroup().addTo(map);
+}
 function renderMap(gj) {
   if (!map) return;
-  if (map._markers) map._markers.forEach(m => map.removeLayer(m));
-  map._markers = [];
-  const bySource = { 'satellite_gsw':'Water (GSW)', 'osm':'Water (OSM)', 'wpdx':'Water (WPDx)',
-                     'ilri':'Water (ILRI)', 'ground_truth':'Pinned by herder' };
-  const byType = { 'river':'River', 'borehole':'Borehole', 'well':'Well', 'spring':'Spring',
-                   'pan':'Water pan', 'dam':'Dam', 'lake':'Lake', 'tap':'Tap' };
-  const WTYPE_COLORS = { 'river':'#2563eb', 'borehole':'#ea580c', 'well':'#059669', 'spring':'#16a34a',
-                         'pan':'#06b6d4', 'dam':'#0891b2', 'lake':'#0891b2', 'tap':'#9333ea' };
-  gj.features.forEach(f => {
+  pointLayer.clearLayers();
+  const feats = gj.features || [];
+  const seen = new Map();
+  const pts = [];
+  for (const f of feats) {
     const p = f.properties, [lon, lat] = f.geometry.coordinates;
-    const color = WTYPE_COLORS[p.water_type] || STATUS_COLORS[p.build_status] || '#3b82f6';
-    const m = L.circleMarker([lat, lon], { radius: 7, color: '#0f172a', weight: 1,
-      fillColor: color, fillOpacity: 0.95 });
-    m.bindPopup(
-      `<b>${esc(p.name || p.ward || 'Unknown')}</b>` +
-      (p.name && p.ward ? ` <span class="muted">(${esc(p.ward)})</span>` : '') +
-      `<br><span class="muted">${esc(bySource[p.source_type] || p.source_type)} · ${esc(p.county)}</span>` +
-      (p.water_type ? `<br>Type: <span class="tag t-wtype">${esc(byType[p.water_type] || p.water_type)}</span>` : '') +
-      `<br>Status: <span class="tag t-${p.build_status}">${esc(p.build_status)}</span>` +
-      (p.build_progress ? ` (${p.build_progress}%)` : '') +
-      (p.has_cog ? `<br>✅ satellite COG built` : `<br>⏳ no COG yet`) +
-      `<br>Zones: ${p.zone_count} · conf ${p.confidence}<br>` +
-      `<span class="muted">${esc(fmtTime(p.created_at))}</span><br>` +
-      `<button onclick="showRings('${p.id}')">Species rings</button>` +
-      `<button onclick="pickCog('${p.id}')">View COG</button>`,
-      { minWidth: 200 });
-    m.on('click', () => showRings(p.id));
-    m.addTo(map);
-    map._markers.push(m);
+    const [tok, word] = BUILD_STATE[p.build_status] || ['--absent', p.build_status || 'not built'];
+    seen.set(word, tok);
+    const col = CSS(tok);
+    pts.push([lat, lon]);
+    L.circleMarker([lat, lon], {
+      radius: p.has_cog ? 7 : 5, color: CSS('--ground'), weight: 2,
+      fillColor: col, fillOpacity: p.has_cog ? .95 : .45,
+    }).addTo(pointLayer).bindPopup(
+      `<b>${esc(p.name || 'unnamed')}</b><br>${esc(p.water_type || p.source_type || '')}`
+      + `<br>${esc(p.ward || '')}<br>build: ${esc(word)}`
+      + `<br>status: ${esc(p.status || 'unknown')}`
+      + (p.has_cog ? `<br><a href="#" style="color:var(--water)" onclick="pickCog('${esc(p.id)}');return false;">bands →</a>` : '')
+    ).on('click', () => showRings(p.id));
+  }
+  if (pts.length) map.fitBounds(pts, { padding:[30,30], maxZoom:11 });
+  document.getElementById('mapCount').textContent = `${feats.length} points`;
+  document.getElementById('mapLegend').innerHTML =
+    [...seen].map(([w, tok]) => `<span><i style="background:${CSS(tok)}"></i>${esc(w)}</span>`).join('')
+    + '<span style="color:var(--faint)">│ larger = COG built</span>';
+}
+async function showRings(id) {
+  if (!map) return;
+  ringLayer.clearLayers();
+  try {
+    const z = await getJSON('/dashboard/api/zones/' + id);
+    const style = { cattle:'--s1', shoat:'--s3', camel:'--s2' };
+    L.geoJSON(z, { style: f => ({
+      color: CSS(style[f.properties.species] || '--muted'),
+      weight: 1.5, fill: false, dashArray: '4 4',
+    })}).addTo(ringLayer);
+  } catch (e) { toast('rings: ' + e.message); }
+}
+
+/* ===========================================================================
+   5. FEED
+   ========================================================================= */
+function renderFeed(a) {
+  const el = document.getElementById('feed');
+  const evs = a.events || [];
+  if (!evs.length) { el.innerHTML = '<div class="empty" style="padding:16px">no activity yet</div>'; return; }
+  el.innerHTML = evs.map(e => {
+    let kind, pill, detail;
+    if (e.type === 'query') {
+      kind = e.kind || 'query';
+      const c = e.result === 'ok' ? 'p-ok' : e.result === 'error' ? 'p-err' : 'p-warn';
+      pill = `<span class="pill ${c}">${esc(e.result || '')}</span>`;
+      detail = [e.kind === 'other' ? e.detail_text : e.species,
+                e.latency_ms != null ? e.latency_ms + 'ms' : null]
+               .filter(Boolean).map(esc).join(' · ');
+      if (e.phone) detail += ` <span class="who">${esc(e.phone)}</span>`;
+    } else if (e.type === 'build') {
+      kind = 'build';
+      const c = /built|done/.test(e.status) ? 'p-ok' : /fail/.test(e.status) ? 'p-err' : 'p-warn';
+      pill = `<span class="pill ${c}">${esc(e.status || '')}</span>`;
+      detail = [e.stage, e.progress != null ? e.progress + '%' : null].filter(Boolean).map(esc).join(' · ');
+    } else {
+      kind = 'report';
+      pill = `<span class="pill p-info">${esc(e.report_type || '')}</span>`;
+      detail = esc(e.text || '');
+    }
+    return `<div class="ev"><div class="k">${esc(kind)}</div>`
+      + `<div class="d">${pill} ${detail}</div>`
+      + `<div class="t">${esc(clock(e.at))}</div></div>`;
+  }).join('');
+}
+
+/* ===========================================================================
+   6. CHARTS — hand-drawn SVG. No chart library: these forms are simple, and
+   drawing them directly keeps one scale, real ticks, and honest labels.
+   ========================================================================= */
+const SERIES = ['--s1','--s2','--s3','--s4','--s5'];
+
+/* Stacked bars. Categorical hues are assigned in FIXED ORDER by total volume and
+   never cycled — past five kinds the rest fold into a muted "other" rather than
+   inventing a sixth hue. */
+function renderQueries(ts) {
+  const svg = document.getElementById('chQueries');
+  svg.innerHTML = '';
+  const labels = ts.labels || [], rows = ts.queries || [];
+  let kinds = ts.kinds || [];
+  if (!labels.length) {
+    svg.setAttribute('viewBox','0 0 900 60');
+    mk('text',{x:0,y:30,fill:CSS('--faint'),'font-family':CSS('--f-mono'),'font-size':12},svg)
+      .textContent = 'no requests in this window';
+    document.getElementById('qLegend').innerHTML = '';
+    document.getElementById('qTable').innerHTML = '';
+    return;
+  }
+  const totalOf = k => rows.reduce((n, d) => n + (d[k] || 0), 0);
+  kinds = [...kinds].sort((a, b) => totalOf(b) - totalOf(a));
+  const shown = kinds.slice(0, SERIES.length);
+  const folded = kinds.slice(SERIES.length);
+  const series = shown.map((k, i) => ({ key:k, label:k, color:CSS(SERIES[i]) }));
+  if (folded.length) series.push({ key:'__other', label:'other', color:CSS('--s-other') });
+  const valueOf = (d, s) => s.key === '__other'
+    ? folded.reduce((n, k) => n + (d[k] || 0), 0) : (d[s.key] || 0);
+
+  const W = 900, H = 240, L = 40, R = 8, T = 10, B = 30;
+  const plotW = W - L - R, plotH = H - T - B;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const totals = rows.map(d => series.reduce((n, s) => n + valueOf(d, s), 0));
+  const max = Math.max(1, ...totals);
+  const step = plotW / labels.length;
+  const bw = Math.min(30, step * 0.66);
+
+  /* y grid — recessive, and every gridline is labelled with a value it reaches */
+  const niceMax = max <= 5 ? max : Math.ceil(max / 4) * 4;
+  for (let g = 0; g <= 4; g++) {
+    const v = Math.round(niceMax * g / 4);
+    const y = T + plotH - (v / niceMax) * plotH;
+    mk('line', { x1:L, y1:y, x2:L + plotW, y2:y, stroke:CSS('--rule-soft'), 'stroke-width':1 }, svg);
+    const t = mk('text', { x:L - 8, y:y + 3.5, fill:CSS('--faint'), 'font-family':CSS('--f-mono'),
+                           'font-size':9.5, 'text-anchor':'end' }, svg);
+    t.textContent = v;
+  }
+
+  rows.forEach((d, i) => {
+    const cx = L + i * step + step / 2;
+    let yTop = T + plotH;
+    series.forEach(s => {
+      const v = valueOf(d, s);
+      if (!v) return;
+      const h = (v / niceMax) * plotH;
+      /* 2px surface gap between stacked segments keeps adjacent hues separate */
+      const seg = Math.max(1, h - 2);
+      mk('rect', { x:cx - bw/2, y:yTop - h, width:bw, height:seg, fill:s.color, rx:1 }, svg);
+      yTop -= h;
+    });
+    const hit = mk('rect', { x:cx - step/2, y:T, width:step, height:plotH, fill:'transparent' }, svg);
+    hoverable(hit, `<b>${esc(labels[i])}</b><br><br>`
+      + series.filter(s => valueOf(d, s)).map(s =>
+          `<div class="r"><span><i style="background:${s.color};display:inline-block"></i>${esc(s.label)}</span>`
+          + `<span>${valueOf(d, s)}</span></div>`).join('')
+      + `<div class="r" style="margin-top:6px;border-top:1px solid var(--rule);padding-top:5px">`
+      + `<span>total</span><span>${totals[i]}</span></div>`);
+
+    /* label roughly every other day so ticks never collide */
+    if (labels.length <= 8 || i % 2 === 0) {
+      const t = mk('text', { x:cx, y:H - 10, fill:CSS('--faint'), 'font-family':CSS('--f-mono'),
+                             'font-size':9.5, 'text-anchor':'middle' }, svg);
+      t.textContent = String(labels[i]).slice(5);
+    }
+  });
+
+  document.getElementById('qLegend').innerHTML = series.map(s =>
+    `<span class="sw"><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join('')
+    + (folded.length ? `<span style="color:var(--faint)">│ other = ${folded.map(esc).join(', ')}</span>` : '');
+  document.getElementById('qTotal').textContent = totals.reduce((a, b) => a + b, 0) + ' requests';
+  document.getElementById('qTable').innerHTML =
+    '<table><thead><tr><th>Day</th>' + series.map(s => `<th>${esc(s.label)}</th>`).join('')
+    + '<th>Total</th></tr></thead><tbody>'
+    + rows.map((d, i) => `<tr><td>${esc(labels[i])}</td>`
+        + series.map(s => `<td class="n">${valueOf(d, s) || ''}</td>`).join('')
+        + `<td class="n">${totals[i]}</td></tr>`).join('')
+    + '</tbody></table>';
+}
+
+/* Horizontal bars for a small labelled breakdown. Magnitude is the job, so one
+   hue and length do the work — no categorical ramp needed, and bars beat the pie
+   this replaced because lengths on a shared baseline are directly comparable. */
+function renderBreakdown(id, obj, opts = {}) {
+  const svg = document.getElementById(id);
+  svg.innerHTML = '';
+  const entries = Object.entries(obj || {}).filter(([, v]) => v).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    svg.setAttribute('viewBox','0 0 400 44');
+    mk('text',{x:0,y:24,fill:CSS('--faint'),'font-family':CSS('--f-mono'),'font-size':11.5},svg)
+      .textContent = opts.empty || 'nothing recorded';
+    return;
+  }
+  const W = 400, ROW = 26, LBL = 122, PAD_R = 40;
+  const H = entries.length * ROW + 6;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const barW = W - LBL - PAD_R;
+  const max = Math.max(...entries.map(e => e[1]));
+
+  entries.forEach(([k, v], i) => {
+    const y = i * ROW + 13;
+    const t = mk('text', { x:0, y:y + 4, fill:CSS('--ink'), 'font-family':CSS('--f-mono'),
+                           'font-size':11 }, svg);
+    t.textContent = k.length > 17 ? k.slice(0, 16) + '…' : k;
+    const col = CSS(opts.colorFor ? opts.colorFor(k) : '--accent');
+    mk('rect', { x:LBL, y:y - 6, width:barW, height:12, fill:CSS('--rule-soft'), rx:1 }, svg);
+    mk('rect', { x:LBL, y:y - 6, width:Math.max(2, (v / max) * barW), height:12,
+                 fill:col, rx:1 }, svg);
+    const vt = mk('text', { x:W - PAD_R + 8, y:y + 4, fill:CSS('--muted'),
+                            'font-family':CSS('--f-mono'), 'font-size':11,
+                            'font-weight':500 }, svg);
+    vt.textContent = v;
+    const hit = mk('rect', { x:0, y:y - ROW/2, width:W, height:ROW, fill:'transparent' }, svg);
+    hoverable(hit, `<b>${esc(k)}</b><br>${v} ${esc(opts.unit || '')}`);
   });
 }
 
-async function showRings(id) {
-  try {
-    const z = await getJSON('/dashboard/api/zones/' + id);
-    if (ringsLayer) map.removeLayer(ringsLayer);
-    const style = { cattle: { color: '#3b82f6' }, shoat: { color: '#10b981' }, camel: { color: '#f97316' } };
-    ringsLayer = L.geoJSON(z, { style: f => ({ color: (style[f.properties.species] || {}).color,
-      weight: 2, fillOpacity: 0.08, dashArray: '4 4' }) }).addTo(map);
-    map.fitBounds(ringsLayer.getBounds(), { padding: [20, 20] });
-  } catch (e) { toast('Rings: ' + e.message); }
-}
-
-function renderActivity(a) {
-  const el = document.getElementById('activity');
-  const rows = (a.events || []).map(e => {
-    const t = e.type === 'query' ? `<span class="tag t-query">${esc(e.kind)}</span> <span class="tag t-${e.result}">${esc(e.result)}</span>` :
-              e.type === 'build' ? `<span class="tag t-build">build</span> <span class="tag t-${e.status}">${esc(e.status)}</span>` :
-              `<span class="tag t-report">${esc(e.report_type)}</span>`;
-    const what = e.type === 'query'
-      ? ((e.kind === 'other' ? (e.detail_text || '') : (e.species || ''))
-         + (e.phone ? ` · ${esc(e.phone)}` : '')
-         + (e.latency_ms != null ? ` · ${e.latency_ms}ms` : ''))
-      : e.type === 'build' ? (e.stage || '') + (e.progress != null ? ` · ${e.progress}%` : '')
-        : esc(e.text || '');
-    return `<tr><td>${t}</td><td>${esc(what)}</td><td class="muted">${esc(fmtTime(e.at))}</td></tr>`;
-  }).join('');
-  el.innerHTML = `<table><thead><tr><th>Event</th><th>Detail</th><th>When</th></tr></thead><tbody>${rows || '<tr><td colspan=3 class="muted">No activity yet</td></tr>'}</tbody></table>`;
-}
-
-function chart(id, cfg) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (charts[id]) charts[id].destroy();
-  charts[id] = new Chart(el.getContext('2d'), cfg);
-}
-
-function renderCharts(s, ts) {
-  const palette = ['#3b82f6','#f97316','#10b981','#a855f7','#ef4444','#eab308','#14b8a6','#8b5cf6'];
-  const kinds = ts.kinds || [];
-  chart('chQueries', { type: 'line', data: { labels: ts.labels || [],
-      datasets: kinds.map((k, i) => ({ label: k, data: (ts.queries || []).map(d => d[k] || 0),
-        borderColor: palette[i % palette.length], backgroundColor: 'transparent', tension: 0.3, spanGaps: true })) },
-      options: { plugins: { legend: { labels: { color: '#cbd5e1' } } }, scales: { x: { ticks: { color: '#94a3b8', maxRotation: 45 } }, y: { ticks: { color: '#94a3b8' } } } } });
-  const st = s.water_sources && s.water_sources.by_type ? s.water_sources.by_type : {};
-  chart('chSources', { type: 'pie', data: { labels: Object.keys(st),
-      datasets: [{ data: Object.values(st), backgroundColor: palette }] },
-      options: { plugins: { legend: { labels: { color: '#cbd5e1' } } } } });
-  const b = s.builds && s.builds.by_status ? s.builds.by_status : {};
-  chart('chBuilds', { type: 'bar', data: { labels: Object.keys(b),
-      datasets: [{ label: 'builds', data: Object.values(b), backgroundColor: ['#eab308','#3b82f6','#22c55e','#ef4444'] }] },
-      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#94a3b8' } } } } });
-  const gt = s.ground_truth && s.ground_truth.by_type ? s.ground_truth.by_type : {};
-  chart('chReports', { type: 'bar', data: { labels: Object.keys(gt),
-      datasets: [{ label: 'reports', data: Object.values(gt), backgroundColor: '#a855f7' }] },
-      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#94a3b8' } } } } });
-}
-
-
-
+/* ===========================================================================
+   COG explorer
+   ========================================================================= */
 let cogList = [];
 function pickCog(id) {
-  document.getElementById('cogSource').value = id;
-  loadCog();
-  document.getElementById('cogSource').scrollIntoView({ behavior: 'smooth' });
+  const sel = document.getElementById('cogSource');
+  sel.value = id; loadCog();
+  sel.scrollIntoView({ behavior:'smooth', block:'center' });
 }
 async function loadCog() {
   const id = document.getElementById('cogSource').value;
   const band = document.getElementById('cogBand').value;
   if (!id) return;
-  document.getElementById('cogImg').src = api('/dashboard/api/cog/' + id + '/' + band + '.png');
+  document.getElementById('cogImg').src = api(`/dashboard/api/cog/${id}/${band}.png`);
+  const src = cogList.find(f => f.properties.id === id);
+  document.getElementById('cogMeta').textContent = src
+    ? [src.properties.name, src.properties.ward, src.properties.source_type].filter(Boolean).join(' · ') : '';
   try {
-    const st = await getJSON('/dashboard/api/cog/' + id + '/stats');
+    const st = await getJSON(`/dashboard/api/cog/${id}/stats`);
     const el = document.getElementById('cogStats');
-    if (!st.available) { el.innerHTML = '<tr><td class="muted">COG not available</td></tr>'; return; }
-    el.innerHTML = '<thead><tr><th>Band</th><th>Mean</th><th>Min</th><th>Max</th><th>Std</th><th>Valid</th></tr></thead>' +
-      st.bands.map(b2 => `<tr><td>${esc(b2.band)}</td><td>${b2.mean ?? '—'}</td><td>${b2.min ?? '—'}</td>` +
-        `<td>${b2.max ?? '—'}</td><td>${b2.std ?? '—'}</td><td>${b2.valid_pixels ?? 0}/${b2.total_pixels ?? '—'}</td></tr>`).join('');
-    const src = cogList.find(f => f.properties.id === id);
-    document.getElementById('cogMeta').textContent = src
-      ? (src.properties.name || src.properties.ward || '') + ' · ' + (src.properties.source_type || '') : '';
-  } catch (e) { toast('COG: ' + e.message); }
+    if (!st.available) { el.innerHTML = '<tbody><tr><td class="empty">COG not available</td></tr></tbody>'; return; }
+    el.innerHTML = '<thead><tr><th>Band</th><th>Mean</th><th>Min</th><th>Max</th><th>Std</th><th>Valid px</th></tr></thead><tbody>'
+      + st.bands.map(b => `<tr><td>${esc(b.band)}</td><td class="n">${b.mean ?? '—'}</td>`
+        + `<td class="n">${b.min ?? '—'}</td><td class="n">${b.max ?? '—'}</td>`
+        + `<td class="n">${b.std ?? '—'}</td>`
+        + `<td class="n" style="color:var(--muted)">${b.valid_pixels ?? 0}/${b.total_pixels ?? '—'}</td></tr>`).join('')
+      + '</tbody>';
+  } catch (e) { toast('COG stats: ' + e.message); }
 }
 
+/* ===========================================================================
+   Health rail
+   ========================================================================= */
+function renderHealth(h) {
+  const set = (id, label, ok, text) => {
+    const el = document.getElementById(id);
+    el.className = 'rail-item ' + (ok === true ? 'ok' : ok === false ? 'bad' : '');
+    el.innerHTML = `${label} <b>${esc(text)}</b>`;
+  };
+  set('railDb', 'db', h.db_ok, h.db_ok ? 'ok' : 'down');
+  set('railR2', 'r2', h.r2_ok, h.r2_ok ? `ok · ${h.r2_objects ?? '—'}` : 'down');
+  set('railCommit', 'build', null, (h.commit || 'dev').slice(0, 7));
+  set('railUptime', 'up', null, h.uptime_seconds != null ? dur(h.uptime_seconds) : '—');
+  const brand = document.getElementById('brand');
+  const bad = h.db_ok === false || h.r2_ok === false;
+  brand.className = 'brand ' + (bad ? 'state-bad' : h.degraded ? 'state-warn' : 'state-ok');
+  brand.title = bad ? 'a dependency is down' : h.degraded ? 'degraded' : 'all dependencies reachable';
+}
+
+/* ===========================================================================
+   Refresh
+   ========================================================================= */
 async function refreshAll() {
-  let s = {}, a = {}, ts = {}, h = {}, gj = { features: [] };
-  const done = (fn, name) => fn().then(v => (window['_' + name] = v)).catch(e => toast(name + ': ' + e.message));
-  await done(() => getJSON('/dashboard/api/health'), 'h');
-  await done(() => getJSON('/dashboard/api/summary'), 's');
-  await done(() => getJSON('/dashboard/api/freshness'), 'f');
-  await done(() => getJSON('/dashboard/api/water-sources'), 'w');
-  await done(() => getJSON('/dashboard/api/activity'), 'a');
-  await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
-  h = window._h || {}; s = window._s || {}; gj = window._w || { features: [] };
-  a = window._a || {}; ts = window._t || {};
+  const grab = async (path, fallback) => {
+    try { return await getJSON(path); }
+    catch (e) { toast(path.split('/').pop() + ': ' + e.message); return fallback; }
+  };
+  const [h, f, s, w, a, ts] = await Promise.all([
+    grab('/dashboard/api/health', {}),
+    grab('/dashboard/api/freshness', {}),
+    grab('/dashboard/api/summary', {}),
+    grab('/dashboard/api/water-sources', { features: [] }),
+    grab('/dashboard/api/activity', {}),
+    grab('/dashboard/api/timeseries?days=14', {}),
+  ]);
+
   renderHealth(h);
-  renderFreshness(window._f || {});
-  renderKPIs(s);
-  renderMap(gj);
-  renderActivity(a);
-  renderCharts(s, ts);
-  if (!cogList.length && gj.features.length) {
-    cogList = gj.features.filter(f => f.properties.has_cog);
+  renderLedger(f);
+  renderPipelines(f);
+  renderMetrics(s);
+  renderMap(w);
+  renderFeed(a);
+  renderQueries(ts);
+
+  const bs = (s.builds || {}).by_status || {};
+  renderBreakdown('chBuilds', bs, { unit:'builds', empty:'no builds yet',
+    colorFor: k => (BUILD_STATE[k] || ['--absent'])[0] });
+  renderBreakdown('chTypes', (s.water_sources || {}).by_type || {}, { unit:'points' });
+  renderBreakdown('chReports', (s.ground_truth || {}).by_type || {},
+    { unit:'reports', empty:'no herder reports yet' });
+
+  if (!cogList.length && (w.features || []).length) {
+    cogList = w.features.filter(f2 => f2.properties.has_cog);
     const sel = document.getElementById('cogSource');
-    sel.innerHTML = cogList.map(f =>
-      `<option value="${esc(f.properties.id)}">${esc(f.properties.name || f.properties.ward || '?')} (${esc(f.properties.source_type)})</option>`).join('') ||
-      '<option value="">No built COGs</option>';
+    sel.innerHTML = cogList.map(f2 =>
+      `<option value="${esc(f2.properties.id)}">${esc(f2.properties.name || f2.properties.ward || '?')}</option>`
+    ).join('') || '<option value="">no built COGs</option>';
     if (cogList.length) loadCog();
   }
-  document.getElementById('uptime').textContent = 'updated ' + new Date().toLocaleTimeString();
+  document.getElementById('railUpdated').textContent = 'updated ' + clock(new Date().toISOString());
 }
 
+document.getElementById('btnRefresh').addEventListener('click', refreshAll);
+document.getElementById('cogSource').addEventListener('change', loadCog);
+document.getElementById('cogBand').addEventListener('change', loadCog);
 initMap();
 refreshAll();
 setInterval(refreshAll, 30000);
 </script>
 </body>
 </html>
-
-
