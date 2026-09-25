@@ -219,7 +219,21 @@ contradiction of the county vet. Three mechanical guarantees, asserted in
   forbidden-word list is a test, not a comment. If the herder finds something, the
   message routes him to the vet or agrovet.
 
-Tiers are `quiet → watch → rising → high`, and the wording and the checklist come from
+Tiers are `quiet → watch → rising → high`. Two wording decisions that came out of
+review, both now enforced by tests:
+
+- **The service is named KUPE NA MINYOO (ticks and worms), not "wadudu".** "Wadudu" is
+  the generic word for bugs — grain weevils and house insects — and would not tell a
+  pastoralist that this is about his animals. It survives only as a keyword alias.
+  Menu item 10 is `🔍 KUPE NA MINYOO — angalia mifugo yako`.
+- **A quiet answer gives the reason, never a verdict.** "Conditions are normal" tells
+  a herder who just spent a message asking about ticks nothing at all. The quiet reply
+  now names why the windows are down (*"Hakuna mvua hata moja katika siku 30 zilizopita,
+  na udongo ni mkavu"*) and what will change it (*"Kupe na minyoo huongezeka mvua ya
+  mfululizo ianzapo. Tutakutumia tahadhari wakati huo."*). With no data at all it says
+  so plainly instead of implying the coast is clear.
+
+The wording and the checklist come from
 `config/pest_guidance.yaml` (marked `needs_review`: a county vet must check it before
 the first message reaches a herder). Answers are stored in `pest_observations`
 (migration 012) with `seen` true *or* false — a "I looked and saw nothing" reply is as

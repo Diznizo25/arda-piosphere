@@ -40,13 +40,13 @@ TIER_HIGH = "high"
 TIER_ORDER = {TIER_QUIET: 0, TIER_WATCH: 1, TIER_RISING: 2, TIER_HIGH: 3}
 
 TIER_LABEL_SWA = {
-    TIER_QUIET: "hali ya kawaida",
+    TIER_QUIET: "hakuna tahadhari",
     TIER_WATCH: "kuwa makini",
     TIER_RISING: "hatari inaongezeka",
     TIER_HIGH: "hatari ni juu",
 }
 TIER_LABEL_ENG = {
-    TIER_QUIET: "normal",
+    TIER_QUIET: "no warning",
     TIER_WATCH: "keep an eye out",
     TIER_RISING: "risk is rising",
     TIER_HIGH: "risk is high",
@@ -102,6 +102,9 @@ class PestInputs:
     temp_max_c: Optional[float] = None
     humidity: Optional[float] = None
     ndmi: Optional[float] = None
+    # How many days of rain data we actually have. Needed to tell "we have no data"
+    # apart from "we have data and it never rained", which are different answers.
+    days_with_data: int = 0
 
 
 def build_inputs(rain: Sequence[float], *, soil_moisture: Optional[float] = None,
@@ -137,6 +140,7 @@ def build_inputs(rain: Sequence[float], *, soil_moisture: Optional[float] = None
         temp_max_c=temp_max_c,
         humidity=humidity,
         ndmi=ndmi,
+        days_with_data=len(days),
     )
 
 
@@ -341,6 +345,9 @@ def hoof_window(inp: PestInputs) -> PestWindow:
 class PestOutlook:
     """All four windows for a place, plus the one we would talk about first."""
     windows: tuple[PestWindow, ...]
+    # The inputs are carried along so a "nothing is up" answer can give the REASON
+    # (how long since real rain) instead of a verdict nobody can use.
+    inputs: Optional[PestInputs] = None
 
     @property
     def active(self) -> tuple[PestWindow, ...]:
@@ -367,7 +374,7 @@ class PestOutlook:
 def outlook(inp: PestInputs) -> PestOutlook:
     """Compute all four windows from the same inputs."""
     return PestOutlook((tick_window(inp), worm_window(inp), fly_window(inp),
-                        hoof_window(inp)))
+                        hoof_window(inp)), inputs=inp)
 
 
 # --- guidance content -------------------------------------------------------
@@ -470,8 +477,8 @@ def thanks_for_observation(seen: bool, lang: str = "swa") -> str:
     """Reciprocity, and the honest reason a 'nothing' answer matters."""
     if lang in ("swa", "swahili"):
         if seen:
-            return ("Asante! Taarifa yako inasaidia kuonyesha wapi wadudu wapo.\n"
-                    "Wasiliana na afisa wa mifugo au agrovet kwa ushauri.")
+            return ("Asante! Taarifa yako inasaidia kuonyesha wapi kupe na minyoo "
+                    "wapo.\nWasiliana na afisa wa mifugo au agrovet kwa ushauri.")
         return ("Asante kwa kuangalia! Jibu la 'hapana' linatusaidia kujua "
                 "wapi hatari haipo.\nTutaendelea kufuatilia mvua na joto.")
     if seen:
@@ -489,20 +496,65 @@ def headline(win: PestWindow, lang: str = "swa", guidance: dict | None = None) -
     return f"{g['label']}: {tier_label(win.tier, lang)} this week."
 
 
-_TITLE = {"swa": "WADUDU NA MINYOO", "eng": "PESTS AND PARASITES"}
+_TITLE = {"swa": "KUPE NA MINYOO", "eng": "TICKS AND WORMS"}
 _VIGILANCE = {"swa": "Kuwa makini. Angalia mifugo yako.",
               "eng": "Be vigilant. Check your animals."}
-_QUIET = {
-    "swa": ("Hali ya wadudu na minyoo ni ya kawaida wiki hii.\n"
-            "Tutaendelea kufuatilia mvua, joto na unyevu."),
-    "eng": ("Pest and parasite conditions are normal this week.\n"
-            "We will keep tracking rain, temperature and moisture."),
-}
 
 
-def quiet_sentence(lang: str = "swa") -> str:
-    """What to say when nothing is raised — never nothing, always honest."""
-    return _QUIET["swa" if lang in ("swa", "swahili") else "eng"]
+def _reason_for_quiet(o: "PestOutlook", lang: str = "swa") -> str:
+    """Why nothing is up — the part that makes a quiet answer worth reading."""
+    inp = getattr(o, "inputs", None)
+    days = inp.days_since_wet if inp is not None else None
+    have = inp.days_with_data if inp is not None else 0
+    sw = lang in ("swa", "swahili")
+    if not have:
+        return ("Hatuna data ya kutosha ya mvua na joto bado." if sw
+                else "We do not have enough rain and temperature data yet.")
+    if days is None:
+        # We have the series and it never rained in it: a real dry spell, not a
+        # data gap. Saying "no data" here would be a lie of the worst kind.
+        return (f"Hakuna mvua hata moja katika siku {have} zilizopita, na udongo ni "
+                f"mkavu." if sw
+                else f"No rain at all in the last {have} days, and the ground is dry.")
+    if days >= 7:
+        return (f"Sababu ni siku {days} bila mvua ya maana, na udongo ni mkavu." if sw
+                else f"Because there has been no real rain for {days} days and the "
+                     f"ground is dry.")
+    if days <= 1:
+        return ("Mvua ya mwisho ilinyesha leo, lakini haitoshi bado kuongeza kupe." if sw
+                else "The last rain fell today, but it is not enough yet to lift ticks.")
+    return (f"Mvua ya mwisho ilinyesha siku {days} zilizopita, lakini haitoshi bado "
+            f"kuongeza kupe." if sw
+            else f"The last rain fell {days} days ago, but it is not enough yet to "
+                 f"lift ticks.")
+
+
+def quiet_message(o: "PestOutlook", lang: str = "swa") -> str:
+    """The answer when no window is up: the REASON, plus when it will change.
+
+    "Conditions are normal" is a verdict, not information — a herder who asked
+    about ticks learns nothing from it and will not ask twice. Naming the reason
+    (how long since real rain, dry ground) and the trigger ("when sustained rain
+    arrives we will warn you") turns a non-event into something he can act on and
+    tells him what the next message will mean.
+    """
+    i = "swa" if lang in ("swa", "swahili") else "eng"
+    inp = getattr(o, "inputs", None)
+    # With no data we cannot claim there is no warning: say what we know instead.
+    if inp is None or not inp.days_with_data:
+        if i == "swa":
+            return (f"🔍 {_TITLE[i]}\n\nHatuna data ya mvua na joto ya eneo lako bado, "
+                    f"hivyo siwezi kukupa tahadhari kwa uhakika.\n"
+                    f"Huduma hii itaanza mara data ikiwadia.")
+        return (f"🔍 {_TITLE[i]}\n\nWe do not have rain and temperature data for your "
+                f"area yet, so I cannot give you a confident warning.\n"
+                f"This service will start as soon as the data arrives.")
+    trigger = ("Kupe na minyoo huongezeka mvua ya mfululizo ianzapo. "
+               "Tutakutumia tahadhari wakati huo." if i == "swa" else
+               "Ticks and worms rise with sustained rain. "
+               "We will warn you when they do.")
+    first = "Hakuna tahadhari sasa." if i == "swa" else "No warning right now."
+    return f"🔍 {_TITLE[i]}\n\n{first}\n{_reason_for_quiet(o, lang)}\n\n{trigger}"
 
 
 def message(o: PestOutlook, lang: str = "swa", guidance: dict | None = None,
@@ -516,7 +568,7 @@ def message(o: PestOutlook, lang: str = "swa", guidance: dict | None = None,
     i = "swa" if lang in ("swa", "swahili") else "eng"
     active = o.active[:max_windows]
     if not active:
-        return f"🐛 {_TITLE[i]}\n\n{quiet_sentence(lang)}"
+        return quiet_message(o, lang)
 
     blocks: list[str] = []
     for win in active:
@@ -535,7 +587,7 @@ def message(o: PestOutlook, lang: str = "swa", guidance: dict | None = None,
             lines.append(g["if_found"])
         blocks.append("\n".join(lines))
 
-    parts = [f"🐛 {_TITLE[i]}", "\n\n".join(blocks)]
+    parts = [f"🔍 {_TITLE[i]}", "\n\n".join(blocks)]
     top = o.top
     if top is not None:
         parts.append(observation_question(top, lang))
@@ -555,9 +607,9 @@ def weekly_line(o: PestOutlook, lang: str = "swa",
     win = max(alerting, key=lambda w: (w.rank, w.score))
     g = pest_guidance(win.key, lang, guidance)
     if lang in ("swa", "swahili"):
-        return (f"🐛 {g['label']}: {tier_label(win.tier, lang)} wiki hii. "
+        return (f"🔍 {g['label']}: {tier_label(win.tier, lang)} wiki hii. "
                 "Kuwa makini na uangalie mifugo yako.")
-    return (f"🐛 {g['label']}: {tier_label(win.tier, lang)} this week. "
+    return (f"🔍 {g['label']}: {tier_label(win.tier, lang)} this week. "
             "Be vigilant and check your animals.")
 
 
@@ -629,7 +681,7 @@ __all__ = [
     "PestOutlook", "build_inputs", "tick_window", "worm_window", "fly_window",
     "hoof_window", "outlook", "outlook_for_point", "load_guidance",
     "pest_guidance", "tier_label", "headline", "message", "weekly_line",
-    "quiet_sentence", "observation_question", "observation_for_digit",
+    "quiet_message", "observation_question", "observation_for_digit",
     "thanks_for_observation", "record_observation",
 ]
 

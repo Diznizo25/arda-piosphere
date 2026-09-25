@@ -106,10 +106,12 @@ MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
 
-# Pest & parasite check. Deliberately narrow: a false trigger would answer a herder
-# with a pest window when he asked something else.
-PEST_KEYWORDS = ["wadudu", "kupe", "minyoo", "inzi", "kwato", "pest", "parasite",
-                 "ticks", "worms"]
+# Parasites and pests of LIVESTOCK, in the words a herder uses: kupe (ticks),
+# minyoo (worms), vidonda (wounds), kwato (hooves). "Wadudu" is the generic word for
+# bugs (grain weevils, house insects) and would not tell a pastoralist that this is
+# about his animals, so it stays only as an alias for muscle memory.
+PEST_KEYWORDS = ["kupe", "minyoo", "kupe na minyoo", "tick", "worm", "vidonda",
+                 "kwato", "wadudu", "pest", "parasite"]
 
 PIN_KEYWORDS = ["pin", "register", "ongeza", "andika", "new water", "regist"]
 
@@ -153,17 +155,17 @@ ASK_CONFIRM_WATER_RETRY = {
 }
 
 ASK_CONFIRM_WATER_FIRST = {
-    "swahili": "Kabla sijakupa hali ya wadudu, niambie chanzo chako cha maji kwanza. "
-               "Tuma 'maji' nikuonyeshe orodha.",
-    "english": "Before I give you the pest outlook, tell me your water point first. "
-               "Send 'water' and I will show you the list.",
+    "swahili": "Kabla sijakupa hali ya kupe na minyoo, niambie chanzo chako cha maji "
+               "kwanza. Tuma 'maji' nikuonyeshe orodha.",
+    "english": "Before I give you the ticks and worms outlook, tell me your water "
+               "point first. Send 'water' and I will show you the list.",
 }
 
 PEST_NO_DATA = {
     "swahili": "Bado hatuna data ya mvua na joto vya eneo lako kwa wiki hii. "
-               "Hivyo siwezi kukupa hali ya wadudu kwa uhakika.",
+               "Hivyo siwezi kukupa hali ya kupe na minyoo kwa uhakika.",
     "english": "We do not have rain and temperature data for your area this week "
-               "yet, so I cannot give you a reliable pest outlook.",
+               "yet, so I cannot give you a reliable ticks and worms outlook.",
 }
 
 WATER_CONFIRMED = {
@@ -337,7 +339,7 @@ MENU_MSG = {
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
                "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
                "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n"
-               "10. 🐛 WADUDU — angalia kupe, minyoo na vidonda\n\n"
+               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n\n"
                "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.\n"
                "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
                "'ng'ombe 40 wanahitaji maji ngapi?'.\n"
@@ -353,7 +355,7 @@ MENU_MSG = {
                "7. 🗣 VOICE — reply by voice / TEXT for text\n"
                "8. 🌧 RAIN — rain and drought outlook near you\n"
                "9. 🌍 SWAHILI / ENGLISH — change language\n"
-               "10. 🐛 PESTS — check ticks, worms and wounds\n\n"
+               "10. 🔍 TICKS AND WORMS — check your animals\n\n"
                "Send the matching word (e.g. 'weight') or the number.\n"
                "You can also just ask a question — e.g. 'when will it rain?' or "
                "'how much water do 40 cattle need?'.\n"

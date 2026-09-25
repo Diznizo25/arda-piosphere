@@ -33,9 +33,16 @@ dry = pests.build_inputs([0.0] * 30, soil_moisture=0.10, temp_max_c=34.0,
 o = pests.outlook(dry)
 assert o.highest_tier == pests.TIER_QUIET, o
 assert o.top is None and not o.active, o
-assert "ya kawaida" in pests.message(o, "swa")
+quiet = pests.message(o, "swa")
+# The quiet answer must carry INFORMATION, not a verdict: "conditions are normal"
+# tells a herder who just asked about ticks nothing at all.
+assert "Hakuna tahadhari sasa." in quiet, quiet
+assert "hakuna mvua" in quiet.lower(), quiet
+assert "siku 30" in quiet, quiet
+assert "Tutakutumia tahadhari" in quiet, quiet
+assert o.inputs is not None and o.inputs.days_with_data == 30, o.inputs
 assert pests.weekly_line(o, "swa") is None, "quiet weeks must stay silent"
-print("dry season: no window, no weekly line OK")
+print("dry season: no window, no weekly line, quiet answer gives the reason OK")
 
 # --- 3) rain onset raises ticks and worms ----------------------------------
 onset = [0.0] * 16 + [4.0, 6.0, 5.0, 8.0, 0.0, 0.0, 3.0]
@@ -54,6 +61,8 @@ assert "Angalia mifugo yako" in msg, msg
 assert "•" in msg, msg
 assert "Umeona kupe" in msg or "Umekagua kope" in msg, msg
 assert "afisa wa mifugo" in msg, msg
+assert msg.startswith("🔍 KUPE NA MINYOO"), msg
+assert "🐛" not in msg and "WADUDU" not in msg, "no bug emoji, no grain-weevil word"
 print("rain onset: tick + worm windows raised, message quotes the numbers OK")
 
 # --- 4) one available signal can never raise a window past 'watch' ---------
@@ -82,7 +91,7 @@ print("consecutive wet days: hoof window raised OK")
 # --- 7) the check-first boundary, asserted over everything we render -------
 samples = [pests.message(o, "swa"), pests.message(o, "eng"),
            pests.message(solo_out, "swa"), pests.message(solo_out, "eng"),
-           pests.quiet_sentence("swa"), pests.quiet_sentence("eng"),
+           pests.quiet_message(o, "swa"), pests.quiet_message(o, "eng"),
            pests.weekly_line(o, "swa"), pests.weekly_line(o, "eng")]
 for win in o.windows:
     samples.append(pests.observation_question(win, "swa"))
@@ -128,13 +137,15 @@ print("voice: '22 mm' is spoken as milimita OK")
 # A herder does not read release notes: if the pest check is not in the menu, it may
 # as well not exist. This is the check that it is actually wired into WhatsApp.
 wa = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
-assert "🐛 WADUDU" in wa and "🐛 PESTS" in wa, "the pest service is not in the menu"
+assert "🔍 KUPE NA MINYOO" in wa and "🔍 TICKS AND WORMS" in wa, \
+    "the pest service is not in the menu"
+assert "WADUDU" not in wa, "the generic word for bugs must not be the menu label"
 assert '"10": "pest"' in wa, "menu number 10 must resolve to the pest service"
 assert '"9": "language"' in wa, "the existing language shortcut must not move"
 assert 'elif service == "pest":' in wa, "menu 10 does not reach _handle_pest_request"
 assert "_handle_pest_request(phone, pastoralist," in wa
-assert '"wadudu"' in wa and '"kupe"' in wa and '"minyoo"' in wa, \
-    "the keyword path must stay too"
+assert '"kupe"' in wa and '"minyoo"' in wa, \
+    "the words a herder uses must stay as keywords"
 dev = io.open("app/routers/dev.py", encoding="utf-8").read()
 assert '@router.post("/pest")' in dev, "no /dev/pest probe to check the wording"
 print("menu + keyword + probe wiring OK")
