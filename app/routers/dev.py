@@ -177,6 +177,106 @@ async def landmark_probe(request: Request, x_debug_key: str = Header(default="")
     }
 
 
+@router.post("/pest")
+async def pest_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """Show the pest/parasite windows and the exact message a herder would get.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Two modes:
+
+      * real data   — {water_source_id} or {phone}: reads the stored rain/temperature
+                      series (add "ndmi" to include the satellite canopy-moisture
+                      signal before we wire it into the advisory path).
+      * synthetic   — {rain: [..], soil_moisture, temp_max_c, humidity}: runs the
+                      pure rules on numbers you choose, so the thresholds can be
+                      checked against a season we are not in.
+
+    Returns every window with its tier and the evidence behind it (so a wrong tier
+    is arguable), plus the rendered weekly line and full message in both languages.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    from app.services import pests
+
+    payload = await request.json()
+    point_id = payload.get("water_source_id")
+
+    if payload.get("rain") is not None:
+        inp = pests.build_inputs(
+            payload.get("rain") or [],
+            soil_moisture=payload.get("soil_moisture"),
+            temp_max_c=payload.get("temp_max_c"),
+            humidity=payload.get("humidity"),
+            ndmi=payload.get("ndmi"),
+        )
+        source = "synthetic"
+    else:
+        if not point_id and payload.get("phone"):
+            from app.services.pastoralists import get_water_source
+
+            point = get_water_source(payload["phone"])
+            point_id = (point or {}).get("id")
+        if not point_id:
+            return {"ok": False, "error": "water_source_id, phone or rain is required"}
+        rows = None
+        try:
+            from app.services import environment
+
+            rows = environment.recent_series(point_id, days=90)
+        except Exception:  # noqa: BLE001
+            log.exception("pest probe series read failed")
+        o = pests.outlook_for_point(point_id, ndmi=payload.get("ndmi"))
+        if o is None:
+            return {"ok": False, "error": "no environment series for that point"}
+        return {
+            "ok": True,
+            "source": "stored",
+            "water_source_id": point_id,
+            "series_days": len(rows or []),
+            "windows": _pest_windows(o),
+            "highest_tier": o.highest_tier,
+            "weekly_line_swa": pests.weekly_line(o, "swa"),
+            "message_swa": pests.message(o, "swa"),
+            "message_eng": pests.message(o, "eng"),
+        }
+
+    o = pests.outlook(inp)
+    return {
+        "ok": True,
+        "source": source,
+        "inputs": {
+            "rain_7d_mm": inp.rain_7d_mm,
+            "rain_14d_mm": inp.rain_14d_mm,
+            "days_since_wet": inp.days_since_wet,
+            "wet_days_streak": inp.wet_days_streak,
+            "soil_moisture": inp.soil_moisture,
+            "temp_max_c": inp.temp_max_c,
+            "humidity": inp.humidity,
+            "ndmi": inp.ndmi,
+        },
+        "windows": _pest_windows(o),
+        "highest_tier": o.highest_tier,
+        "weekly_line_swa": pests.weekly_line(o, "swa"),
+        "message_swa": pests.message(o, "swa"),
+        "message_eng": pests.message(o, "eng"),
+    }
+
+
+def _pest_windows(o) -> list[dict]:
+    return [
+        {
+            "key": w.key,
+            "tier": w.tier,
+            "score": w.score,
+            "signals_available": w.signals_available,
+            "evidence_swa": w.reason_lines("swa"),
+            "evidence_eng": w.reason_lines("eng"),
+        }
+        for w in o.windows
+    ]
+
+
 class _StubHerder:
     """Minimal stand-in for an anonymous probe (matches the Pastoralist fields the
     chat layer reads, so no database row is needed)."""

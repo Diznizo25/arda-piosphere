@@ -234,3 +234,58 @@ def delete_pastoralist(phone_number: str) -> None:
             cur.execute("delete from pastoralists where phone_number = %(phone)s",
                         {"phone": phone_number})
         conn.commit()
+
+
+def touch_last_inbound(phone_number: str) -> None:
+    """Record that the herder just wrote to us (migration 013).
+
+    WhatsApp only permits a free-form business message within 24 hours of the
+    herder's last message. This timestamp is what lets the weekly note tell "can
+    message him now" from "needs an approved template", instead of firing messages
+    into the void and wondering why nobody replies.
+    """
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("update pastoralists set last_inbound_at = now() "
+                        "where phone_number = %(phone)s", {"phone": phone_number})
+        conn.commit()
+
+
+def last_inbound_hours(phone_number: str) -> float | None:
+    """Hours since the herder's last message (None when we have never had one)."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select extract(epoch from (now() - last_inbound_at)) / 3600.0 as hours
+                   from pastoralists where phone_number = %(phone)s""",
+                {"phone": phone_number})
+            row = cur.fetchone()
+    if not row or row["hours"] is None:
+        return None
+    return float(row["hours"])
+
+
+def list_note_recipients() -> list[dict]:
+    """Herders the weekly note can be built for (confirmed water point + species).
+
+    Returns [{phone_number, preferred_language, species, water_source_id,
+    point_name, ward, lon, lat, last_inbound_hours}] — everything the sender needs,
+    in one query, so the weekly job never walks the pastoralists table row by row.
+    """
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select p.phone_number, p.preferred_language,
+                          p.primary_species as species,
+                          p.water_source_id, ws.name as point_name, ws.ward,
+                          st_x(ws.geom) as lon, st_y(ws.geom) as lat,
+                          case when p.last_inbound_at is null then null
+                               else extract(epoch from (now() - p.last_inbound_at))
+                                    / 3600.0 end as last_inbound_hours
+                   from pastoralists p
+                   join water_sources ws on ws.id = p.water_source_id
+                   where p.water_source_id is not null
+                     and p.primary_species is not null
+                   order by ws.name nulls last, p.phone_number""")
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]

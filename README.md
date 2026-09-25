@@ -168,6 +168,97 @@ kidogo, lakini huu ni msimu wa kiangazi wa kawaida. Utabiri (siku 15): hakuna mv
 inayotarajiwa (makadirio).`) and the `mvua` service (menu 8) gives the fuller
 answer with an action attached.
 
+## The water loop (one tap, then everyone on that point)
+
+Migration 009 let a herder report a water point's status. Migration 011 makes that
+tap **worth more than one person's answer**:
+
+- **Fan-out** — when a status lands, the other herders who drink from the *same*
+  point are told what a herder confirmed, anonymously, and never more than once per
+  12 hours (`water_notices` is both the log and the cooldown). One tap, ten people
+  informed.
+- **Queue** — straight after a status report the herder is asked one more digit:
+  `1` short line, `2` long line. A full tank with 40 herds queued is not the same
+  decision as a full tank with nobody there. Readings older than 24 hours are not
+  shown (`water_loop.QUEUE_FRESH_HOURS`).
+- **Repair closure** — `imekarabatiwa` (or "repaired", "maji yamerudi") sets the
+  point back to functional *immediately* and tells everyone we had warned. Without
+  it, a pump fixed the day after a report would stay suppressed for the whole
+  60-day stale window, and herders would walk past working water because our record
+  said it was dead.
+
+Rules that keep it a network rather than a broadcast channel: the fan-out fires only
+on a *change* of status, never for `unknown`, is cooldown-guarded, and is backgrounded
+so a reporter's acknowledgement is never delayed by it. Everything is fail-open.
+
+## Pest and parasite windows (check first, never diagnose)
+
+The safest prediction this system can make, and the one that targets lost weight and
+milk rather than an outbreak: the conditions that favour ticks, stomach worms, flies
+on wounds and wet-ground hoof problems. `app/services/pests.py` computes four small,
+transparent scorecards from data we already store — rain (7 and 14 day), soil
+moisture, temperature, humidity and (optionally) NDMI from the satellite COG:
+
+| Window | Gate (moisture) | Signals | Where we tell the herder to look |
+|---|---|---|---|
+| Ticks | rain 7d ≥ 10 mm, damp soil or moist vegetation | rain, soil, temperature band, NDMI | ears, under the tail, udder, between the legs, neck |
+| Worms | rain 14d ≥ 20 mm or damp soil | rain, days since last rain, warmth, soil | eyelid colour, gums, spine, belly shape |
+| Flies / wounds | rain 7d ≥ 5 mm or humidity ≥ 60% | rain, warmth, humidity | any wound, navel of young stock |
+| Hooves | ≥ 3 wet days in a row or very wet ground | wet-day streak, soil | all four hooves, the standing area at the water point |
+
+Why it is safe to ship: the herder's own eyes confirm or dismiss the window, so being
+wrong costs him five minutes — never a diagnosis, never a drug bill, never a
+contradiction of the county vet. Three mechanical guarantees, asserted in
+`scripts/test_pests.py`:
+
+- **heat alone never fires a window** (in the ASALs warmth is the background state,
+  so every window has a moisture gate),
+- **one available signal can never raise a window past `watch`** (a false alarm costs
+  a household real money),
+- **nothing we render names a drug, prescribes a treatment or diagnoses** — the
+  forbidden-word list is a test, not a comment. If the herder finds something, the
+  message routes him to the vet or agrovet.
+
+Tiers are `quiet → watch → rising → high`, and the wording and the checklist come from
+`config/pest_guidance.yaml` (marked `needs_review`: a county vet must check it before
+the first message reaches a herder). Answers are stored in `pest_observations`
+(migration 012) with `seen` true *or* false — a "I looked and saw nothing" reply is as
+valuable as a positive one, because it is what keeps a window honest. Probe it with
+`POST /dev/pest` (real data by `water_source_id`, or synthetic by `rain: [...]`).
+
+## The weekly note (a rhythm, not a reply)
+
+Retention is an appointment. `scripts/send_weekly_note.py` builds and sends the same
+shape of message every Monday: the rain line, where it rained by place name, the
+herder's water point and its queue, the pest check when a window is up, a live-map
+link, and exactly one one-tap question. Three things it refuses to fake:
+
+- **Dry run by default** (nothing is sent without `--send`), so a typo cannot message
+  hundreds of phones.
+- **WhatsApp's 24-hour window is respected** — a free-form business message is only
+  allowed within 24 hours of the herder's own last message, so herders outside it are
+  recorded as `outside_24h_window` in `weekly_notes` (migration 013) instead of being
+  messaged into the void. Reaching that group needs one approved utility template.
+- **One note per herder per week** (unique key on `weekly_notes`), so a retry, a
+  manual run and the scheduled run cannot triple-message anyone.
+
+The sender also records the note as the herder's last advisory point, so his reply
+`2` (imekauka) lands on the right water point instead of being ignored.
+
+**Where the rain fell is a sentence, not a shaded band.** The map stays as it is and
+instead gains a stamp of its own age (`malisho: picha ya 05 Sep - kadirio`). The
+reasoning: our rain data is a value *at a point*, so a band would claim spatial
+precision we do not have, look authoritative when wrong, and be staler than the words
+(the text rides the twice-daily refresh). Pastoralists also speak in places —
+*"mvua ilinyesha upande wa Kipsing"* — so `forecast.place_rain_line()` compares the
+herder's 7-day total with the nearest named points and says nothing at all when the
+difference is not a movement decision.
+
+The satellite refresh moved from fortnightly to **weekly** (`0 3 * * 1`) for the same
+reason: an alert that fires on 7-day rain signals should not point at a 14-day-old
+picture. If GEE export or Actions minutes ever bite, split it into two alternating
+half-batches (same total work, still weekly per point).
+
 ## The conversational layer (a grounded assistant, not a free chatbot)
 
 A herder can just type a question. `app/services/chat.py` answers it — and the
@@ -490,9 +581,20 @@ Water status (migration 009): `water_sources.status` / `status_updated_at` /
 which suppresses guidance to points reported dry/broken/gone for 60 days.
 
 Environment (migration 010): `rainfall_climatology` (monthly CHIRPS normals per
-water point), `environment_daily` (observed rain + soil moisture),
-`environment_forecast` (cached 16-day forecast), `water_sources.indices_as_of`
-(when the satellite snapshot was taken).
+water point), `environment_daily` (observed rain + soil moisture + temperature and
+humidity, added in 012), `environment_forecast` (cached 16-day forecast),
+`water_sources.indices_as_of` (when the satellite snapshot was taken).
+
+The water loop (migration 011): `water_sources.queue_level` / `queue_updated_at` /
+`queue_reports` / `repaired_at`, `ground_truth_reports.queue_level`, and
+`water_notices` (the fan-out log *and* its 12-hour cooldown).
+
+Pest and parasite windows (migration 012): `pest_observations` — `pest_key`
+(ticks/worms/flies/hooves), `seen` true or false, phone, water point, date.
+
+The weekly note (migration 013): `pastoralists.last_inbound_at` (WhatsApp's 24-hour
+window, so we know who can legally receive a free-form message) and `weekly_notes`
+(one row per herder per week, with `delivered` and `skipped_reason`).
 
 Migrations are applied with `python scripts/apply_migration.py migrations/<file>.sql`
 (`--check <tag>` verifies a migration without applying anything).
@@ -507,7 +609,9 @@ Pipeline:
 - `build_overview_cogs.py`, `build_water_point.py`, `pin_water_point.py`
 - `refresh_indices.py` — full refresh for a ward/county
 - `build_rain_climatology.py` — 30-year CHIRPS monthly normals per water point
-- `refresh_environment.py` — observed rain/soil moisture + 16-day forecast (2x daily)
+- `refresh_environment.py` — observed rain/soil moisture + temperature/humidity +
+  16-day forecast (2x daily)
+- `send_weekly_note.py` — the Monday note (dry run by default; `--send` to deliver)
 - `apply_migration.py` — apply/verify a migration SQL file
 
 Checks & debugging:
@@ -517,9 +621,12 @@ Checks & debugging:
 - `check_prod_map.py`, `verify_map_center.py`, `verify_prod_map_geo.py` —
   verify the live map is geolocated correctly
 - `test_pasture_render.py` (mocked, no network), `test_weight_service.py`,
-  `test_rain_outlook.py` (rain-outlook logic + wiring), `test_chat_layer.py`
-  (chat routing, number/disease guardrails, fail-open), `test_conversation_flows.py`
-  (end-to-end WhatsApp flows)
+  `test_rain_outlook.py` (rain-outlook logic + place-rain wording + the map's age
+  stamp), `test_chat_layer.py` (chat routing, number/disease guardrails, fail-open),
+  `test_water_loop.py` (queue digits, fan-out rules, repair keywords),
+  `test_pests.py` (window thresholds, the moisture gate, and the no-drug /
+  no-diagnosis boundary), `test_weekly_note.py` (note shape, 24-hour window,
+  once-a-week rule), `test_conversation_flows.py` (end-to-end WhatsApp flows)
 
 Deployment & scheduling:
 - `trigger_render_deploy.py`, `trigger_build_workflow.py`,
@@ -566,9 +673,25 @@ paths write to it fail-open so logging never breaks the herder experience.
 **Live:** onboarding, advisories (SATVI/NDVI/BSI/VCI), species rings, pasture
 maps with direction guidance, water-point PIN validation + auto-build, weight &
 herd tools, services menu, voice-note replies, ground-truth capture, herder
-water-status reports that gate guidance, dated COG history, the rain/drought
-outlook (`mvua`) built on a 30-year CHIRPS climatology + a cached 16-day forecast,
-and a grounded conversational layer (`/dev/chat` to probe it).
+water-status reports that gate guidance, the water loop (status fan-out, waiting
+queue, repair closure), pest & parasite check windows, the weekly note, dated COG
+history, the rain/drought outlook (`mvua`) built on a 30-year CHIRPS climatology +
+a cached 16-day forecast, and a grounded conversational layer (`/dev/chat` to probe
+it).
+
+**Build order from here** (the reasoning is in `docs/retention_plan.md`):
+
+1. Water loop — shipped (fan-out, queue, repair closure).
+2. Pest & parasite windows — shipped (check-first; vet review of
+   `config/pest_guidance.yaml` still needed before wide rollout).
+3. Weekly picture fixes — shipped (map age stamp, rain by place names, weekly
+   satellite refresh); fixed weekly send — shipped (`send_weekly_note.py`, needs one
+   approved WhatsApp utility template to reach herders outside the 24-hour window).
+4. Herd ledger with a payoff — next: household/group layer (two phones, one herd),
+   cohort counts, weekly `zaidi / pungufu / hakuna` changes, the monthly scorecard
+   with ward-benchmarked rates, and the "you should have 44, you counted 42" check.
+5. Contribution and pride (`taarifa zako 14 zimewasaidia wachungaji 60`) — small
+   tally, rides on 1-4.
 
 **Known open items:**
 - Swahili message templates should be reviewed by native speakers before wide
@@ -596,9 +719,18 @@ and a grounded conversational layer (`/dev/chat` to probe it).
   Names herders actually use that are missing from both — e.g. "Oldonyo Sabor" — get
   the honest "sijui eneo hilo, tuma eneo lako" reply; adding them to
   `config/landmarks.geojson` (or as water points) is the fix, not better matching.
-- Vet/disease-risk *hazard windows* (vector flush after sustained rain, crowding at
-  shrinking water) need a county veterinary partnership before we promise anything
-  about disease; environment alone cannot predict outbreaks.
+- Pest windows ship as **conditions + where to look**, never a diagnosis: heat alone
+  cannot fire a window, a single available signal cannot raise one past `watch`, and
+  `scripts/test_pests.py` asserts mechanically that no drug name, treatment verb or
+  diagnosis can reach a herder. The pest thresholds are literature-based defaults to
+  be tuned against `pest_observations`, and `config/pest_guidance.yaml` is marked
+  `needs_review` until a county vet reads it.
+- Disease-risk windows (vector flush after sustained rain, crowding at shrinking
+  water) still need a county veterinary partnership before we promise anything about
+  disease; environment alone cannot predict outbreaks.
+- Reaching herders outside WhatsApp's 24-hour window needs one approved utility
+  template. Until then the weekly note delivers to in-window herders only, and the
+  rest are recorded as `outside_24h_window` rather than counted as reach.
 - Market signaling, peer connection, vet registry, and marketplace are later phases.
 
 ## Getting started

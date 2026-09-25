@@ -530,6 +530,12 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     else:
         banner_text = f"{ws.name or ws.ward or 'Maji'}  -  {ws.county or ''}".strip()
     _draw_place_banner(draw, banner_text)
+    # The picture must state its own age: a forwarded map loses the caption, and a
+    # snapshot that looks like "now" is the one lie this system will not tell.
+    if not fit_points:
+        as_of = _snapshot_as_of(water_source_id)
+        if as_of:
+            _draw_data_stamp(draw, as_of, lang=lang)
     _draw_legend(draw, [] if fit_points else zones,
                  ward=None if fit_points else (ws.name or ws.ward),
                  county=None if fit_points else ws.county,
@@ -619,6 +625,60 @@ def _draw_place_banner(draw: ImageDraw.ImageDraw, text: str) -> None:
     draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=14,
                            fill=(255, 255, 255, 240), outline=(20, 20, 20, 200), width=2)
     draw.text((x0 + 22, y0 + 9), text, fill=(20, 20, 20), font=font)
+
+
+# Swahili month abbreviations, because this line is read by pastoralists.
+_MONTHS_SWA = ["Jan", "Feb", "Mac", "Apr", "Mei", "Jun",
+               "Jul", "Ago", "Sep", "Okt", "Nov", "Des"]
+_MONTHS_ENG = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _snapshot_as_of(water_source_id: str) -> str | None:
+    """When the satellite picture behind this map was taken (fail-open -> None).
+
+    Read from water_sources.indices_as_of (migration 010). A picture that does not
+    state its own age quietly implies it is today's, and a forwarded image loses the
+    caption that would have said otherwise.
+    """
+    try:
+        from app.db import get_pg_connection
+
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select indices_as_of::text as as_of from water_sources "
+                            "where id = %(id)s", {"id": water_source_id})
+                row = cur.fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    return (row or {}).get("as_of") or None
+
+
+def _draw_data_stamp(draw: ImageDraw.ImageDraw, as_of: str, lang: str = "swa") -> None:
+    """Small pill under the place banner: the date of the picture + 'estimate'.
+
+    Deliberately small but always present: the map must never look fresher than it
+    is, and the word "kadirio" (estimate) travels with the image when a herder
+    forwards it to his clan group.
+    """
+    try:
+        year, month, day = (int(x) for x in str(as_of)[:10].split("-"))
+        months = _MONTHS_SWA if lang == "swa" else _MONTHS_ENG
+        stamp = f"{day:02d} {months[month - 1]}"
+    except Exception:  # noqa: BLE001
+        stamp = str(as_of)[:10]
+    text = (f"malisho: picha ya {stamp} - kadirio" if lang == "swa"
+            else f"pasture: {stamp} image - estimate")
+    font = _get_font(20)
+    tw = draw.textlength(text, font=font)
+    x0 = max(10, (IMG_SIZE - tw) / 2 - 14)
+    y0 = 76
+    w = min(tw + 28, IMG_SIZE - 20)
+    h = 34
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=10,
+                           fill=(255, 255, 255, 225), outline=(120, 120, 120, 200),
+                           width=2)
+    draw.text((x0 + 14, y0 + 5), text, fill=(60, 60, 60), font=font)
 
 
 def _draw_banner_bottom(draw: ImageDraw.ImageDraw, text: str, fill: tuple = (22, 101, 52, 240)) -> None:

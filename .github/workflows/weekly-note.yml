@@ -1,0 +1,78 @@
+name: weekly-note
+
+# The weekly note: every Monday, the same shape of message to every herder we can
+# reach — the rain line, where it rained by place name, his water point and queue,
+# the pest check when a window is up, the live-map link, and one one-tap question.
+#
+# Why a schedule matters more than the wording: retention is a rhythm. A system that
+# only answers when spoken to is a website he forgets; a message that arrives every
+# Monday with one question is an appointment.
+#
+# Two honest constraints, both encoded in scripts/send_weekly_note.py:
+#   * WhatsApp allows a free-form business message only inside the 24 hours that
+#     start with the herder's own last message. Herders outside that window are
+#     recorded in weekly_notes as 'outside_24h_window' — reaching them needs ONE
+#     approved utility template (an ops task). The run reports the split, so we can
+#     see the real reach rather than assuming it.
+#   * One note per herder per week (a unique key in weekly_notes), so a retry, a
+#     manual run and the scheduled run can never triple-message anyone.
+#
+# Manual runs default to a DRY RUN: dispatch it, read the notes in the log, then
+# re-run with send=true. Only the Monday schedule sends on its own.
+#
+# Setup: DATABASE_URL plus the WhatsApp credentials the app already uses
+# (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) and APP_PUBLIC_BASE_URL.
+
+on:
+  schedule:
+    # Mondays at 05:00 UTC = 08:00 in Nairobi: after the 03:00 satellite refresh,
+    # and at the hour a pastoralist is up and moving.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      send:
+        description: "Actually send (leave false for a dry run that only logs)"
+        type: boolean
+        default: false
+      limit:
+        description: "Cap the number of herders (0 = all)"
+        type: string
+        default: "0"
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Keep in sync with .python-version and the other workflows (3.11).
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send the weekly note
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="--send"
+          elif [ "${{ inputs.send }}" = "true" ]; then
+            ARGS="--send"
+          fi
+          LIMIT="${{ inputs.limit }}"
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "0" ]; then
+            ARGS="$ARGS --limit $LIMIT"
+          fi
+          echo "running: python scripts/send_weekly_note.py $ARGS"
+          python scripts/send_weekly_note.py $ARGS
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          APP_PUBLIC_BASE_URL: ${{ vars.APP_PUBLIC_BASE_URL }}

@@ -181,3 +181,52 @@ transfer_src = io.open("scripts/transfer_assets_to_r2.py", encoding="utf-8").rea
 assert "archive_current_cog(" in transfer_src and "_set_indices_as_of(" in transfer_src
 print("dated COG archive wiring OK")
 
+# --- 11) where it rained, in words and place names --------------------------
+# The shaded rain band was rejected on purpose: our rain data is a point value, so
+# a band would claim spatial precision we do not have, and it would be staler than
+# the text (the text rides the twice-daily refresh). This is the replacement.
+from app.services.forecast import place_rain_line  # noqa: E402
+
+places = [
+    {"name": "Kipsing well", "rain_7d_mm": 18.0, "direction_swa": "Kaskazini"},
+    {"name": "Burat", "rain_7d_mm": 2.0, "direction_swa": "Mashariki"},
+]
+line = place_rain_line(3.0, places, "swahili")
+assert line and "Kipsing well" in line and "18.0 mm" in line, line
+assert "Kaskazini" in line and "3.0 mm" in line, line
+assert line.startswith("Mvua ya siku 7."), line
+en = place_rain_line(3.0, places, "english")
+assert en and "18.0 mm" in en and "Kipsing" in en, en
+
+# Silence when there is nothing to say: no neighbours, no own data, or no material
+# difference ("we got 3, they got 5" is not a movement decision).
+assert place_rain_line(3.0, [], "swahili") is None
+assert place_rain_line(None, places, "swahili") is None
+assert place_rain_line(16.0, places, "swahili") is None, \
+    "a 2 mm difference is not news"
+assert place_rain_line(3.0, [{"name": None, "rain_7d_mm": 40.0}], "swahili") is None, \
+    "an unnamed point tells a herder nothing"
+
+# Voice: the sentence must survive being spoken (mm -> milimita, same word order).
+import re  # noqa: E402
+
+from app.services.speech import speech_text  # noqa: E402
+
+spoken = speech_text(line, "swahili")
+assert "milimita" in spoken.lower(), spoken
+assert re.search(r"\d+\s*mm", spoken) is None, spoken
+print("place-rain line: in words, place names, silent when empty OK")
+
+# --- 12) the map states its own age ----------------------------------------
+# A forwarded image loses the caption, so the date and the word "estimate" travel
+# inside the picture itself.
+renderer_src = io.open("app/services/map_renderer.py", encoding="utf-8").read()
+assert "def _draw_data_stamp(" in renderer_src, "the map has no data stamp"
+assert "indices_as_of" in renderer_src, "the stamp must read the snapshot date"
+assert "kadirio" in renderer_src, "the stamp must say it is an estimate (Swahili)"
+assert "_draw_data_stamp(draw, as_of" in renderer_src, "the stamp is never called"
+weekly_src = io.open(".github/workflows/refresh-indices.yml", encoding="utf-8").read()
+assert 'cron: "0 3 * * 1"' in weekly_src, "the satellite refresh must be weekly"
+print("map age stamp + weekly satellite refresh wiring OK")
+
+

@@ -32,11 +32,16 @@ FORECAST_DAYS = 16      # beyond ~16 days there is no useful rain skill here
 TIMEOUT_S = 25.0
 
 UPSERT_DAILY_SQL = """
-insert into environment_daily (water_source_id, observed_on, rain_mm, soil_moisture, source)
-values (%(water_source_id)s, %(observed_on)s, %(rain_mm)s, %(soil_moisture)s, %(source)s)
+insert into environment_daily (water_source_id, observed_on, rain_mm, soil_moisture,
+                               temperature_max_c, temperature_min_c, humidity, source)
+values (%(water_source_id)s, %(observed_on)s, %(rain_mm)s, %(soil_moisture)s,
+        %(temperature_max_c)s, %(temperature_min_c)s, %(humidity)s, %(source)s)
 on conflict (water_source_id, observed_on) do update
 set rain_mm = excluded.rain_mm,
     soil_moisture = excluded.soil_moisture,
+    temperature_max_c = excluded.temperature_max_c,
+    temperature_min_c = excluded.temperature_min_c,
+    humidity = excluded.humidity,
     source = excluded.source
 """
 
@@ -74,6 +79,17 @@ order by observed_on desc
 limit %(days)s
 """
 
+# Full daily rows (oldest first at the caller), for the pest/parasite windows:
+# they need warmth and humidity alongside the rain.
+RECENT_SERIES_SQL = """
+select observed_on, rain_mm, soil_moisture, temperature_max_c, temperature_min_c,
+       humidity
+from environment_daily
+where water_source_id = %(water_source_id)s
+order by observed_on desc
+limit %(days)s
+"""
+
 CLIMATOLOGY_SQL = """
 select month, mean_mm
 from rainfall_climatology
@@ -100,8 +116,14 @@ def fetch_open_meteo(lat: float, lon: float, past_days: int = PAST_DAYS,
     """Observed rain/soil moisture (past) + forecast (future) for one point.
 
     Returns observed (up to and including today) and forecast (tomorrow onward) as
-    lists of {date, rain_mm, soil_moisture}. Returns None on any failure - a
-    weather API outage must never break a refresh or a herder's reply.
+    lists of {date, rain_mm, soil_moisture, temperature_max_c, temperature_min_c,
+    humidity}. Returns None on any failure - a weather API outage must never break
+    a refresh or a herder's reply.
+
+    Temperature and humidity are here for the pest/parasite windows: tick questing
+    and worm larval development need warmth as well as moisture, and flies need
+    humid air. They are read from the same daily block, so the pest layer costs no
+    extra API calls.
     """
     try:
         resp = httpx.get(
@@ -109,7 +131,9 @@ def fetch_open_meteo(lat: float, lon: float, past_days: int = PAST_DAYS,
             params={
                 "latitude": round(lat, 4),
                 "longitude": round(lon, 4),
-                "daily": "precipitation_sum,soil_moisture_0_to_7cm_mean",
+                "daily": ("precipitation_sum,soil_moisture_0_to_7cm_mean,"
+                          "temperature_2m_max,temperature_2m_min,"
+                          "relative_humidity_2m_mean"),
                 "past_days": past_days,
                 "forecast_days": forecast_days,
                 "timezone": "Africa/Nairobi",
@@ -127,6 +151,13 @@ def fetch_open_meteo(lat: float, lon: float, past_days: int = PAST_DAYS,
     dates = daily.get("time") or []
     rain = daily.get("precipitation_sum") or []
     soil = daily.get("soil_moisture_0_to_7cm_mean") or []
+    tmax = daily.get("temperature_2m_max") or []
+    tmin = daily.get("temperature_2m_min") or []
+    humid = daily.get("relative_humidity_2m_mean") or []
+
+    def _at(series, i):
+        return float(series[i]) if i < len(series) and series[i] is not None else None
+
     today = date.today().isoformat()
     observed: list[dict] = []
     upcoming: list[dict] = []
@@ -135,8 +166,14 @@ def fetch_open_meteo(lat: float, lon: float, past_days: int = PAST_DAYS,
             "date": day,
             "rain_mm": float(rain[i]) if i < len(rain) and rain[i] is not None else 0.0,
         }
-        if i < len(soil) and soil[i] is not None:
-            row["soil_moisture"] = float(soil[i])
+        if (v := _at(soil, i)) is not None:
+            row["soil_moisture"] = v
+        if (v := _at(tmax, i)) is not None:
+            row["temperature_max_c"] = v
+        if (v := _at(tmin, i)) is not None:
+            row["temperature_min_c"] = v
+        if (v := _at(humid, i)) is not None:
+            row["humidity"] = v
         (upcoming if day > today else observed).append(row)
     return {"observed": observed, "forecast": upcoming}
 
@@ -156,6 +193,9 @@ def refresh_for_water_source(water_source_id: str, lat: float, lon: float) -> di
             "observed_on": r["date"],
             "rain_mm": r.get("rain_mm"),
             "soil_moisture": r.get("soil_moisture"),
+            "temperature_max_c": r.get("temperature_max_c"),
+            "temperature_min_c": r.get("temperature_min_c"),
+            "humidity": r.get("humidity"),
             "source": SOURCE,
         }
         for r in data["observed"]
@@ -208,6 +248,84 @@ def recent_rain(water_source_id: str, days: int = 30) -> tuple[list[float], floa
     soil = next((float(r["soil_moisture"]) for r in reversed(rows)
                  if r["soil_moisture"] is not None), None)
     return rain, soil
+
+
+def recent_series(water_source_id: str, days: int = 90) -> list[dict]:
+    """Daily rows oldest-first, with rain, soil moisture, temperature, humidity.
+
+    Used by the pest/parasite windows. Nothing is invented when a column is empty
+    (older rows predate the temperature columns): the caller sees None and the
+    window simply has fewer signals, which is the honest outcome.
+    """
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(RECENT_SERIES_SQL, {"water_source_id": water_source_id,
+                                            "days": days})
+            rows = cur.fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+# Last 7 days of rain at the nearest OTHER points, with the direction from here:
+# the raw material for the "where did it rain" sentence. The comparison is done in
+# words (see forecast.place_rain_line) rather than drawn on a map, because our rain
+# data is a point value, not a picture of the ground.
+NEARBY_RAIN_SQL = """
+select ws.id, ws.name, ws.ward,
+       st_distance(ws.geom::geography, me.geom::geography) as distance_m,
+       st_x(ws.geom) as lon,
+       st_y(ws.geom) as lat,
+       coalesce(sum(ed.rain_mm) filter (
+           where ed.observed_on >= current_date - interval '7 days'), 0) as rain_7d_mm
+from water_sources me
+join water_sources ws on ws.id <> me.id
+left join environment_daily ed on ed.water_source_id = ws.id
+where me.id = %(id)s
+group by ws.id, ws.name, ws.ward, ws.geom, me.geom
+order by distance_m asc
+limit %(limit)s
+"""
+
+
+def own_rain_7d(water_source_id: str, days: int = 7) -> float | None:
+    """Rain at the herder's own point over the last `days` (None when no data)."""
+    rows = recent_series(water_source_id, days=days)
+    if not rows:
+        return None
+    return round(sum(float(r.get("rain_mm") or 0.0) for r in rows), 1)
+
+
+def nearby_rain(water_source_id: str, limit: int = 3) -> list[dict]:
+    """Rain in the last 7 days at the nearest other points, with direction.
+
+    Returns [{name, ward, rain_7d_mm, distance_km, direction_swa}]. Points without
+    a name are dropped by the caller's formatter: "a point with no name got 18 mm"
+    tells a herder nothing.
+    """
+    from app.services.map_renderer import _bearing_deg, _compass_swa
+
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("select st_y(geom) as lat, st_x(geom) as lon "
+                        "from water_sources where id = %(id)s",
+                        {"id": water_source_id})
+            here = cur.fetchone()
+        if not here:
+            return []
+        with conn.cursor() as cur:
+            cur.execute(NEARBY_RAIN_SQL, {"id": water_source_id, "limit": limit})
+            rows = cur.fetchall()
+    out = []
+    for r in rows:
+        bearing = _bearing_deg(float(here["lat"]), float(here["lon"]),
+                               float(r["lat"]), float(r["lon"]))
+        out.append({
+            "name": r["name"] or r["ward"],
+            "ward": r["ward"],
+            "rain_7d_mm": round(float(r["rain_7d_mm"] or 0.0), 1),
+            "distance_km": round(float(r["distance_m"]) / 1000.0, 1),
+            "direction_swa": _compass_swa(bearing),
+        })
+    return out
 
 
 def climatology(water_source_id: str) -> dict[int, float]:

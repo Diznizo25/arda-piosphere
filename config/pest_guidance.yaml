@@ -1,0 +1,125 @@
+# Pest and parasite guidance — Arda Link
+#
+# The hard boundary (do not weaken this without a discussion):
+#   We name the CONDITIONS and tell the herder WHERE TO LOOK on the animal.
+#   We never diagnose, never prescribe a drug or a dose, and never tell the
+#   herder to spend money. If he finds something, we point him to the vet or
+#   the agrovet. Being wrong therefore costs him a look, not a panic and not
+#   a wasted shilling.
+#
+# Status: needs_review — this file is the human-readable half of the pest
+# windows (app/services/pests.py). The thresholds in that module are defaults
+# written from the literature; the wording here must be checked by a county
+# veterinary officer before the first message goes to a herder.
+#
+# Sources for the condition -> pest links (all open):
+#   * Tick questing and survival rise with moisture and moderate warmth;
+#     larvae/nymphs appear in numbers days to weeks after rain.
+#     FAO "Ticks and tick-borne diseases" / ILRI tick ecology briefs.
+#   * Strongyle (incl. Haemonchus) egg hatching and larval development on
+#     pasture need warmth AND moisture; L3 survive longest on shaded, damp
+#     ground and near water; dry heat kills them.
+#     FAO "Sustainable worm control" / ILRI small ruminant health.
+#   * Fly strike and wound myiasis rise with warm humid weather; any open
+#     wound is the entry point.
+#   * Hoof problems rise where animals stand on wet ground (water points).
+
+version: 1
+status: needs_review
+
+boundary:
+  swa: >-
+    Tunataja hali ya mazingira na mahali pa kuangalia kwenye mnyama. Hatuambii
+    kuwa mnyama ana ugonjwa, na hatupendekezi dawa. Ukiona dalili, wasiliana na
+    afisa wa mifugo au agrovet.
+  eng: >-
+    We describe the environmental conditions and where to look on the animal.
+    We never say the animal has a condition and we never recommend a drug. If
+    you see something, speak to your vet or agrovet.
+
+pests:
+  ticks:
+    label:
+      swa: Kupe
+      eng: Ticks
+    where_to_look:
+      swa: ["masikio na ndani ya sikio", "chini ya mkia", "matiti na kwapa",
+            "kati ya miguu", "shingo"]
+      eng: ["ears and inside the ear", "under the tail", "udder and armpit",
+            "between the legs", "neck"]
+    signs:
+      swa: ["wanyama wanajikuna au wanagusa mbao", "vidonda vidogo vya kuumwa",
+            "wanyama hawapumziki vizuri", "chakula kinapungua ghafla"]
+      eng: ["animals scratching or rubbing against posts", "small bite sores",
+            "animals restless", "sudden drop in appetite"]
+    if_found:
+      swa: >-
+        Wasiliana na afisa wa mifugo au agrovet wa eneo lako.
+      eng: >-
+        Speak to your vet or agrovet in your area.
+    why:
+      swa: "Kupe wanaongezeka siku chache hadi wiki chache baada ya mvua."
+      eng: "Tick numbers rise days to weeks after rain."
+
+  worms:
+    label:
+      swa: Minyoo
+      eng: Stomach worms
+    where_to_look:
+      swa: ["kope la jicho — rangi yake", "fizi", "nyama ya mgongo",
+            "ukubwa wa tumbo"]
+      eng: ["the eyelid colour", "the gums", "the back/spine", "the belly shape"]
+    signs:
+      swa: ["kope la jicho la rangi ya pinki au jeupe", "mnyama wembamba",
+            "tumbo la kuvimba", "mvua ya kinyesi", "udhaifu"]
+      eng: ["pale pink or white eyelid colour", "thin animal", "swollen belly",
+            "loose dung", "weakness"]
+    if_found:
+      swa: >-
+        Wasiliana na afisa wa mifugo au agrovet kwa ushauri, hasa kwa wanyama
+        wadogo na walio wembamba.
+      eng: >-
+        Speak to your vet or agrovet for advice, especially for young or thin
+        animals.
+    why:
+      swa: "Minyoo hukua kwenye malisho yenye unyevu na joto."
+      eng: "Worm larvae develop on warm, moist pasture."
+
+  flies:
+    label:
+      swa: Inzi na vidonda
+      eng: Flies and wounds
+    where_to_look:
+      swa: ["vidonda vyovyote", "kitovu cha mnyama mdogo", "mahali palipokatwa"]
+      eng: ["any wounds", "the navel of young animals", "shearing or cut sites"]
+    signs:
+      swa: ["inzi wengi kwenye kidonda", "vidonda vinanuka", "mabuu kwenye kidonda"]
+      eng: ["many flies at a wound", "a wound that smells", "maggots in a wound"]
+    if_found:
+      swa: >-
+        Wasiliana na afisa wa mifugo au agrovet haraka.
+      eng: >-
+        Speak to your vet or agrovet quickly.
+    why:
+      swa: "Joto na unyevu huongeza inzi, na kidonda ni mlango wao."
+      eng: "Warm humid weather increases flies, and a wound is their entry point."
+
+  hooves:
+    label:
+      swa: Kwato
+      eng: Hooves
+    where_to_look:
+      swa: ["kwato za miguu yote", "kati ya vidole vya kwato",
+            "eneo la kusimama karibu na maji"]
+      eng: ["all four hooves", "between the toes", "the standing area near water"]
+    signs:
+      swa: ["mnyama anachechemea", "mguu wa kuvimba", "harufu mbaya kwenye kwato"]
+      eng: ["limping", "swollen leg", "a bad smell from the hoof"]
+    if_found:
+      swa: >-
+        Wasiliana na afisa wa mifugo kwa ushauri.
+      eng: >-
+        Speak to your vet for advice.
+    why:
+      swa: "Kwato zinaoza zaidi pale wanyama wanaposimama kwenye matope."
+      eng: "Hooves soften and decay where animals stand in mud."

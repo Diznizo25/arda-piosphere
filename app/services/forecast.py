@@ -305,6 +305,45 @@ def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
     return " ".join(parts)
 
 
+def place_rain_line(own_mm: float | None, places: list[dict],
+                    lang: str = "swahili") -> str | None:
+    """Where the rain did and did not fall, in place names — never a drawn band.
+
+    Why words instead of a shaded map: our rain data is a forecast/observation at a
+    POINT, not a picture of the ground. A band would claim spatial precision we do
+    not have and would look authoritative when wrong, and it would be staler than
+    this text (the data refreshes twice a day). Pastoralists also speak in places,
+    not colours: "mvua ilinyesha upande wa Kipsing".
+
+    `places` is a list of {name, rain_7d_mm, direction_swa} for the nearest points
+    with data. Returns None when there is nothing worth saying (including when the
+    difference between here and there is trivial — a sentence that says nothing is
+    noise the herder learns to ignore).
+
+    Units are written "3 mm" (not "mm 3") because that is the form the voice pass
+    turns into "milimita tatu" for the spoken version.
+    """
+    sw = lang != "english"
+    named = [p for p in (places or []) if p.get("name")]
+    if own_mm is None or not named:
+        return None
+
+    wettest = max(named, key=lambda p: float(p.get("rain_7d_mm") or 0.0))
+    w_mm = float(wettest.get("rain_7d_mm") or 0.0)
+    # Say nothing when nobody nearby got meaningfully more rain than here.
+    if w_mm < own_mm + 5.0:
+        return None
+
+    direction = wettest.get("direction_swa")
+    if sw:
+        tail = f" upande wa {direction}" if direction else ""
+        return (f"Mvua ya siku 7. Kwako {own_mm:.1f} mm. "
+                f"{wettest['name']} {w_mm:.1f} mm{tail}.")
+    tail = f" to the {direction}" if direction else ""
+    return (f"Rain over 7 days. Here {own_mm:.1f} mm. "
+            f"{wettest['name']} {w_mm:.1f} mm{tail}.")
+
+
 
 def mvua_message(o: RainOutlook | None, place: str | None = None,
                  lang: str = "swahili") -> str:

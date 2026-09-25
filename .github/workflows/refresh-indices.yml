@@ -1,8 +1,17 @@
 name: refresh-indices
 
-# Two-week satellite refresh: recompute the index stack in Earth Engine and push
-# updated COGs + 8x overviews to R2, so advisories always reflect ~2-week-old
+# Weekly satellite refresh: recompute the index stack in Earth Engine and push
+# updated COGs + 8x overviews to R2, so advisories always reflect ~7-day-old
 # (or fresher) Sentinel-2 data.
+#
+# Why weekly rather than fortnightly: the alerts that tell a herder to look or move
+# fire on 7-day rain signals, so a 14-day picture was a mismatch exactly when the
+# decision was urgent (the onset of rain). Sentinel-2 revisits every 5 days, so a
+# 7-day refresh is legitimate, and change detection needs at least two comparable
+# dates — weekly fills the dated archive twice as fast. The cost is GEE export +
+# Actions minutes; if that ever bites, split this into two alternating half-batches
+# (4-5 points per run, twice a week) so each point is still refreshed weekly at the
+# old total cost.
 #
 # Pipeline (scripts/refresh_indices.py --ward <ward>):
 #   generate_piosphere_zones -> gee_export_to_asset.py --export-only --force
@@ -23,8 +32,9 @@ name: refresh-indices
 
 on:
   schedule:
-    # Every 14 days at 03:00 UTC.
-    - cron: "0 3 */14 * *"
+    # Every Monday at 03:00 UTC (06:00 in Nairobi) — the same slot as the weekly
+    # herder note, so the picture the note points at is the freshest one we have.
+    - cron: "0 3 * * 1"
   workflow_dispatch: {}
 
 jobs:

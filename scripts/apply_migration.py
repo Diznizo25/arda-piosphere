@@ -26,6 +26,17 @@ CHECKS = {
         ("table", "environment_daily", None),
         ("table", "environment_forecast", None),
     ],
+    "011": [
+        ("column", "water_sources", "queue_level"),
+        ("column", "water_sources", "repaired_at"),
+        ("column", "ground_truth_reports", "queue_level"),
+        ("table", "water_notices", None),
+    ],
+    "012": [
+        ("column", "environment_daily", "temperature_max_c"),
+        ("column", "environment_daily", "humidity"),
+        ("table", "pest_observations", None),
+    ],
 }
 
 

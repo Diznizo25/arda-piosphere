@@ -27,8 +27,10 @@ from app.services import (
     build_tracker,
     conversation,
     map_renderer,
+    pests,
     registration,
     speech,
+    water_loop,
     water_reach,
     water_sources,
     water_status,
@@ -49,6 +51,7 @@ from app.services.pastoralists import (
     set_voice_replies,
     get_last_advisory_water_source,
     set_last_advisory_water_source,
+    touch_last_inbound,
 )
 
 log = logging.getLogger(__name__)
@@ -103,6 +106,11 @@ MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
 
+# Pest & parasite check. Deliberately narrow: a false trigger would answer a herder
+# with a pest window when he asked something else.
+PEST_KEYWORDS = ["wadudu", "kupe", "minyoo", "inzi", "kwato", "pest", "parasite",
+                 "ticks", "worms"]
+
 PIN_KEYWORDS = ["pin", "register", "ongeza", "andika", "new water", "regist"]
 
 ASK_SPECIES_TEXT = {
@@ -142,6 +150,20 @@ ASK_CONFIRM_WATER_RETRY = {
                "• sending 'list' to see the list + map again\n"
                "• sending 'none' if your water point isn't in the list\n"
                "• sending 'menu' for other services / 'cancel' to stop",
+}
+
+ASK_CONFIRM_WATER_FIRST = {
+    "swahili": "Kabla sijakupa hali ya wadudu, niambie chanzo chako cha maji kwanza. "
+               "Tuma 'maji' nikuonyeshe orodha.",
+    "english": "Before I give you the pest outlook, tell me your water point first. "
+               "Send 'water' and I will show you the list.",
+}
+
+PEST_NO_DATA = {
+    "swahili": "Bado hatuna data ya mvua na joto vya eneo lako kwa wiki hii. "
+               "Hivyo siwezi kukupa hali ya wadudu kwa uhakika.",
+    "english": "We do not have rain and temperature data for your area this week "
+               "yet, so I cannot give you a reliable pest outlook.",
 }
 
 WATER_CONFIRMED = {
@@ -544,6 +566,14 @@ def _handle_message(message: dict) -> None:
 
     pastoralist = get_pastoralist(phone) or upsert_pastoralist(phone)
 
+    # Remember WHEN the herder last wrote to us: WhatsApp only allows a free-form
+    # business message inside the 24 hours that start with his message, so without
+    # this the weekly note is guesswork (some messages would be silently rejected).
+    try:
+        touch_last_inbound(phone)
+    except Exception:  # noqa: BLE001
+        log.debug("last-inbound touch failed (non-fatal)", exc_info=True)
+
     if msg_type == "location":
         # Locations always update the herder's last known location, but if a
         # guided flow is active (onboarding/pin), let the flow own the reply.
@@ -637,6 +667,55 @@ def _handle_location(phone: str, pastoralist, location: dict) -> None:
     _deliver_location_info(phone, pastoralist, lat, lon)
 
 
+def _advisory_extras(result, pastoralist, lang_key: str) -> str:
+    """The water-loop and pest lines appended to a place advisory.
+
+    Every part is optional and independently fail-open: a missing queue reading or a
+    failed pest computation must never cost the herder the advisory itself.
+    """
+    extras = []
+    point_id = getattr(result, "water_source_id", None)
+
+    # Where the rain did and did not fall, in words and place names. This is the
+    # answer to "rain where?", and it is deliberately text rather than a shaded map:
+    # our rain data is a point value, and a band would claim a precision we lack.
+    if point_id:
+        try:
+            from app.services import environment as env_service
+            from app.services import forecast as forecast_service
+
+            line = forecast_service.place_rain_line(
+                env_service.own_rain_7d(point_id),
+                env_service.nearby_rain(point_id, limit=3),
+                lang_key)
+            if line:
+                extras.append(line)
+        except Exception:  # noqa: BLE001
+            log.debug("place-rain line unavailable (non-fatal)", exc_info=True)
+
+    # What the last herder at his point said about the waiting line.
+    if point_id:
+        try:
+            level, updated = water_loop.queue_for_advisory(point_id)
+            if water_loop.queue_is_fresh(updated):
+                extras.append(water_loop.queue_sentence(level, lang_key))
+        except Exception:  # noqa: BLE001
+            log.debug("queue line unavailable (non-fatal)", exc_info=True)
+
+    # The pest/parasite window. Silence when nothing is up — a warning every week
+    # is a warning nobody reads.
+    if point_id:
+        try:
+            o = pests.outlook_for_point(point_id)
+            line = pests.weekly_line(o, lang_key) if o else None
+            if line:
+                extras.append(line)
+        except Exception:  # noqa: BLE001
+            log.debug("pest line unavailable (non-fatal)", exc_info=True)
+
+    return ("\n\n" + "\n\n".join(extras)) if extras else ""
+
+
 def _deliver_location_info(phone: str, pastoralist, lat: float, lon: float,
                            place_label: str | None = None) -> None:
     """The full "everything about this place" reply.
@@ -675,7 +754,8 @@ def _deliver_location_info(phone: str, pastoralist, lat: float, lon: float,
             head = (f"📍 Karibu na {place_label}.\n\n"
                     if pastoralist.preferred_language == "swahili"
                     else f"📍 You are near {place_label}.\n\n")
-        msg = f"{head}{result.message}\n\n{water_status.check_question(lang_key)}"
+        msg = (f"{head}{result.message}{_advisory_extras(result, pastoralist, lang_key)}"
+               f"\n\n{water_status.check_question(lang_key)}")
         _send_reply(phone, pastoralist, msg, voice=pastoralist.voice_replies)
         try:
             set_last_advisory_water_source(phone, result.water_source_id)
@@ -788,6 +868,161 @@ def _handle_landmark_confirm(phone: str, pastoralist, text: str | None) -> bool:
     return False
 
 
+def _handle_water_loop_state(phone: str, pastoralist, text: str,
+                             voice: bool = False) -> bool:
+    """The one-tap answers the water loop and the pest layer ask for.
+
+    Returns True when the message was the answer to a question we asked. Any other
+    message clears the state and returns False, so a herder is never trapped by our
+    own question (the same rule every other flow follows).
+    """
+    state, data = conversation.get_state(phone)
+    if state not in ("water.queue", "pest.observe"):
+        return False
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+
+    if state == "water.queue":
+        level = water_loop.queue_for_digit(text)
+        if level is None:
+            conversation.clear_state(phone)
+            return False
+        point_id = (data or {}).get("water_source_id")
+        try:
+            water_loop.record_queue(point_id, level, pastoralist.id, text)
+        except Exception:  # noqa: BLE001
+            log.exception("queue record failed (non-fatal)")
+        conversation.clear_state(phone)
+        _send_reply(phone, pastoralist, water_loop.thanks_for_queue(level, lang_key),
+                    voice=voice)
+        return True
+
+    seen = pests.observation_for_digit(text)
+    if seen is None:
+        conversation.clear_state(phone)
+        return False
+    point_id = (data or {}).get("water_source_id")
+    pest_key = (data or {}).get("pest_key") or "ticks"
+    try:
+        pests.record_observation(pastoralist.id, point_id, pest_key, seen,
+                                 phone=phone, note=text)
+    except Exception:  # noqa: BLE001
+        log.exception("pest observation record failed (non-fatal)")
+    conversation.clear_state(phone)
+    _send_reply(phone, pastoralist,
+                pests.thanks_for_observation(seen, lang_key), voice=voice)
+    return True
+
+
+def _fanout_status(reporter_phone: str, point_id: str, point_name: str | None,
+                   status: str, previous_status: str | None,
+                   last_notice_at) -> None:
+    """Tell the other herders on the same point what the reporter just confirmed.
+
+    Runs in a background thread: fail-open, cooldown-guarded, anonymous (no phone
+    numbers, no names of reporters), and never a claim of our own — we pass on what
+    a herder confirmed, in his own terms.
+    """
+    try:
+        if not water_loop.should_fanout(status, previous_status, last_notice_at):
+            return
+        peers = water_loop.peers_for_point(point_id, exclude_phone=reporter_phone)
+        for peer_phone in peers:
+            try:
+                peer = get_pastoralist(peer_phone)
+                if peer is None:
+                    continue
+                lang_key = ("swa" if peer.preferred_language == "swahili" else "eng")
+                whatsapp_client.send_text(
+                    peer_phone,
+                    water_loop.fanout_message(status, point_name, lang_key))
+                water_loop.log_notice(point_id, peer_phone, "status_fanout", status)
+            except Exception:  # noqa: BLE001
+                log.exception("status fan-out to %s failed (non-fatal)", peer_phone)
+        if peers:
+            log.info("Status fan-out %s -> %d peer(s)", status, len(peers))
+    except Exception:  # noqa: BLE001
+        log.exception("status fan-out failed (non-fatal)")
+
+
+def _handle_repair_report(phone: str, pastoralist, text: str,
+                          voice: bool = False) -> bool:
+    """A herder tells us the point works again. Returns True when it was consumed."""
+    try:
+        target = get_last_advisory_water_source(phone)
+    except Exception:  # noqa: BLE001
+        target = None
+    if not target:
+        return False
+    point_id = target["water_source_id"]
+    point_name = target.get("name")
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+    try:
+        water_loop.record_repair(point_id, pastoralist.id, text)
+    except Exception:  # noqa: BLE001
+        log.exception("repair record failed (non-fatal)")
+    _send_reply(phone, pastoralist, water_loop.repair_confirmed(lang_key), voice=voice)
+    threading.Thread(target=_fanout_repair,
+                     args=(phone, point_id, point_name), daemon=True).start()
+    return True
+
+
+def _fanout_repair(reporter_phone: str, point_id: str, point_name: str | None) -> None:
+    """Tell everyone we had warned that the point is working again."""
+    try:
+        for peer_phone in water_loop.phones_told_it_was_broken(point_id):
+            if peer_phone == reporter_phone:
+                continue
+            try:
+                peer = get_pastoralist(peer_phone)
+                if peer is None:
+                    continue
+                lang_key = ("swa" if peer.preferred_language == "swahili" else "eng")
+                whatsapp_client.send_text(
+                    peer_phone, water_loop.repair_message(point_name, lang_key))
+                water_loop.log_notice(point_id, peer_phone, "repair", "functional")
+            except Exception:  # noqa: BLE001
+                log.exception("repair fan-out to %s failed (non-fatal)", peer_phone)
+    except Exception:  # noqa: BLE001
+        log.exception("repair fan-out failed (non-fatal)")
+
+
+def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
+    """Answer "wadudu"/"kupe"/"minyoo" with the pest windows for his water point.
+
+    The window is computed from data we already store (rain, soil moisture,
+    temperature, humidity) — no weather API on the request path — and it names the
+    conditions and where to look. If nothing is up we say so rather than inventing
+    a warning.
+    """
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+    point = None
+    try:
+        point = get_water_source(phone)
+    except Exception:  # noqa: BLE001
+        log.debug("water source lookup failed for pest request", exc_info=True)
+    if not point:
+        _send_reply(phone, pastoralist,
+                    ASK_CONFIRM_WATER_FIRST[pastoralist.preferred_language],
+                    voice=voice)
+        return
+    o = None
+    try:
+        o = pests.outlook_for_point(point["id"])
+    except Exception:  # noqa: BLE001
+        log.exception("pest outlook failed (non-fatal)")
+    if o is None:
+        _send_reply(phone, pastoralist,
+                    PEST_NO_DATA[pastoralist.preferred_language], voice=voice)
+        return
+    _send_reply(phone, pastoralist, pests.message(o, lang_key), voice=voice)
+    top = o.top
+    if top is not None and top.rank >= pests.TIER_ORDER[pests.TIER_WATCH]:
+        # Remember which window we asked about, so a bare "1"/"2" is an answer to
+        # THIS question and not to some other menu.
+        conversation.set_state(phone, "pest.observe",
+                               {"water_source_id": point["id"], "pest_key": top.key})
+
+
 def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> None:
     text_lower = text.strip().lower()
 
@@ -804,6 +1039,19 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             }[pastoralist.preferred_language],
             voice=voice,
         )
+        return
+
+    # The water loop asks two one-tap questions of its own (the waiting queue, and
+    # "did you see anything on the animals"). They own the turn while open, because
+    # a bare "1" means something different in every other menu.
+    if _handle_water_loop_state(phone, pastoralist, text, voice=voice):
+        return
+
+    # "imekarabatiwa" — a repaired point comes back NOW. Without this a pump fixed
+    # the day after it was reported broken would stay suppressed for the whole stale
+    # window, and the herders we warned would walk past working water.
+    if water_loop.looks_like_repair(text_lower) and _handle_repair_report(
+            phone, pastoralist, text, voice=voice):
         return
 
     # An in-progress guided flow (onboarding / weight / pin) owns the turn.
@@ -833,11 +1081,40 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         except Exception:  # noqa: BLE001
             target = None
         if target:
+            point_id = target["water_source_id"]
+            point_name = target.get("name")
+            # Read the point BEFORE writing the new status: the fan-out needs to know
+            # whether this report changes anything, and when we last spoke about it.
+            snap: dict | None = None
+            try:
+                snap = water_loop.point_snapshot(point_id)
+            except Exception:  # noqa: BLE001
+                log.debug("point snapshot unavailable (non-fatal)", exc_info=True)
             record_ground_truth(pastoralist, status_intent, text,
-                                water_source_id=target["water_source_id"])
+                                water_source_id=point_id)
             lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
-            _send_reply(phone, pastoralist,
-                        water_status.thanks_for_report(status_intent, lang_key), voice=voice)
+            status = water_status.status_for_report(status_intent)
+            # Ask the second one-tap question only when there is water to queue for:
+            # "how long is the line?" is meaningless at a dry pan.
+            if status in (water_status.STATUS_FUNCTIONAL, water_status.STATUS_FLOWING,
+                          water_status.STATUS_INTERMITTENT):
+                reply = (f"{water_status.thanks_for_report(status_intent, lang_key)}\n\n"
+                         f"{water_loop.queue_question(lang_key)}")
+                conversation.set_state(phone, "water.queue",
+                                       {"water_source_id": point_id})
+            else:
+                reply = water_status.thanks_for_report(status_intent, lang_key)
+            _send_reply(phone, pastoralist, reply, voice=voice)
+            # NOTHING matters in this feature as much as this thread: it is what turns
+            # one herder's tap into information for the herders on the same point.
+            # Backgrounded so the reporter's reply is never delayed by it, and fully
+            # fail-open (a fan-out failure must not cost him his acknowledgement).
+            threading.Thread(
+                target=_fanout_status,
+                args=(phone, point_id, point_name, status,
+                      (snap or {}).get("status"), (snap or {}).get("last_notice_at")),
+                daemon=True,
+            ).start()
             return
 
     # Voice-reply preference toggle.
@@ -872,6 +1149,12 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
                 voice=voice,
             )
             return
+
+    # Pest & parasite check: the environmental conditions, where to look on the
+    # animal, and one tap back. Never a diagnosis, never a treatment.
+    if any(k in text_lower for k in PEST_KEYWORDS):
+        _handle_pest_request(phone, pastoralist, voice=voice)
+        return
 
     # Water-point confirmation / info (remembered water source).
     if any(k in text_lower for k in WATER_KEYWORDS):
