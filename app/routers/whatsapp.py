@@ -336,7 +336,8 @@ MENU_MSG = {
                "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
                "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
-               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
+               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n"
+               "10. 🐛 WADUDU — angalia kupe, minyoo na vidonda\n\n"
                "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.\n"
                "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
                "'ng'ombe 40 wanahitaji maji ngapi?'.\n"
@@ -351,7 +352,8 @@ MENU_MSG = {
                "6. 📊 STATUS — your water point build progress\n"
                "7. 🗣 VOICE — reply by voice / TEXT for text\n"
                "8. 🌧 RAIN — rain and drought outlook near you\n"
-               "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
+               "9. 🌍 SWAHILI / ENGLISH — change language\n"
+               "10. 🐛 PESTS — check ticks, worms and wounds\n\n"
                "Send the matching word (e.g. 'weight') or the number.\n"
                "You can also just ask a question — e.g. 'when will it rain?' or "
                "'how much water do 40 cattle need?'.\n"
@@ -362,7 +364,7 @@ MENU_MSG = {
 MENU_NUMBERS = {
     "1": "location", "2": "pin", "3": "weight", "4": "herd",
     "5": "map", "6": "status", "7": "voice", "8": "rain",
-    "9": "language",
+    "9": "language", "10": "pest",
 }
 
 WEIGHT_ANIMAL_BUTTONS = [
@@ -1221,6 +1223,9 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             _send_reply(phone, pastoralist, VOICE_ON_MSG[pastoralist.preferred_language], voice=True)
         elif service in ("rain", "mvua"):
             _handle_rain_request(phone, pastoralist)
+        elif service == "pest":
+            _handle_pest_request(phone, pastoralist,
+                                 voice=pastoralist.voice_replies)
         elif service == "language":
             whatsapp_client.send_text(
                 phone,

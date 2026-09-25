@@ -13,6 +13,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import io  # noqa: E402
+
 from app.services import pests  # noqa: E402
 
 # --- 1) input maths ---------------------------------------------------------
@@ -121,6 +123,21 @@ spoken = speech_text(tick.reason_lines("swa")[0], "swahili")
 assert "milimita" in spoken.lower(), spoken
 assert re.search(r"\d+\s*mm", spoken) is None, spoken
 print("voice: '22 mm' is spoken as milimita OK")
+
+# --- 11) the service must be REACHABLE, not just correct -------------------
+# A herder does not read release notes: if the pest check is not in the menu, it may
+# as well not exist. This is the check that it is actually wired into WhatsApp.
+wa = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
+assert "🐛 WADUDU" in wa and "🐛 PESTS" in wa, "the pest service is not in the menu"
+assert '"10": "pest"' in wa, "menu number 10 must resolve to the pest service"
+assert '"9": "language"' in wa, "the existing language shortcut must not move"
+assert 'elif service == "pest":' in wa, "menu 10 does not reach _handle_pest_request"
+assert "_handle_pest_request(phone, pastoralist," in wa
+assert '"wadudu"' in wa and '"kupe"' in wa and '"minyoo"' in wa, \
+    "the keyword path must stay too"
+dev = io.open("app/routers/dev.py", encoding="utf-8").read()
+assert '@router.post("/pest")' in dev, "no /dev/pest probe to check the wording"
+print("menu + keyword + probe wiring OK")
 
 print("\nPEST WINDOWS OK")
 
