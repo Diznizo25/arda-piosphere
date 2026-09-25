@@ -6,6 +6,14 @@ Does the buffering in PostGIS itself (ST_Buffer on ::geography casts real
 meters, not degrees) rather than in Python/Shapely — avoids pulling every
 water point geometry over the wire and reprojecting client-side.
 
+RINGS ARE CIRCLES, AND MUST BE DRAWN AS CIRCLES. The default ST_Buffer on
+geography uses num_seg_quarter_circle = 8, i.e. 32 straight segments around the
+whole ring (33 vertices). At Isiolo's scale that is not a circle on screen: a
+25 km ring then sits up to ~113 m (R x 0.0048) inside a true circle, which is
+several pixels of visible flat edge at map zoom — the map reads as "curved and
+not neat" instead of a clean ring. 128 segments per quarter gives 512 vertices,
+~0.4 m of sag at 25 km: sub-pixel at any zoom we render.
+
 Radii come from config/species_rings.yaml, never hardcoded.
 
 Usage:
@@ -32,13 +40,16 @@ from app.db import get_pg_connection  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_piosphere_zones")
 
+# See the module docstring: 8 (PostGIS default) draws as a visibly faceted polygon.
+SEGMENTS_PER_QUARTER = 128
+
 UPSERT_SQL = """
 insert into piosphere_zones (water_source_id, species, radius_km, geom, last_computed)
 select
     ws.id,
     %(species)s,
     %(radius_km)s,
-    st_buffer(ws.geom::geography, %(radius_m)s)::geometry(Polygon, 4326),
+    st_buffer(ws.geom::geography, %(radius_m)s, %(segments)s)::geometry(Polygon, 4326),
     now()
 from water_sources ws
 where (%(ward)s::text is null or ws.ward = %(ward)s)
@@ -82,6 +93,7 @@ def run(ward: str | None, county: str | None, water_source_id: str | None = None
                         "species": species,
                         "radius_km": radius_km,
                         "radius_m": radius_km * 1000,
+                        "segments": SEGMENTS_PER_QUARTER,
                         "ward": ward,
                         "county": county,
                         "water_source_id": water_source_id,

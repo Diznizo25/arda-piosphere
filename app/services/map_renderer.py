@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import os
 import urllib.request
@@ -41,6 +42,8 @@ from shapely.geometry import shape
 
 from app.config import get_advisory_thresholds
 from app.services import water_sources
+
+_log = logging.getLogger(__name__)
 
 IMG_SIZE = 1024
 TILE = 256
@@ -448,8 +451,13 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     if not fit_points:
         for zone in sorted(zones, key=lambda z: -z["radius_km"]):
             geom = shape(json.loads(zone["geojson"]))
-            geom = geom.simplify(tolerance=0.0004, preserve_topology=True)
+            # NO simplify() here, deliberately. It used tolerance 0.0004 degrees
+            # (~44 m), which on a 7 km ring allows several pixels of error — that is
+            # what made the ring boundaries look wobbly and faceted instead of clean
+            # circles. The rings are generated with 512 vertices
+            # (scripts/generate_piosphere_zones.py), so there is nothing to tidy.
             style = RING_STYLE[zone["species"]]
+            active = (zone["species"] == species)
             if geom.geom_type == "Polygon":
                 rings_ = [geom.exterior.coords]
             elif geom.geom_type == "MultiPolygon":
@@ -463,8 +471,21 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                 coords = list(ring)
                 if scale != 1.0:
                     coords = _scale_coords(coords, scale)
+                if len(coords) < 100:
+                    # An old ring from before the segment count was raised: it will
+                    # draw as a visible polygon. Say so instead of shipping a wobbly
+                    # circle.
+                    _log.warning("ring %s (%s, %s vertices) is too coarse to look "
+                                 "circular — re-run generate_piosphere_zones.py",
+                                 zone["species"], water_source_id, len(coords))
                 pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in coords]
-                draw.polygon(pts, fill=style[0], outline=style[1], width=3)
+                # Fill ONLY the herder's own species ring. Three translucent fills
+                # stacked on top of each other turn the middle of the map into one
+                # muddy colour, which is a large part of why the map read as unclear.
+                draw.polygon(pts,
+                             fill=style[0] if active else None,
+                             outline=style[1],
+                             width=3 if active else 2)
                 if zone["species"] == species and zone_fracs:
                     for zname in ("comfortable", "far"):
                         frac = zone_fracs.get(zname)
