@@ -227,6 +227,38 @@ def entry_text(entry: dict, lang: str) -> str:
 
 # --- routing -----------------------------------------------------------------
 
+# --- greetings: not questions ------------------------------------------------
+# A herder texting "habari" is opening the app, not asking for a report. Before this
+# existed, a greeting produced an EMPTY intent list, and gather_facts treats an empty
+# list as "everything" — so a bare hello answered with the rain/drought and water
+# briefing. A greeting now returns None (the caller shows the menu) and, for someone
+# returning after a break, the caller can add a short "while you were away" line.
+GREETING_WORDS = {
+    "habari", "habari yako", "habari yenu", "hujambo", "sijambo", "jambo", "mambo",
+    "vipi", "niaje", "sasa", "sasa hivi", "shikamoo", "marahaba", "salama",
+    "asante", "karibu", "hello", "hi", "hey", "good morning", "morning",
+    "good afternoon", "good evening", "how are you", "thanks", "thank you",
+}
+
+
+def is_greeting(question: str) -> bool:
+    """Is this just a greeting / social opener rather than a question?
+
+    Short and exact-ish on purpose: "habari ya mvua?" is a rain question, not a
+    greeting, so any real topic word in the message disqualifies it.
+    """
+    q = re.sub(r"[^\w\s']", " ", (question or "").lower()).strip()
+    if not q or len(q.split()) > 4:
+        return False
+    if intent_sections(q) or match_knowledge(q, limit=1):
+        return False
+    if q in GREETING_WORDS:
+        return True
+    # "habari yako ndugu" / "hello there" — a greeting plus a word or two of nothing.
+    words = q.split()
+    return bool(GREETING_WORDS & set(words)) and len(words) <= 3
+
+
 def intent_sections(question: str) -> list[str]:
     """Which fact sections this question is about (empty list = general question)."""
     q = (question or "").lower()
@@ -687,6 +719,13 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
     if not question:
         return None
     phone = getattr(pastoralist, "phone_number", "") or ""
+
+    # A greeting is not a question. Without this, an empty intent list made
+    # gather_facts send EVERYTHING and a bare "habari" came back as the rain/drought
+    # and water briefing. Returning None hands the turn to the caller's menu, which
+    # is what a herder opening the app actually needs.
+    if is_greeting(question):
+        return None
 
     # 0) Recall: the herder's last place and what we last told them.
     mem = memory if memory is not None else load_memory(phone)

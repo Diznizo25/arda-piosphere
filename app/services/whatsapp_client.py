@@ -148,6 +148,71 @@ def send_interactive_list(to: str, body: str, button_text: str, rows: list[tuple
     _post(payload)
 
 
+def send_interactive_payload(payload: dict) -> None:
+    """Send a prebuilt interactive payload (the menu builder lives with the menu).
+
+    One thin seam on purpose: the router owns the wording and the structure, this module
+    owns the wire. It also makes the menu inspectable (see POST /dev/menu) without
+    sending anything.
+    """
+    _post(payload)
+
+
+def send_menu_list(to: str, body: str, button_text: str,
+                    sections: list[tuple[str, list[tuple[str, str, str | None]]]],
+                    footer: str | None = None, header: str | None = None) -> None:
+    """A multi-section interactive LIST message (the services menu).
+
+    WhatsApp's limits are enforced here rather than at the call site, because a
+    rejected payload means a herder gets NOTHING — worse than an ugly menu:
+      * at most 10 rows across all sections,
+      * row title <= 24 characters, row description <= 72,
+      * button text <= 20, section title <= 24, header <= 60, footer <= 60.
+
+    `sections` is [(section_title, [(id, title, description|None), ...]), ...], so the
+    daily services and the settings can sit in one message without a second tap.
+    """
+    payload_sections = []
+    for section_title, rows in sections:
+        payload_sections.append({
+            "title": (section_title or "")[:24],
+            "rows": [
+                {k: v for k, v in (("id", rid), ("title", title[:24]),
+                                   ("description", (desc or "")[:72]))
+                 if v}
+                for rid, title, desc in rows
+            ][:10],
+        })
+    remaining = 10
+    trimmed: list[dict] = []
+    for section in payload_sections:
+        section["rows"] = section["rows"][:remaining]
+        remaining -= len(section["rows"])
+        if section["rows"]:
+            trimmed.append(section)
+        if remaining <= 0:
+            break
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": body},
+            "action": {
+                "button": button_text[:20],
+                "sections": trimmed,
+            },
+        },
+    }
+    if header:
+        payload["interactive"]["header"] = {"type": "text", "text": header[:60]}
+    if footer:
+        payload["interactive"]["footer"] = {"text": footer[:60]}
+    _post(payload)
+
+
 def download_media(media_id: str) -> bytes | None:
     """Download a WhatsApp media object (e.g. a voice note) as raw bytes.
 

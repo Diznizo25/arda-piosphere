@@ -52,6 +52,8 @@ from app.services.pastoralists import (
     get_last_advisory_water_source,
     set_last_advisory_water_source,
     touch_last_inbound,
+    last_inbound_hours,
+    gap_hours_from,
 )
 
 log = logging.getLogger(__name__)
@@ -328,39 +330,114 @@ WEIGHT_MSG = {
     "english": "MEASURE ANIMAL WEIGHT 🐄\n\nChoose the type of animal:",
 }
 
+# --- the services menu -------------------------------------------------------
+# Design rule: the CLICKABLE list carries the daily habit loops first and settings
+# last. Nine rows, two sections, one message a herder reads in two seconds.
+#
+# Why: the old menu was a flat ten items of equal weight (location, pin, weight, herd,
+# map, status, voice, language, rain, pests), which asked a herder to know what he
+# wanted before he could want anything. Three entries collapsed into "Maji" (status,
+# queue and map answer one question: "is my water okay?").
+#
+# Ids are prefixed "svc:" so an interactive reply can never be mistaken for a
+# water-status digit or a menu number. The numbered TEXT menu below is the fallback for
+# phones that cannot render a list — and it keeps the ORIGINAL numbers (1 location,
+# 2 pin, 8 rain, 9 language, 10 pests) so nobody's muscle memory breaks.
+MENU_SECTIONS = [
+    ("Huduma za kila siku", [
+        ("svc:water", "💧 Maji", "Hali ya chanzo chako, foleni na ramani"),
+        ("svc:pest", "🔍 Kupe na minyoo", "Angalia mifugo yako, hasa mvua ianzapo"),
+        ("svc:rain", "🌧 Mvua", "Hali ya mvua na ukame karibu nawe"),
+        ("svc:animals", "🐄 Wanyama", "Pima uzito wa mnyama au kadiria kundi"),
+        ("svc:place", "📍 Eneo langu", "Tuma eneo upate taarifa za malisho"),
+    ]),
+    ("Mipangilio", [
+        ("svc:pin", "➕ Chanzo kipya", "Andikisha chanzo kipya cha maji"),
+        ("svc:status", "📊 Ujenzi", "Hali ya ujenzi wa chanzo chako"),
+        ("svc:voice", "🗣 Sauti", "Majibu kwa sauti au kwa maandishi"),
+        ("svc:lang", "🌍 Lugha", "Swahili au English"),
+    ]),
+]
+MENU_SECTIONS_EN = [
+    ("Daily services", [
+        ("svc:water", "💧 Water", "Your point's status, queue and map"),
+        ("svc:pest", "🔍 Ticks and worms", "Check your animals, especially with rain"),
+        ("svc:rain", "🌧 Rain", "Rain and drought outlook near you"),
+        ("svc:animals", "🐄 Animals", "Weigh one animal or estimate the herd"),
+        ("svc:place", "📍 My area", "Share a location for pasture info"),
+    ]),
+    ("Settings", [
+        ("svc:pin", "➕ New water point", "Register a new water point"),
+        ("svc:status", "📊 Build status", "Progress of your water point"),
+        ("svc:voice", "🗣 Voice", "Voice replies or text replies"),
+        ("svc:lang", "🌍 Language", "Swahili or English"),
+    ]),
+]
+MENU_BUTTON = {"swahili": "Huduma", "english": "Services"}
+MENU_HINT = {
+    "swahili": "Unaweza pia kuandika swali lolote.",
+    "english": "You can also just ask a question.",
+}
+MENU_BODY = {
+    "swahili": "Chagua huduma, au andika swali lolote.",
+    "english": "Pick a service, or just ask a question.",
+}
+
+
+def _menu_sections(lang: str):
+    return MENU_SECTIONS_EN if lang == "english" else MENU_SECTIONS
+
+
+# Interactive id -> the service name the numbered menu dispatches to, so both paths
+# run identical code.
+SERVICE_ALIASES = {
+    "svc:water": "location",
+    "svc:pest": "pest",
+    "svc:rain": "rain",
+    "svc:animals": "animals",
+    "svc:place": "location",
+    "svc:pin": "pin",
+    "svc:status": "status",
+    "svc:voice": "voice",
+    "svc:lang": "language",
+    # The two buttons inside the "Wanyama" step (quick replies carry ids too, and an id
+    # the dispatcher cannot resolve would silently fall through to the chat layer).
+    "svc:weigh": "weigh",
+    "svc:herd_est": "herd_est",
+    "svc:menu": "menu",
+}
+
 MENU_MSG = {
     "swahili": "🌿 ARDA LINK — HUDUMA ZETU\n\n"
-               "1. 📍 ENEO (location) — taarifa za maji na malisho karibu nawe\n"
-               "2. 🏷 PIN — andikisha chanzo chako cha maji kipya\n"
-               "3. ⚖️ UZITO — pima uzito wa mnyama (mkanda wa kifua)\n"
-               "4. 🐄 HERD — kadiria uzito wa kundi zima\n"
+               "Kila siku:\n"
+               "1. 💧 MAJI — hali ya chanzo chako, foleni na ramani\n"
+               "3. ⚖️ UZITO — pima uzito wa mnyama\n"
+               "4. 🐄 HERD — kadiria uzito wa kundi\n"
+               "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
+               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n\n"
+               "Mipangilio:\n"
+               "2. 📍 PIN — andikisha chanzo kipya cha maji\n"
                "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
                "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
-               "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
-               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n"
-               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n\n"
-               "Tuma neno linalofaa (k.m. 'uzito') au namba ya huduma.\n"
-               "Unaweza pia kuuliza swali lolote — k.m. 'mvua itanyesha lini?' au "
-               "'ng'ombe 40 wanahitaji maji ngapi?'.\n"
-               "Au niambie mahali ulipo kwa jina unalojua — k.m. 'niko karibu na "
-               "Kipsing' au jina la kisima chako.",
+               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
+               "Tuma namba au neno la huduma, au uliza swali lolote.\n"
+               "Au niambie mahali ulipo kwa jina — k.m. 'niko karibu na Kipsing'.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
-               "1. 📍 LOCATION — water & pasture info near you\n"
-               "2. 🏷 PIN — register your new water point\n"
-               "3. ⚖️ WEIGHT — measure an animal's weight (heart-girth tape)\n"
-               "4. 🐄 HERD — estimate the weight of a whole herd\n"
+               "Daily:\n"
+               "1. 💧 WATER — your point's status, queue and map\n"
+               "3. ⚖️ WEIGHT — measure one animal\n"
+               "4. 🐄 HERD — estimate the whole herd\n"
+               "8. 🌧 RAIN — rain and drought outlook near you\n"
+               "10. 🔍 TICKS AND WORMS — check your animals\n\n"
+               "Settings:\n"
+               "2. 📍 PIN — register a new water point\n"
                "5. 🗺 MAP — map of the grazing zones\n"
                "6. 📊 STATUS — your water point build progress\n"
-               "7. 🗣 VOICE — reply by voice / TEXT for text\n"
-               "8. 🌧 RAIN — rain and drought outlook near you\n"
-               "9. 🌍 SWAHILI / ENGLISH — change language\n"
-               "10. 🔍 TICKS AND WORMS — check your animals\n\n"
-               "Send the matching word (e.g. 'weight') or the number.\n"
-               "You can also just ask a question — e.g. 'when will it rain?' or "
-               "'how much water do 40 cattle need?'.\n"
-               "Or tell me where you are using a name you know — e.g. 'I am near "
-               "Kipsing', or the name of your water point.",
+               "7. 🗣 VOICE — voice replies / TEXT for text\n"
+               "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
+               "Send the number or the service word, or ask any question.\n"
+               "Or tell me where you are using a name you know.",
 }
 
 MENU_NUMBERS = {
@@ -573,10 +650,13 @@ def _handle_message(message: dict) -> None:
     # Remember WHEN the herder last wrote to us: WhatsApp only allows a free-form
     # business message inside the 24 hours that start with his message, so without
     # this the weekly note is guesswork (some messages would be silently rejected).
+    # The gap is computed from the row we already loaded — an extra query here would
+    # sit on the hot path of every message for a number we already have.
     try:
+        pastoralist.gap_hours = gap_hours_from(pastoralist.last_inbound_at)
         touch_last_inbound(phone)
     except Exception:  # noqa: BLE001
-        log.debug("last-inbound touch failed (non-fatal)", exc_info=True)
+        log.debug("last-inbound bookkeeping failed (non-fatal)", exc_info=True)
 
     if msg_type == "location":
         # Locations always update the herder's last known location, but if a
@@ -1027,6 +1107,87 @@ def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
                                {"water_source_id": point["id"], "pest_key": top.key})
 
 
+def _service_note(phone: str, pastoralist, kind: str, **kwargs) -> None:
+    """One-turn service answers that need no flow state (kept tiny on purpose)."""
+    lang = pastoralist.preferred_language
+    if kind == "location":
+        whatsapp_client.send_text(phone, {
+            "swahili": "Tuma eneo lako (location) kwenye WhatsApp, au niambie jina "
+                       "la mahali — k.m. 'niko karibu na Kipsing'.",
+            "english": "Share your location on WhatsApp, or tell me a place name — "
+                       "e.g. 'I am near Kipsing'.",
+        }[lang])
+    elif kind == "language":
+        whatsapp_client.send_text(phone, {
+            "swahili": "Tuma 'english' kwa Kiingereza, au 'swahili' kwa Kiswahili.",
+            "english": "Send 'swahili' for Swahili, or 'english' for English.",
+        }[lang])
+
+
+def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> None:
+    """Run a menu service by name — the ONE place both entry points land.
+
+    The clickable list and the legacy numbers both resolve to a service name and call
+    this, so a service can never behave differently depending on how it was reached.
+    """
+    lang = pastoralist.preferred_language
+    if service == "location":
+        _service_note(phone, pastoralist, "location")
+    elif service == "pin":
+        _handle_pin_request(phone, pastoralist)
+    elif service == "weight":
+        _start_weight_flow(phone, pastoralist)
+    elif service == "herd":
+        species = pastoralist.primary_species or "cattle"
+        conversation.set_state(phone, "weight.herd_count",
+                               {"species": species, "samples": []})
+        whatsapp_client.send_text(phone, ASK_HERD_COUNT[lang])
+    elif service == "animals":
+        # One tap to the choice that matters: one animal, or the whole herd. Three
+        # buttons is WhatsApp's limit, and "back" is the third so nobody is trapped.
+        whatsapp_client.send_quick_reply_buttons(
+            phone,
+            {"swahili": "🐄 Wanyama\n\nUnataka kupima nini?",
+             "english": "🐄 Animals\n\nWhat do you want to measure?"}[lang],
+            [("svc:weigh", "⚖️ Mnyama mmoja"),
+             ("svc:herd_est", "🐄 Kundi lote"),
+             ("svc:menu", "↩️ Huduma")],
+        )
+    elif service == "weigh":
+        _start_weight_flow(phone, pastoralist)
+    elif service == "herd_est":
+        _run_service(phone, pastoralist, "herd", voice=voice)
+    elif service == "map":
+        _handle_map_request(phone, pastoralist)
+    elif service == "status":
+        _handle_status_request(phone, pastoralist)
+    elif service == "voice":
+        set_voice_replies(phone, True)
+        pastoralist.voice_replies = True
+        _send_reply(phone, pastoralist, VOICE_ON_MSG[lang], voice=True)
+    elif service in ("rain", "mvua"):
+        _handle_rain_request(phone, pastoralist)
+    elif service == "pest":
+        _handle_pest_request(phone, pastoralist, voice=pastoralist.voice_replies)
+    elif service == "language":
+        _service_note(phone, pastoralist, "language")
+    elif service == "menu":
+        _show_menu(phone, pastoralist)
+    else:
+        log.warning("unknown service %r from menu", service)
+        _show_menu(phone, pastoralist)
+
+
+def _handle_service_choice(phone: str, pastoralist, text_lower: str,
+                           voice: bool = False) -> bool:
+    """Did the herder pick a service (clickable id or a legacy number)?"""
+    service = SERVICE_ALIASES.get(text_lower) or MENU_NUMBERS.get(text_lower)
+    if not service:
+        return False
+    _run_service(phone, pastoralist, service, voice=voice)
+    return True
+
+
 def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> None:
     text_lower = text.strip().lower()
 
@@ -1065,6 +1226,11 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
     # Brand-new (or never-onboarded) users are guided through registration first.
     if not pastoralist.is_onboarded:
         _start_onboarding(phone, pastoralist, text, voice=voice)
+        return
+
+    # A greeting (or a herder returning after a quiet spell) gets a welcome and the
+    # menu — never the data dump a bare "habari" used to trigger.
+    if _handle_greeting(phone, pastoralist, text, voice=voice):
         return
 
     # Landmark intake: "niko karibu na Oldonyo Sabor", "I am at Wamba market",
@@ -1195,47 +1361,10 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _show_menu(phone, pastoralist)
         return
 
-    # Menu number shortcuts (1-8).
-    if text_lower in MENU_NUMBERS:
-        service = MENU_NUMBERS[text_lower]
-        if service == "location":
-            whatsapp_client.send_text(
-                phone,
-                {
-                    "swahili": "Tuma eneo lako (location) kwenye WhatsApp.",
-                    "english": "Share your location on WhatsApp.",
-                }[pastoralist.preferred_language],
-            )
-        elif service == "pin":
-            _handle_pin_request(phone, pastoralist)
-        elif service == "weight":
-            _start_weight_flow(phone, pastoralist)
-        elif service == "herd":
-            species = pastoralist.primary_species or "cattle"
-            conversation.set_state(phone, "weight.herd_count",
-                                   {"species": species, "samples": []})
-            whatsapp_client.send_text(phone, ASK_HERD_COUNT[pastoralist.preferred_language])
-        elif service == "map":
-            _handle_map_request(phone, pastoralist)
-        elif service == "status":
-            _handle_status_request(phone, pastoralist)
-        elif service == "voice":
-            set_voice_replies(phone, True)
-            pastoralist.voice_replies = True
-            _send_reply(phone, pastoralist, VOICE_ON_MSG[pastoralist.preferred_language], voice=True)
-        elif service in ("rain", "mvua"):
-            _handle_rain_request(phone, pastoralist)
-        elif service == "pest":
-            _handle_pest_request(phone, pastoralist,
-                                 voice=pastoralist.voice_replies)
-        elif service == "language":
-            whatsapp_client.send_text(
-                phone,
-                {
-                    "swahili": "Tuma 'english' kwa Kiingereza, au 'swahili' kwa Kiswahili.",
-                    "english": "Send 'swahili' for Swahili, or 'english' for English.",
-                }[pastoralist.preferred_language],
-            )
+    # Menu picks: the clickable list's ids ("svc:water") and the legacy numbers both
+    # resolve to a service name and run the same code (_run_service), so a service can
+    # never behave differently depending on how the herder reached it.
+    if _handle_service_choice(phone, pastoralist, text_lower, voice=voice):
         return
 
     gt_intent = ai.classify_report(text)
@@ -1787,9 +1916,124 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
     return False
 
 
+def menu_payload(phone: str, lang: str = "swahili") -> dict:
+    """The interactive services menu as data — what a herder's WhatsApp will render.
+
+    Built here (not in whatsapp_client) because this module owns the wording and the
+    structure. Keeping it separate from the send makes the menu inspectable via
+    POST /dev/menu, in both languages, without messaging anybody.
+    """
+    sections = MENU_SECTIONS_EN if (lang or "").startswith("en") else MENU_SECTIONS
+    en = (lang or "").startswith("en")
+    return {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": "ARDA LINK"},
+            "body": {"text": MENU_BODY["english" if en else "swahili"]},
+            "footer": {"text": MENU_HINT["english" if en else "swahili"]},
+            "action": {
+                "button": MENU_BUTTON["english" if en else "swahili"],
+                "sections": [
+                    {"title": title[:24],
+                     "rows": [{"id": rid, "title": t[:24],
+                               **({"description": d[:72]} if d else {})}
+                              for rid, t, d in rows]}
+                    for title, rows in sections
+                ],
+            },
+        },
+    }
+
+
 def _show_menu(phone: str, pastoralist) -> None:
-    """Send the services menu so a herder always knows what they can do."""
-    whatsapp_client.send_text(phone, MENU_MSG[pastoralist.preferred_language])
+    """Send the services menu.
+
+    Clickable first — an interactive list, so the herder taps instead of typing a
+    number — and the numbered text menu only if the list cannot be sent. A menu that
+    does not arrive is worse than an old-fashioned one.
+    """
+    lang = pastoralist.preferred_language
+    try:
+        whatsapp_client.send_interactive_payload(menu_payload(phone, lang))
+        return
+    except Exception:  # noqa: BLE001
+        log.exception("interactive menu failed — sending the numbered menu instead")
+    whatsapp_client.send_text(phone, MENU_MSG[lang])
+
+
+def _while_you_were_away(pastoralist, lang: str) -> list[str]:
+    """Up to two short lines about his own water and pests since he last wrote.
+
+    Cheap (DB reads only), fail-open, and deliberately limited: a returning herder
+    needs the one or two things that changed, not a briefing. That difference is what
+    makes the system feel like it remembers him.
+    """
+    out: list[str] = []
+    sw = lang == "swahili"
+    try:
+        point = get_water_source(pastoralist.phone_number)
+    except Exception:  # noqa: BLE001
+        point = None
+    if not point:
+        return out
+    try:
+        from app.services.ground_truth import water_status_for
+
+        info = water_status_for(point["id"]) or {}
+        sentence = water_status.status_sentence(
+            info.get("status"), "swa" if sw else "eng")
+        age = water_status.age_days(info.get("status_updated_at"))
+        if age is not None:
+            n = round(age)
+            sentence += (f" Taarifa ya mwisho ilikuja siku {n} zilizopita." if sw
+                         else f" The last report came {n} days ago.")
+        out.append(sentence)
+    except Exception:  # noqa: BLE001
+        log.debug("water line for welcome-back failed (non-fatal)", exc_info=True)
+    try:
+        o = pests.outlook_for_point(point["id"])
+        line = pests.weekly_line(o, "swa" if sw else "eng") if o else None
+        if line:
+            out.append(line)
+    except Exception:  # noqa: BLE001
+        log.debug("pest line for welcome-back failed (non-fatal)", exc_info=True)
+    return out
+
+
+def _handle_greeting(phone: str, pastoralist, text: str, voice: bool = False) -> bool:
+    """Answer a greeting with a welcome (and what changed while he was away), then the
+    menu — never with a data dump.
+
+    This is the bug a herder reported: texting "hello" after a quiet spell returned the
+    rain-and-drought briefing. A greeting is not a question, and an empty fact request
+    meant "send everything".
+    """
+    try:
+        from app.services import chat as chat_service
+
+        if not chat_service.is_greeting(text):
+            return False
+    except Exception:  # noqa: BLE001
+        log.debug("greeting check failed (non-fatal)", exc_info=True)
+        return False
+
+    lang = pastoralist.preferred_language
+    sw = lang == "swahili"
+    name = f" {pastoralist.first_name}" if pastoralist.first_name else ""
+    gap_hours = getattr(pastoralist, "gap_hours", None)
+    away_days = int(gap_hours // 24) if gap_hours else 0
+
+    lines = [f"Karibu{name}!" if sw else f"Welcome{name}!"]
+    if away_days >= 7:
+        lines.append(f"Siku {away_days} zimepita tangu tulipoongea." if sw
+                     else f"It has been {away_days} days since we last spoke.")
+        lines.extend(_while_you_were_away(pastoralist, lang))
+    _send_reply(phone, pastoralist, "\n".join(lines), voice=voice)
+    _show_menu(phone, pastoralist)
+    return True
 
 
 # --- onboarding --------------------------------------------------------------

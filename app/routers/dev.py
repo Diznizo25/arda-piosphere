@@ -277,6 +277,39 @@ def _pest_windows(o) -> list[dict]:
     ]
 
 
+@router.post("/menu")
+async def menu_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """Show the services menu exactly as a herder's WhatsApp will render it.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Body: {phone?, language?}.
+
+    Why it exists: the menu is the front door, and the only way to review it should not
+    be "message a real herder and ask him what he sees". This returns the interactive
+    list payload (rows, descriptions, button) plus the numbered text fallback, in both
+    languages.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+    lang = (payload.get("language") or "swahili").lower()
+    phone = payload.get("phone") or "254700000000"
+
+    from app.routers.whatsapp import MENU_MSG, menu_payload
+
+    return {
+        "ok": True,
+        "language": lang,
+        "interactive": menu_payload(phone, lang)["interactive"],
+        "text_fallback": MENU_MSG["english" if lang.startswith("en") else "swahili"],
+    }
+
+
 class _StubHerder:
     """Minimal stand-in for an anonymous probe (matches the Pastoralist fields the
     chat layer reads, so no database row is needed)."""

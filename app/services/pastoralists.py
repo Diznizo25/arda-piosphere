@@ -75,6 +75,11 @@ class Pastoralist:
     onboarded_at: object | None = None
     water_source_id: str | None = None
     water_interval: str = "daily"
+    last_inbound_at: object | None = None
+    # Hours since the herder's own last message, computed from last_inbound_at BEFORE
+    # this turn's message updates it: it is what makes "welcome back, here is what
+    # changed" possible without a second database round-trip.
+    gap_hours: float | None = None
 
     @property
     def is_onboarded(self) -> bool:
@@ -126,7 +131,26 @@ def _from_row(row) -> Pastoralist:
         onboarded_at=row.get("onboarded_at"),
         water_source_id=str(row["water_source_id"]) if row.get("water_source_id") else None,
         water_interval=row.get("water_interval") or "daily",
+        last_inbound_at=row.get("last_inbound_at"),
     )
+
+
+def gap_hours_from(last_inbound_at) -> float | None:
+    """Hours since that timestamp (None when the herder has never written).
+
+    Pure and cheap: it exists so the message path can answer "how long has he been
+    away?" from the row it has ALREADY loaded, instead of spending another database
+    round-trip on the hot path of every single message.
+    """
+    if last_inbound_at is None:
+        return None
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    when = last_inbound_at
+    if getattr(when, "tzinfo", None) is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return round((now - when).total_seconds() / 3600.0, 2)
 
 
 def set_voice_replies(phone_number: str, enabled: bool) -> None:
