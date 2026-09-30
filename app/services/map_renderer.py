@@ -17,10 +17,13 @@ Pastoralist-first design decisions:
     that pastoralists use, not abstract "NE" abbreviations.
   * The best-pasture arrow points at the NEAREST walkable good patch, not a
     far-away global centroid.
-  * Other nearby water sources are drawn as type-coloured markers (blue=river,
-    orange=borehole, teal=well, green=spring, cyan=pan) with local names, and
-    named landmarks (towns/villages/rivers/markets) are labelled, so the map is
-    anchored by familiar places even at wide (camel) zoom.
+  * Other nearby water sources are drawn as markers in ONE blue (the label names the
+    type), and named landmarks (towns/villages/rivers/markets) are labelled, so the map
+    is anchored by familiar places even at wide (camel) zoom.
+  * ONE HUE = ONE MEANING (see the palette block below): green is pasture quality only,
+    blue is water only, red is the herder's own water point, the species rings get their
+    own three colours, and pure geometry (the direction arrow, the grazing-zone limits)
+    is neutral white/black.
 
 Everything is pure PIL + stdlib math (Web Mercator is a closed-form transform,
 no projection library needed). Fallback: if the tile server is unreachable the
@@ -49,16 +52,47 @@ IMG_SIZE = 1024
 TILE = 256
 USER_AGENT = "ArdaLink-Piosphere-Advisory/0.1 (pastoral advisory WhatsApp bot)"
 
-# Species ring style: (fill RGBA, outline RGBA, label)
+# --- palette: ONE HUE = ONE MEANING -----------------------------------------
+# A herder reads this map on a small screen in sunlight, so the colour budget is
+# fixed and the roles must not overlap. The rule (enforced by
+# scripts/test_map_palette.py): green means PASTURE QUALITY and nothing else, blue
+# means WATER and nothing else, and pure geometry (the direction arrow, the
+# grazing-zone limit lines) is drawn in neutral white/black rather than claiming a
+# colour of its own.
+#
+# It used to be the opposite: green was the shoat ring, the "usual daily zone"
+# line, the spring water marker AND the best-pasture arrow, all at once — five
+# greens, four meanings, and a map a herder could misread. Water markers also
+# shared orange with the camel ring (and cattle shared blue with every river).
+
+PASTURE_GREEN = (21, 128, 61)        # the ONLY green: good forage
+PASTURE_DRY = (138, 77, 23)          # dry forage
+PASTURE_BARE = (120, 113, 108)       # bare ground: warm grey, so red stays reserved
+#                                      for "your water point" and the return-to-water
+#                                      warning (red used to mean both).
+WATER_COLOR = (37, 99, 235)          # every water point, every river
+WATER_MINE = (185, 28, 28)           # the herder's own confirmed water point
+ZONE_LIMIT_COLOR = (255, 255, 255)   # grazing-zone limit lines (reference geometry)
+ZONE_LIMIT_HALO = (30, 41, 59)       # dark halo so the white line reads on any tile
+ARROW_COLOR = (15, 23, 42)           # the "go this way" arrow (direction, not a category)
+BANNER_COLOR = (15, 23, 42, 240)     # background of the direction banner, same reason
+HATCH_COLOR = (245, 158, 11, 40)     # dry/critical hatch band (a warning, amber)
+HATCH_BANNER = (245, 158, 11, 240)
+
+# Species ring style: (fill RGBA, outline RGBA, label). Cattle/shoot/camel never
+# share a hue with water (blue), pasture (green) or each other.
 RING_STYLE = {
-    "cattle": ((59, 130, 246, 60), (37, 99, 235, 255), "cattle (7km)"),
-    "shoat": ((16, 185, 129, 60), (5, 150, 105, 255), "shoat (11km)"),
-    "camel": ((249, 115, 22, 55), (234, 88, 12, 255), "camel (25km)"),
+    "cattle": ((124, 58, 237, 60), (124, 58, 237, 255), "cattle (7km)"),
+    "shoat": ((219, 39, 119, 60), (219, 39, 119, 255), "shoat (11km)"),
+    "camel": ((234, 88, 12, 55), (234, 88, 12, 255), "camel (25km)"),
 }
 
 # Inner grazing-zone line colours (drawn inside the ACTIVE species ring):
 # comfortable boundary = green (safe daily area), far boundary = amber (edge).
-_ZONE_COLORS = {"comfortable": (34, 197, 94), "far": (245, 158, 11)}
+_ZONE_COLORS = {"comfortable": ZONE_LIMIT_COLOR, "far": ZONE_LIMIT_COLOR}
+# Kept as a name because the legend and callers reference it, but the value is
+# deliberately neutral: the grazing-zone limits are geometry, not a category (see
+# the palette note at the top of this module).
 
 # Full compass in the words herders actually use (Swahili first, English fallback).
 COMPASS_SWA = [
@@ -133,15 +167,13 @@ LMARK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "config", "landmarks.geojson")
 _LMARK_CACHE: list[dict] | None = None
 
-# Water-point type -> (marker colour, short Swahili word)
+# Water-point type -> short Swahili word. The TYPE is carried by the label text, not
+# by the marker colour: five marker colours (blue/orange/teal/green/cyan) fought with
+# the rings and the pasture layer, so every water marker is now the same blue and the
+# label says what it is ("Kisima", "Mto", "Bwawa"...).
 WATER_TYPE_SWA = {
     "river": "Mto", "borehole": "Kisima", "well": "Kisima", "spring": "Chemchemi",
     "pan": "Bwawa", "dam": "Bwawa", "lake": "Ziwa", "tap": "Mfereji",
-}
-WATER_TYPE_COLOR = {
-    "river": (59, 130, 246), "borehole": (234, 88, 12), "well": (5, 150, 105),
-    "spring": (34, 197, 94), "pan": (6, 182, 212), "dam": (6, 182, 212),
-    "lake": (6, 182, 212), "tap": (168, 85, 247),
 }
 
 
@@ -494,7 +526,11 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                         zcoords = _scale_coords(coords, float(frac))
                         zpts = [_lonlat_to_px(x, y, west, north, mpp) for x, y in zcoords]
                         if len(zpts) >= 3:
-                            draw.polygon(zpts, outline=_ZONE_COLORS[zname], width=2)
+                            # White line with a dark halo: these are distance limits, not
+                            # a category, so they claim no hue. (They used to be green and
+                            # amber, which collided with pasture and with the camel ring.)
+                            draw.polygon(zpts, outline=ZONE_LIMIT_HALO, width=4)
+                            draw.polygon(zpts, outline=ZONE_LIMIT_COLOR, width=2)
 
         # No satellite data yet: never show a blank map — draw a clear "data is
         # being prepared" notice + a light loading hatch so it's obvious why the
@@ -543,7 +579,7 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
             _draw_banner_bottom(
                 draw,
                 f"{_UI[lang]['best']}: {direction}  -  {bp_txt}",
-                fill=(22, 101, 52, 240),
+                fill=BANNER_COLOR,
             )
 
     if fit_points:
@@ -702,7 +738,7 @@ def _draw_data_stamp(draw: ImageDraw.ImageDraw, as_of: str, lang: str = "swa") -
     draw.text((x0 + 14, y0 + 5), text, fill=(60, 60, 60), font=font)
 
 
-def _draw_banner_bottom(draw: ImageDraw.ImageDraw, text: str, fill: tuple = (22, 101, 52, 240)) -> None:
+def _draw_banner_bottom(draw: ImageDraw.ImageDraw, text: str, fill: tuple = BANNER_COLOR) -> None:
     """Big bottom-centre banner: direction + distance to the best pasture."""
     font = _get_font(28)
     tw = draw.textlength(text, font=font)
@@ -797,8 +833,14 @@ def _draw_label_plate(draw: ImageDraw.ImageDraw, x: float, y: float, text: str,
 
 
 def _type_color(ws) -> tuple:
-    wt = getattr(ws, "water_type", None) or (ws.get("water_type") if isinstance(ws, dict) else None)
-    return WATER_TYPE_COLOR.get(wt or "", (14, 116, 144))
+    """Every water point is the same blue: the marker's LABEL says which kind it is.
+
+    Colour here is a role ("this is water"), not a category list. Five type colours
+    meant orange fought the camel ring, green fought the pasture layer, and a herder
+    had to hold a five-item key in his head to read a map he glances at for two
+    seconds.
+    """
+    return WATER_COLOR
 
 
 def _draw_nearby_water(draw: ImageDraw.ImageDraw, west: float, north: float,
@@ -925,7 +967,7 @@ def _draw_numbered_sources(draw: ImageDraw.ImageDraw, west: float, north: float,
         if not (0 <= px_ < IMG_SIZE and 0 <= py_ < IMG_SIZE):
             continue
         r = 13
-        color = WATER_TYPE_COLOR.get(s.get("water_type") or "", (37, 99, 235))
+        color = WATER_COLOR
         draw.ellipse((px_ - r, py_ - r, px_ + r, py_ + r), fill=color,
                      outline=(255, 255, 255, 255), width=3)
         num = str(i)
@@ -988,12 +1030,12 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
     zone_rows: list[tuple[str, tuple | None]] = []
     if active_species and items:
         if lang == "swa":
-            zone_rows = [("  kijani = eneo la kila siku", _ZONE_COLORS["comfortable"]),
-                         ("  njano = ukingo wa eneo la kawaida", _ZONE_COLORS["far"]),
+            zone_rows = [("  mstari mweupe = ukingo wa eneo la kila siku", ZONE_LIMIT_COLOR),
+                         ("  mshale mweusi = malisho bora", ARROW_COLOR),
                          ("  nje = mbali — rudi majini mapema", (60, 60, 60))]
         else:
-            zone_rows = [("  green = usual daily zone", _ZONE_COLORS["comfortable"]),
-                         ("  amber = edge of usual zone", _ZONE_COLORS["far"]),
+            zone_rows = [("  white line = edge of the usual daily zone", ZONE_LIMIT_COLOR),
+                         ("  black arrow = best pasture", ARROW_COLOR),
                          ("  beyond = far — head back", (60, 60, 60))]
 
     pasture_rows = []
@@ -1001,29 +1043,28 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
         if lang == "swa":
             pasture_rows = [
                 ("Rangi ya malisho (ndani ya duara):", None),
-                ("  green=nyasi", (21, 128, 61)),
-                ("  brown=nyasi kavu", (138, 77, 23)),
-                ("  red=ntupo  (eneo lisilo wazi halipakwi rangi)", (200, 30, 30)),
+                ("  kijani = nyasi", PASTURE_GREEN),
+                ("  kahawia = nyasi kavu", PASTURE_DRY),
+                ("  kijivu = ntupo (wazi halipakwi rangi)", PASTURE_BARE),
                 (f"  {pasture_note}", None),
             ]
         else:
             pasture_rows = [
                 ("Pasture colours (inside rings):", None),
-                ("  green=grass", (21, 128, 61)),
-                ("  brown=dry forage", (138, 77, 23)),
-                ("  red=bare  (unclear areas are left uncoloured)", (200, 30, 30)),
+                ("  green = grass", PASTURE_GREEN),
+                ("  brown = dry forage", PASTURE_DRY),
+                ("  grey = bare (unclear areas are left uncoloured)", PASTURE_BARE),
                 (f"  {pasture_note}", None),
             ]
 
-    # Water-point marker colour key (colour = what kind of water it is).
+    # Water is ONE colour now: the marker's LABEL says which kind it is ("Kisima",
+    # "Mto", "Bwawa"...), so the key only has to explain the two roles.
     if lang == "swa":
-        water_rows = [("Maji ya karibu: buluu=mto", (59, 130, 246)),
-                      ("  chungwa=bore  teal=kisima", (234, 88, 12)),
-                      ("  kijani=chemchemi  cyan=bwawa", (34, 197, 94))]
+        water_rows = [("Maji: buluu = maji (jina linaeleza aina)", WATER_COLOR),
+                      ("  nyekundu = chanzo chako cha maji", WATER_MINE)]
     else:
-        water_rows = [("Water near you: blue=river", (59, 130, 246)),
-                      ("  orange=borehole  teal=well", (234, 88, 12)),
-                      ("  green=spring  cyan=pan", (34, 197, 94))]
+        water_rows = [("Water: blue = water (the label names the type)", WATER_COLOR),
+                      ("  red = your own water point", WATER_MINE)]
 
     header = f"{ward or 'Water source'} - {county}" if county else (ward or "Water source")
     header_h = 20
@@ -1062,15 +1103,21 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
 
 
 def _draw_direction_arrow(draw: ImageDraw.ImageDraw, x1: float, y1: float, x2: float, y2: float) -> None:
-    """A thick green arrow from (x1,y1) to (x2,y2) with a big arrowhead."""
-    draw.line((x1, y1, x2, y2), fill=(22, 101, 52, 255), width=7)
+    """A thick arrow from (x1,y1) to (x2,y2) with a big arrowhead.
+
+    Near-black with a white core, NOT green: a green arrow next to green pasture
+    patches and a green shoat ring asked the herder to guess which green was the
+    instruction. Direction is geometry, so it stays neutral — and neutral also
+    survives the pasture greens, the amber hatch and any base-map colour.
+    """
     ang = math.atan2(y2 - y1, x2 - x1)
-    L = 24
+    L = 26
     head1 = (x2 - L * math.cos(ang - 0.42), y2 - L * math.sin(ang - 0.42))
     head2 = (x2 - L * math.cos(ang + 0.42), y2 - L * math.sin(ang + 0.42))
-    draw.polygon([(x2, y2), head1, head2], fill=(22, 101, 52, 255))
-    # white outline so the arrow reads over any base-map colour
-    draw.line((x1, y1, x2, y2), fill=(255, 255, 255, 200), width=1)
+    draw.line((x1, y1, x2, y2), fill=ARROW_COLOR + (255,), width=11)
+    draw.polygon([(x2, y2), head1, head2], fill=ARROW_COLOR + (255,))
+    # White core + halo so the arrow reads over any base-map colour.
+    draw.line((x1, y1, x2, y2), fill=(255, 255, 255, 255), width=5)
 
 
 # --- pasture overlay ---------------------------------------------------------
@@ -1163,7 +1210,7 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
         0: (0, 0, 0, 0),
         1: (21, 128, 61, 110),
         2: (138, 77, 23, 105),     # dry forage brown
-        3: (200, 30, 30, 105),
+        3: PASTURE_BARE + (105,),
         4: (0, 0, 0, 0),           # unclear -> transparent on maps too
     }
     h, w = classes.shape

@@ -23,7 +23,10 @@ from app.services import map_renderer, water_reach, water_sources
 
 router = APIRouter(prefix="/mapview", tags=["mapview"])
 
-_RING_HEX = {"cattle": "#3b82f6", "shoat": "#10b981", "camel": "#f97316"}
+# One hue = one meaning, matching app/services/map_renderer.py so the live map and
+# the WhatsApp map can never disagree: green is PASTURE only, blue is WATER only,
+# rings are purple/magenta/orange, and pure geometry (zone limits) is neutral.
+_RING_HEX = {"cattle": "#7c3aed", "shoat": "#db2777", "camel": "#ea580c"}
 
 
 def _t(lang: str) -> dict:
@@ -278,10 +281,11 @@ const T = { legend: 'Alama za maji', rings: 'Upeo wa kufikia', dist: 'kutoka kwa
             noName: 'Maji', you: 'Wewe hapa' };
 const typeName = { river:'River/Mto', borehole:'Borehole', well:'Well/Kisima',
   spring:'Spring/Chemchemi', pan:'Pan/Bwawa', dam:'Dam/Bwawa', tap:'Tap/Mfereji' };
-const typeColor = { river:'#2563eb', borehole:'#ea580c', well:'#059669',
-  spring:'#16a34a', pan:'#06b6d4', dam:'#0891b2', lake:'#0891b2', tap:'#9333ea' };
-const ringHex = { cattle:'#3b82f6', shoat:'#10b981', camel:'#f97316' };
-const pastureCols = { green:'#16a34a', dry:'#8a4d17', bare:'#ce2020' };
+// Every water point is one blue: the popup label says which kind it is. Five marker
+// colours used to fight the rings, the pasture layer and each other.
+const WATER_HEX = '#2563eb';
+const ringHex = { cattle:'#7c3aed', shoat:'#db2777', camel:'#ea580c' };
+const pastureCols = { green:'#16a34a', dry:'#8a4d17', bare:'#78716c' };
 // Herder-reported water status: blue = confirmed water now, amber = seasonal,
 // red = reported dry/broken/gone, grey = never confirmed.
 const statusCols = { functional:'#0ea5e9', flowing:'#0ea5e9', intermittent:'#f59e0b',
@@ -290,7 +294,9 @@ const statusName = { functional: TXT.s_ok, flowing: TXT.s_ok, intermittent: TXT.
   dry: TXT.s_dry, broken: TXT.s_broken, not_found: TXT.s_gone, unknown: TXT.s_unknown };
 function pinColor(w) {
   const s = w.status && w.status !== 'unknown' ? statusCols[w.status] : null;
-  return s || typeColor[w.water_type] || '#0f766e';
+  // Status (blue = confirmed water today, red = dry/broken/gone, grey = unconfirmed)
+  // wins; otherwise water is water, in one blue.
+  return s || WATER_HEX;
 }
 
 const map = L.map('map', { zoomControl: true, attributionControl: true })
@@ -341,7 +347,10 @@ if (D.overlay && D.overlay.url && D.overlay.available) {
 // River grazing zones: distance RIBBONS along the river line (a river is long,
 // so its zones follow the river instead of circling one point). Drawn under the
 // rings, above the pasture colour.
-const zoneCols = { comfortable: '#16a34a', far: '#f59e0b', critical: '#ce2020' };
+// Grazing-zone limit ribbons: neutral white, because they are distance limits, not a
+// category. (Green here used to collide with the pasture layer; amber with the camel
+// ring.) 'critical' keeps the warning red — returning to water late IS an emergency.
+const zoneCols = { comfortable: '#ffffff', far: '#ffffff', critical: '#ce2020' };
 const ribbonNames = { comfortable: TXT.z_near || 'near water', far: TXT.z_edge || 'edge',
   critical: TXT.z_limit || 'far limit — return to water' };
 if (D.ribbons && D.ribbons.bands) {
@@ -448,7 +457,7 @@ const Legend = L.Control.extend({
         'background:' + pastureCols.dry + ';margin-right:6px"></span>' + (TXT.dry||'olive = dry forage') +
         (frac.dry != null ? ' <b>' + frac.dry + '%</b>' : '') + '</div>' +
         '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-        'background:' + pastureCols.bare + ';margin-right:6px"></span>' + (TXT.bare||'red = bare') +
+        'background:' + pastureCols.bare + ';margin-right:6px"></span>' + (TXT.bare||'grey = bare') +
         (frac.bare != null ? ' <b>' + frac.bare + '%</b>' : '') + '</div>';
       if (p.usable_pct != null) {
         html += '<div style="margin-top:3px;font-weight:700">' + (TXT.summary||'Pasture now') +
@@ -459,11 +468,11 @@ const Legend = L.Control.extend({
     } else if (p.url) {
       html += '<div style="color:#92400e">' + (TXT.preparing || 'Pasture layer being prepared') + '</div>';
     } else {
-      html += '<div style="color:#065f46">' + (TXT.tap || 'Tap a water pin') + '</div>';
+      html += '<div style="color:#334155">' + (TXT.tap || 'Tap a water pin') + '</div>';
     }
     const wrows = Object.keys(seenTypes).map(k =>
       '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-      'border-radius:50%;background:' + (typeColor[k] || '#0f766e') + ';margin-right:6px"></span>' +
+      'border-radius:50%;background:' + WATER_HEX + ';margin-right:6px"></span>' +
       (typeName[k] || k) + '</div>').join('');
     if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
     // Herder-reported water status — the most actionable line on the map.

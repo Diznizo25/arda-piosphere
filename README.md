@@ -523,15 +523,26 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   along the river line** (comfortable ≤0.5 R, edge ≤0.8 R, far limit = R)
   rather than rings around one point — see `app/services/river_zones.py`.
   Point sources (wells/boreholes/pans) keep circular piosphere rings.
-- **Green arrow to the nearest walkable good patch** (a ~2 km cluster around
+- **Neutral black arrow to the nearest walkable good patch** (a ~2 km cluster around
   the closest good pixel — not a far-away global centroid) and a big
-  bottom-center banner: `Malisho bora: Kaskazini-Mashariki · 3.2 km`.
+  bottom-center banner: `Malisho bora: Kaskazini-Mashariki - 3.2 km`.
 - Big **bold fonts** (DejaVu/Arial fallback), a large place-name banner
-  (ward · county), **landmark labels** (towns/villages/rivers/markets from a
-  committed OSM gazetteer), nearby water sources as **type-coloured markers**
-  (blue=river, orange=borehole, teal=well, green=spring, cyan=pan) with local
-  names — or "Kisima karibu na <village>" for unnamed points — scale bar and a
-  clear north arrow — readable on a phone after WhatsApp downscaling.
+  (ward - county), **landmark labels** (towns/villages/rivers/markets from a
+  committed OSM gazetteer), nearby water sources as **blue markers whose label names
+  the type** ("Kisima", "Mto", "Bwawa") — or "Kisima karibu na <village>" for unnamed
+  points — scale bar and a clear north arrow — readable on a phone after WhatsApp
+  downscaling.
+- **ONE HUE = ONE MEANING** (enforced by `scripts/test_map_palette.py`, and shared with
+  `/mapview`): green is pasture quality and nothing else, blue is water and nothing
+  else, red is the herder's own water point, the three species rings are purple /
+  magenta / orange, and pure geometry — the direction arrow, the grazing-zone limit
+  lines — is neutral white/black. Before this rule the map had five greens with four
+  meanings (shoat ring, daily-zone line, spring marker, direction arrow, grass), which
+  is exactly what confused a herder reading it.
+- **Rings are generated as real circles**: 128 segments per quarter (512 vertices), and
+  the renderer no longer simplifies them (`scripts/test_ring_shape.py` measures the
+  drawn line: 0.05 px of faceting instead of 1.21 px, and every stored ring is
+  circular to 0.5%).
 - **Numbered water-point markers** (1..N) match the confirmation choice list;
   the herder's **confirmed water point** gets a distinct "Maji yako" pin.
 - **Confirmation "options" map** (`fit=1`): zooms out so the herder AND every
@@ -539,7 +550,8 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   registered points are far away still SEES them, instead of empty land.
 - **Interactive Google-Maps-style live map** (`GET /mapview/?lat=..&lon=..&...`):
   a mobile, zoomable Leaflet page (OpenStreetMap) with the herder pin, all
-  nearby water points (type-coloured + numbered), and the piosphere rings.
+  nearby water points (one blue, numbered), and the piosphere rings — coloured with
+  the same palette as the WhatsApp map, so the two can never disagree.
   The link is sent inside WhatsApp captions ("tap to open & zoom").
 - **Never blank:** when satellite data isn't built yet, the map shows a clear
   amber "pasture data being prepared" notice + loading hatch instead of nothing.

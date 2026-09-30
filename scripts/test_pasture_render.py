@@ -130,8 +130,13 @@ def main() -> None:
     print(f"no-COG fallback render OK ({len(png3)} bytes PNG)")
 
     # 6) Tier-1 grazing zones + effective reach (watering interval): the active
-    #    species ring gets green/amber zone lines and the every_2_3_days ring
-    #    renders larger. Rendered from the STORED ring (no recompute).
+    #    species ring gets its zone limit lines and the every_2_3_days ring renders
+    #    larger. Rendered from the STORED ring (no recompute).
+    #
+    #    The limits are WHITE lines with a dark halo on purpose: they are distance
+    #    limits, not a category. They used to be green + amber, which made "green"
+    #    mean grass, the shoat ring, the daily zone and the direction arrow all at
+    #    once — the confusion a herder reported. See scripts/test_map_palette.py.
     import io as _io
 
     png5 = map_renderer.render_rings_png(
@@ -143,11 +148,15 @@ def main() -> None:
     def _px(color, tol=40):
         return int(((abs(arr - np.array(color)).sum(axis=2)) < tol).sum())
 
-    zone_green = _px(map_renderer._ZONE_COLORS["comfortable"])
-    zone_amber = _px(map_renderer._ZONE_COLORS["far"])
-    assert zone_green > 150, f"comfortable zone line missing ({zone_green} px)"
-    assert zone_amber > 150, f"far zone line missing ({zone_amber} px)"
-    print(f"grazing-zone render OK (green {zone_green}px, amber {zone_amber}px, "
+    white = _px(map_renderer.ZONE_LIMIT_COLOR, tol=30)
+    halo = _px(map_renderer.ZONE_LIMIT_HALO, tol=40)
+    assert white > 300, f"zone limit lines missing ({white} px of white)"
+    assert halo > 300, f"zone limit halo missing ({halo} px)"
+    # No green line may exist anywhere: pasture is the only green on this map (and
+    # pasture=False here, so any green pixel is a real regression).
+    green_line = _px((34, 197, 94), tol=30) + _px((5, 150, 105), tol=30)
+    assert green_line == 0, f"{green_line} px of stray green line on the map"
+    print(f"grazing-zone render OK (white {white}px, halo {halo}px, no green line, "
           f"{len(png5)} bytes)")
 
 
