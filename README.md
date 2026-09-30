@@ -80,6 +80,35 @@ point by its local name, not a ward. If their water point isn't in the list,
 they're guided to **PIN** it (validated, then auto-built).
 After that, the message flow handles:
 
+**The menu** is a clickable WhatsApp list — nine rows in two sections, daily services
+first and settings last — with a numbered text menu as the fallback. The numbers are
+unchanged from the original menu so nobody's muscle memory breaks, and ids are prefixed
+`svc:` so a tap can never be mistaken for a water-status digit:
+
+| Section | Row | What it does |
+| --- | --- | --- |
+| Daily | Maji | His water point: status, waiting queue, map (three old entries, one question) |
+| Daily | Kupe na minyoo | The pest check (conditions + where to look, never a diagnosis) |
+| Daily | Mvua | Rain & drought outlook near him |
+| Daily | Wanyama | Quick replies: weigh one animal, or estimate the whole herd |
+| Daily | Eneo langu | Share a location for water + pasture + map |
+| Settings | Chanzo kipya | Register a new water point (validated, auto-built) |
+| Settings | Ujenzi | Build status of his water point |
+| Settings | Sauti | Voice replies on |
+| Settings | Lugha | Swahili / English |
+
+Both entry points resolve to a service name and run the same code, so a service cannot
+behave differently depending on how it was reached. `POST /dev/menu` returns the exact
+payload plus the text fallback in both languages, so the front door can be reviewed
+without messaging a herder.
+
+**A greeting is not a question.** `hello` / `habari` gets a welcome and the menu — never a
+data dump — and a herder returning after 7+ days also gets one or two lines about what
+changed while he was away (his water point's status and how old that report is, plus the
+pest window if one is up). Before this, a greeting produced an empty intent list, and an
+empty list meant "send every fact we have", so a bare hello came back as the rain and
+drought briefing.
+
 | Trigger | What happens |
 | --- | --- |
 | 📍 Location | Advisory: nearest reachable water + forage conditions + VCI |
