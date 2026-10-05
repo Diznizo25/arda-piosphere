@@ -74,6 +74,47 @@ assert abs(ratio - (1 + unc) / (1 - unc)) < 0.02, ratio
 assert q.snapshot_as_of == "05 Sep"
 print("quality: green / curing / cured / bare, and a band that admits its width OK")
 
+# --- 3b) the patch is a PATCH, not the whole ring ---------------------------
+# The transform is in degrees; converting a 250 m radius with the wrong units made
+# the "neighbourhood" the entire 25 km ring (77k pixels) and averaged a landscape
+# into a spot reading. This asserts the window stays a spot.
+import numpy as np  # noqa: E402
+
+try:
+    from app.services import raster_read  # noqa: F401
+
+    _HAVE_RASTER = True
+except Exception:  # noqa: BLE001 — e.g. Windows Application Control blocking a DLL
+    _HAVE_RASTER = False
+
+
+class _FakeTransform:
+    a = 0.001          # ~111 m per pixel in longitude at this latitude
+    e = -0.001
+    c = 37.0
+    f = 1.0
+
+
+if not _HAVE_RASTER:
+    # Loud, not silent: this suite is the gate that runs in the container, and a
+    # quietly skipped assertion is exactly how a wrong-units bug ships.
+    print("patch sampling: SKIPPED — rasterio unavailable on this host (run in Docker)")
+else:
+    grid = np.full((5, 64, 64), 0.10)
+    grid[1, 0:25, 0:25] = 0.50          # a bright block far from the pin
+    _real_read = raster_read.read_overview_array
+    raster_read.read_overview_array = lambda *a, **k: (grid, _FakeTransform())
+    try:
+        ps = forage.sample_patch("fake-point", 37.0325, 0.9685, radius_m=250.0)
+    finally:
+        raster_read.read_overview_array = _real_read
+    assert ps is not None, "the sampler returned nothing for a valid in-bounds pin"
+    assert ps.n_pixels <= 49, f"{ps.n_pixels} pixels is not a 250 m patch"
+    assert abs(ps.pixel_m - 111.3) < 6, ps.pixel_m
+    assert abs(ps.satvi - 0.10) < 0.02, \
+        f"the sample was contaminated by a far-away block (satvi={ps.satvi})"
+    print("patch sampling: a 250 m disc, not a whole-ring average OK")
+
 # --- 4) the ledger: the animal's side ---------------------------------------
 spec = p["species"]["cattle"]
 led = forage.ledger("cattle", 18, 14.0, cured, temp_max_c=38.0)
@@ -147,9 +188,9 @@ feed = next(o for o in adv.options if o.code == "feed")
 assert feed.kg_per_head and feed.kg_per_head <= p["offset"]["energy_feed"]["max_kg_per_head_day"]
 assert feed.cost_per_head_ksh and feed.herd_cost_ksh
 assert feed.herd_cost_ksh == int(round(feed.cost_per_head_ksh * 18 / 10) * 10), feed
-# the herder's own words for the mineral: a lick, never a medicine
+# the herder's own words for the mineral: a lick, described as feed
 mineral = next(o for o in adv.options if o.code == "mineral")
-assert "si dawa" in mineral.detail_swa, mineral.detail_swa
+assert "chakula" in mineral.detail_swa, mineral.detail_swa
 assert mineral.herd_cost_ksh and mineral.herd_cost_ksh > 0
 
 # unknown herd size: per-head figures only, and NO invented total
@@ -171,6 +212,17 @@ assert "Kaskazini-Mashariki" in advm.options[0].title_swa, advm.options[0].title
 assert "Bila gharama" in advm.options[0].detail_swa
 assert "nyasi bora" in advm.options[0].detail_swa and "kutembea" in advm.options[0].detail_swa, \
     "the saving must name its two parts, not just a total"
+
+# EVERY option's title and detail, both languages, must pass the boundary — an
+# option far down the list may never be rendered in a given message, but a herder
+# can still be shown it, and a detail line can be forwarded on its own. This is the
+# assertion that catches a clinical word hiding in an option nobody rendered (it is
+# how "(madini, si dawa)" was caught in a live message).
+for _adv in (adv, advm, adv0):
+    for _o in _adv.options:
+        for _lang in ("swa", "eng"):
+            forage.assert_clean(_o.title(_lang))
+            forage.assert_clean(_o.detail(_lang))
 print("offsets: free-first order, costed supplements, move quantified, no fake totals OK")
 
 # --- 7) wording: the date, the origin, and the honest emptiness -------------

@@ -244,7 +244,12 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
         row = (lat - f0) / e_
         if not (0 <= col <= w - 1 and 0 <= row <= h - 1):
             return None
-        pr = max(1, int(round(radius_m / abs(a_))))
+        # The transform is in DEGREES, so converting the neighbourhood radius to
+        # pixels needs metres-per-degree — mixing the two units silently made the
+        # "patch" the WHOLE ring (77k pixels over 25 km) instead of a 250 m spot.
+        m_per_deg_lat = 110_570.0
+        m_per_deg_lon = 111_320.0 * max(0.2, math.cos(math.radians(lat)))
+        pr = max(1, int(round(radius_m / (abs(a_) * m_per_deg_lon))))
         c1, c2 = max(0, int(col) - pr), min(w, int(col) + pr + 1)
         r1, r2 = max(0, int(row) - pr), min(h, int(row) + pr + 1)
         win = np.asarray(arr[:, r1:r2, c1:c2], dtype="float64")
@@ -252,10 +257,12 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
             return None
         rr = np.arange(r1, r2)[:, None]
         cc = np.arange(c1, c2)[None, :]
-        dist_m = np.hypot((cc - col) * a_, (rr - row) * abs(e_))
+        north_m = np.abs(rr - row) * abs(e_) * m_per_deg_lat
+        east_m = np.abs(cc - col) * abs(a_) * m_per_deg_lon
+        dist_m = np.hypot(east_m, north_m)
         disc = dist_m <= radius_m
         if not disc.any():
-            disc = np.ones_like(dist_m, dtype=bool)
+            disc = dist_m <= (dist_m.min() + 1.0)   # a 1-pixel fallback, never the ring
 
         def _mean(band: int) -> float:
             v = win[band][disc]
@@ -271,7 +278,7 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
             ndvi=ndvi, satvi=satvi, bsi=bsi,
             ndmi=ndmi if math.isfinite(ndmi) else None,
             vci=vci if math.isfinite(vci) else None,
-            n_pixels=n, radius_m=radius_m, pixel_m=abs(a_),
+            n_pixels=n, radius_m=radius_m, pixel_m=abs(a_) * m_per_deg_lon,
         )
     except Exception:  # noqa: BLE001 — fail open, never break the answer
         log.exception("patch sampling failed (non-fatal)")
@@ -549,8 +556,11 @@ def build_options(quality: ForageQuality, led: EnergyLedger, *, species: str,
             herd_cost_ksh=_herd_cost(cost, led.head_count),
             title_swa=f"{m['name_swa']} ({g:.0f} g/siku)",
             title_eng=f"{m['name_eng']} ({g:.0f} g/day)",
-            detail_swa="Husaidia mmeng'enyo wa nyasi kavu (madini, si dawa)",
-            detail_eng="Helps digestion of dry roughage (a mineral, not a medicine)",
+            # No clinical vocabulary ANYWHERE, not even a negation: "(madini, si
+            # dawa)" tripped the guard, and the guard is right — a snippet of this
+            # message can be forwarded out of context, so the word never ships.
+            detail_swa="Husaidia mmeng'enyo wa nyasi kavu (hii ni chakula)",
+            detail_eng="Helps digestion of dry roughage (this is feed)",
         ))
 
     # 4) energy supplement — only now, and always with its cost
