@@ -140,3 +140,21 @@ disclaimer:
 no_data:
   swa: "Hatuna picha ya satellite ya eneo hilo bado. Tumeandikisha mlipopanda."
   eng: "We have no satellite picture for that area yet. We have recorded where you grazed."
+
+# The SAME situation has four different causes, and one sentence for all of them is
+# how we ended up telling a herder "we have no satellite picture" while he was
+# looking at satellite imagery on our own map. Each cause gets its own words, its own
+# explanation, and a next step — and every one still says the walk was recorded.
+no_data_reasons:
+  # his tap is outside the area a pasture measurement covers
+  outside:
+    swa: "Eneo ulilogusa liko nje ya eneo tunalopima malisho.\nRamani unayoiona ni picha ya satellite, lakini kipimo chetu cha malisho (kutoka satellite) hakifiki hapo bado.\nTumeandikisha mlipopanda leo. Jaribu kugusa karibu na chanzo chako cha maji, au tuma eneo lako (location)."
+    eng: "The spot you tapped is outside the area where we measure forage.\nThe map you are looking at IS satellite imagery, but our forage measurement (our own satellite reading) does not reach there yet.\nWe have recorded where you grazed today. Try tapping nearer your water point, or send your location."
+  # the nearest water point is registered but its satellite build has not run yet
+  no_raster:
+    swa: "Chanzo cha maji kilicho karibu nawe bado kinaandaliwa, hivyo kipimo cha malisho ya hapo hakijafika bado.\nTumeandikisha mlipopanda leo. Nitakujulisha kikikamilika."
+    eng: "The water point nearest you is still being prepared, so the forage measurement for that area has not arrived yet.\nWe have recorded where you grazed today. I will tell you when it is ready."
+  # nothing registered anywhere near the tap
+  no_point:
+    swa: "Eneo hilo haliko karibu na chanzo chochote cha maji kilichosajiliwa, hivyo hatuna kipimo cha malisho hapo.\nTumeandikisha mlipopanda leo. Ukiwa unakunywa maji mahali hapo, tuma eneo lako kisha tuma 'PIN'."
+    eng: "That spot is not near any registered water point, so we have no forage measurement there.\nWe have recorded where you grazed today. If you water your animals there, send your location then send 'PIN'."

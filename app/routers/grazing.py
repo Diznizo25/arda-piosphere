@@ -56,8 +56,10 @@ async def grazing_pin(request: Request) -> dict:
     if herder is None:
         herder = pastoralists.upsert_pastoralist(phone)
 
+    hint = str(payload.get("point_id") or "").strip() or None
     try:
-        res = grazing_flow.handle_pin(phone, herder, lat, lon, source="map")
+        res = grazing_flow.handle_pin(phone, herder, lat, lon, source="map",
+                                      point_id_hint=hint)
     except Exception:  # noqa: BLE001
         log.exception("grazing pin handling failed")
         raise HTTPException(status_code=500, detail="could not read that spot")
@@ -87,8 +89,10 @@ async def grazing_pin(request: Request) -> dict:
         "reason": res.reason,
         "recorded": bool(res.recorded),
         "sent_whatsapp": bool(res.text),
+        # The page shows this while he waits for the WhatsApp message. It must not
+        # say "no satellite picture" either — the whole point of the reason codes.
         "confirmation": ("Nimepima eneo hilo. Jibu limekutumwa kwenye WhatsApp."
                          if res.ok else
-                         "Tumeandikisha eneo hilo, lakini hatuna picha ya satellite "
-                         "ya hapo bado. Jibu limekutumwa kwenye WhatsApp."),
+                         "Tumeandikisha mlipopanda. Maelezo kwa nini hatukuweza "
+                         "kupima malisho hapo yamekutumwa kwenye WhatsApp."),
     }

@@ -161,23 +161,63 @@ assert CALLS["records"] == [], "a second tap inside 20 minutes must not store a 
 grazing_flow.manyattas.recent_event_minutes = _fake_minutes
 print("dedupe: one walk, one row, even when the pin arrives twice OK")
 
-# --- 4) no satellite picture: the honest answer, and the walk still stored --
+# --- 4) no reading: the REASON is named, and never "no satellite picture" ---
 CALLS["records"].clear()
 none = grazing_flow.handle_pin("+254700000001", Herder(), 1.0, 38.0, source="pin",
                                sample_fn=lambda pid, lon, lat: None,
                                guidance_fn=lambda *a: None)
-assert not none.ok and none.reason == "no_picture", none
-assert none.text == forage.no_data_message("swa"), none.text
+assert not none.ok and none.reason in ("outside", "no_raster"), none
+assert "Tumeandikisha mlipopanda" in none.text, none.text
+assert "hatuna picha ya satellite" not in none.text.lower(), \
+    "never tell a herder we have no satellite picture while he looks at one"
 assert CALLS["records"], "the pin is real even when the picture is not"
 assert CALLS["records"][-1]["advice"] is None
 assert none.question == "", "no reading, so no question about a patch we could not see"
 
-# a pin that matches no water point at all is reported as its own reason
-grazing_flow.water_source_for_pin = lambda lon, lat, sp, iv: (None, "none")
+# nothing registered anywhere near the tap is its own, different situation
+_saved_candidates = grazing_flow.patch_candidates
+grazing_flow.patch_candidates = lambda *a, **k: []
 nop = grazing_flow.handle_pin("+254700000001", Herder(), 1.0, 38.0, source="map")
 assert not nop.ok and nop.reason == "no_point", nop
-grazing_flow.water_source_for_pin = lambda lon, lat, sp, iv: ("point-1", "reachable")
-print("empty states: no_picture and no_point are distinct, both answered OK")
+assert "chanzo chochote cha maji" in nop.text, nop.text
+grazing_flow.patch_candidates = _saved_candidates
+print("empty states: the cause is named, and it is never 'no satellite picture' OK")
+
+# --- 4b) a tap is read from the raster the MAP PAINTED ----------------------
+# The complaint this exists for: a herder tapped a spot on the satellite picture we
+# drew for him and was told we have no satellite picture. The page knows which file
+# it painted (`id=`), so that one must be tried first — he tapped pixels we showed
+# him — and the coordinates are only a fallback.
+tried: list = []
+
+
+def _by_id(pid, lon, lat):
+    tried.append(pid)
+    return DRY if pid == "page-point" else None
+
+
+hinted = grazing_flow.handle_pin("+254700000001", Herder(), 0.395, 37.58, source="map",
+                                 point_id_hint="page-point", sample_fn=_by_id,
+                                 guidance_fn=lambda *a: None)
+assert hinted.ok and hinted.point_id == "page-point", hinted
+assert tried and tried[0] == "page-point", tried
+assert hinted.text.startswith("🌿 MALISHO YA LEO")
+
+# and if the painted raster cannot be read, the neighbours are tried in order
+tried.clear()
+
+
+def _by_id_dead(pid, lon, lat):
+    tried.append(pid)
+    return None if pid == "dead-point" else DRY
+
+
+fallback = grazing_flow.handle_pin(
+    "+254700000001", Herder(), 0.395, 37.58, source="map", point_id_hint="dead-point",
+    sample_fn=_by_id_dead, guidance_fn=lambda *a: None)
+assert fallback.ok and fallback.point_id == "point-1", fallback
+assert tried and tried[0] == "dead-point" and len(tried) >= 2, tried
+print("tap reading: the painted raster wins, neighbours are the fallback OK")
 
 # --- 5) the manyatta: asked once, after the answer, never again -------------
 STATE["manyatta"] = None

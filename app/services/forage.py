@@ -212,18 +212,19 @@ def quality_from_bands(ndvi: float, satvi: float, bsi: float, ndmi: float | None
     )
 
 
-def sample_patch(water_source_id: str, lon: float, lat: float,
-                 radius_m: float = 250.0, max_dim: int = 512) -> PatchSample | None:
-    """Mean indices over a neighbourhood around (lon, lat) from the point's COG.
+def sample_patch_detailed(water_source_id: str, lon: float, lat: float,
+                          radius_m: float = 250.0,
+                          max_dim: int = 512) -> tuple[PatchSample | None, str]:
+    """`sample_patch` plus WHY it failed, because the reason is herder-facing.
 
-    Returns None (never a guess) when there is no COG for that water point, or the
-    pin falls outside the picture — the caller then says "we have no picture of
-    that area yet" rather than borrowing a number from somewhere else.
+    The four reasons are genuinely different situations and must never share one
+    sentence: a point whose satellite build has not run yet ("no_overview") is not
+    the same as a tap outside the picture we have ("out_of_bounds"), and neither is
+    "the pixel is cloud/edge masked" ("nodata"). Saying "we have no satellite
+    picture" to a herder who is looking at satellite imagery on our own map is the
+    kind of small wrongness that costs the rest of the answer its credibility.
 
-    The memory-safe overview is read (cogs/<id>/overview.tif) because the full COG
-    is ~500 MB and this runs on the request path. That costs spatial detail, so the
-    reading carries `pixel_m` and the docs/tests state it exactly instead of
-    implying 10 m precision we did not read.
+    Returns (sample, "ok" | "no_overview" | "out_of_bounds" | "nodata").
     """
     try:
         import numpy as np
@@ -233,17 +234,17 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
         # 1 NDVI, 3 SATVI, 4 BSI, 5 NDMI, 7 VCI (rasterio 1-based indexes)
         res = read_overview_array(water_source_id, bands=[1, 3, 4, 5, 7], max_dim=max_dim)
         if res is None:
-            return None
+            return None, "no_overview"
         arr, transform = res
         if arr.shape[0] < 4:
-            return None
+            return None, "no_overview"
         h, w = arr.shape[1], arr.shape[2]
         c0, f0 = transform.c, transform.f
         a_, e_ = transform.a, transform.e
         col = (lon - c0) / a_
         row = (lat - f0) / e_
         if not (0 <= col <= w - 1 and 0 <= row <= h - 1):
-            return None
+            return None, "out_of_bounds"
         # The transform is in DEGREES, so converting the neighbourhood radius to
         # pixels needs metres-per-degree — mixing the two units silently made the
         # "patch" the WHOLE ring (77k pixels over 25 km) instead of a 250 m spot.
@@ -254,7 +255,7 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
         r1, r2 = max(0, int(row) - pr), min(h, int(row) + pr + 1)
         win = np.asarray(arr[:, r1:r2, c1:c2], dtype="float64")
         if win.size == 0:
-            return None
+            return None, "out_of_bounds"
         rr = np.arange(r1, r2)[:, None]
         cc = np.arange(c1, c2)[None, :]
         north_m = np.abs(rr - row) * abs(e_) * m_per_deg_lat
@@ -272,17 +273,34 @@ def sample_patch(water_source_id: str, lon: float, lat: float,
         ndvi, satvi, bsi = _mean(0), _mean(1), _mean(2)
         ndmi, vci = _mean(3), _mean(4)
         n = int(np.isfinite(win[1][disc]).sum())
-        if n == 0 or not math.isfinite(satvi) or not math.isfinite(ndvi):
-            return None
+        if n == 0:
+            return None, "nodata"
+        if not math.isfinite(satvi) or not math.isfinite(ndvi):
+            return None, "nodata"
         return PatchSample(
             ndvi=ndvi, satvi=satvi, bsi=bsi,
             ndmi=ndmi if math.isfinite(ndmi) else None,
             vci=vci if math.isfinite(vci) else None,
             n_pixels=n, radius_m=radius_m, pixel_m=abs(a_) * m_per_deg_lon,
-        )
+        ), "ok"
     except Exception:  # noqa: BLE001 — fail open, never break the answer
         log.exception("patch sampling failed (non-fatal)")
-        return None
+        return None, "nodata"
+
+
+def sample_patch(water_source_id: str, lon: float, lat: float,
+                 radius_m: float = 250.0, max_dim: int = 512) -> PatchSample | None:
+    """Mean indices over a neighbourhood around (lon, lat) from the point's COG.
+
+    Returns None (never a guess) when the pin cannot be read — use
+    `sample_patch_detailed` when the caller has to explain WHY to a herder.
+
+    The memory-safe overview is read (cogs/<id>/overview.tif) because the full COG
+    is ~500 MB and this runs on the request path. That costs spatial detail, so the
+    reading carries `pixel_m` and the docs/tests state it exactly instead of
+    implying 10 m precision we did not read.
+    """
+    return sample_patch_detailed(water_source_id, lon, lat, radius_m, max_dim)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -684,9 +702,23 @@ def thanks_for_quality(quality: str, lang: str = "swa") -> str:
     return "Asante — tunatumia jibu lako kukagua picha ya satellite ya eneo lako."
 
 
-def no_data_message(lang: str = "swa") -> str:
+def no_data_message(lang: str = "swa", reason: str | None = None) -> str:
+    """Why we cannot read that patch — in the herder's words.
+
+    `reason` comes from `sample_patch_detailed` / the candidate search:
+    "outside" | "no_raster" | "no_point". A missing reason falls back to the
+    generic sentence, but every caller that KNOWS the cause should pass it: one
+    sentence for four different situations is how we told a herder "we have no
+    satellite picture" while he was looking at satellite imagery.
+    """
     p = load_params()
-    return str(p["no_data"]["eng" if lang == "eng" else "swa"])
+    key = "eng" if lang == "eng" else "swa"
+    reasons = p.get("no_data_reasons") or {}
+    if reason and reason in reasons:
+        text = reasons[reason].get(key)
+        if text:
+            return str(text)
+    return str(p["no_data"][key])
 
 
 def _fmt_mj(v: float) -> str:

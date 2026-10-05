@@ -572,7 +572,11 @@ if (D.graze && D.graze.on && D.graze.token) {
     bar.textContent = TXT.g_sending || 'Sending...';
     fetch(D.graze.endpoint, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({lat: ev.latlng.lat, lon: ev.latlng.lng, token: D.graze.token})
+      // point_id is the raster this page PAINTED: the answer must be read from the
+      // same satellite file he was looking at, not from whichever point happens to
+      // be nearest the tap (a brand-new point has no raster yet at all).
+      body: JSON.stringify({lat: ev.latlng.lat, lon: ev.latlng.lng,
+        token: D.graze.token, point_id: D.main_id || null})
     }).then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(() => { bar.textContent = TXT.g_sent || 'Sent'; })
       .catch(() => { bar.textContent = TXT.g_fail || 'Failed'; })

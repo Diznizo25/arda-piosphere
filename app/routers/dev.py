@@ -224,9 +224,24 @@ async def graze_probe(request: Request, x_debug_key: str = Header(default="")) -
         if not point_id or lat is None or lon is None:
             return {"ok": False,
                     "error": "give satvi (synthetic) or water_source_id+lat+lon (real)"}
-        sample = forage.sample_patch(point_id, float(lon), float(lat))
+        sample, why = forage.sample_patch_detailed(point_id, float(lon), float(lat))
+        probes: dict = {"first_reason": why}
         if sample is None:
-            return {"ok": False, "error": "no COG covers that point/pin"}
+            # Mirror the flow exactly: before telling a herder we cannot read that
+            # spot, try the point the map painted and its neighbours. This probe
+            # exists to make that decision arguable, so it reports what it tried.
+            from app.services import grazing_flow
+
+            cands = grazing_flow.patch_candidates(float(lon), float(lat), species,
+                                                  payload.get("interval") or "daily",
+                                                  hint_id=point_id)
+            sample, chosen, reason = grazing_flow.sample_candidates(cands, float(lon), float(lat))
+            probes.update({"candidates": cands, "chosen": chosen, "reason": reason})
+            if sample is None:
+                return {"ok": False, "error": f"unreadable ({reason})",
+                        **probes,
+                        "message_swa": forage.no_data_message("swa", reason)}
+            point_id = chosen
         from app.services.grazing_flow import snapshot_for
 
         quality = forage.quality_from_bands(

@@ -299,6 +299,28 @@ assert forage.quality_for_digit("gq:1") is None, \
     "the button id is stripped by the router, not swallowed here"
 print("one-tap: 1/2/3 and the words, everything else ignored OK")
 
+# --- 9b) the three unusable-pin situations get three different sentences -----
+# One sentence for four causes is how we told a herder "we have no satellite
+# picture" while he was looking at satellite imagery on our own map.
+situations = {r: (forage.no_data_message("swa", r), forage.no_data_message("eng", r))
+              for r in ("outside", "no_raster", "no_point")}
+assert len({t[0] for t in situations.values()}) == 3, "the causes must not share words"
+generic = forage.no_data_message("swa")
+assert all(generic != swa for swa, _ in situations.values()), \
+    "a named cause must not fall back to the generic sentence"
+for swa_text, eng_text in situations.values():
+    assert "Tumeandikisha mlipopanda" in swa_text, swa_text
+    assert "recorded" in eng_text.lower(), eng_text
+    forage.assert_clean(swa_text)
+    forage.assert_clean(eng_text)
+assert "nje ya eneo" in situations["outside"][0], situations["outside"][0]
+assert "kinaandaliwa" in situations["no_raster"][0], situations["no_raster"][0]
+assert "chanzo chochote" in situations["no_point"][0], situations["no_point"][0]
+# the "outside" answer must explain the paradox rather than deny the picture
+assert "picha ya satellite" in situations["outside"][0], situations["outside"][0]
+assert "hakifiki hapo bado" in situations["outside"][0], situations["outside"][0]
+print("no-data wording: three causes, three explanations, all recorded OK")
+
 # --- 10) the service must be REACHABLE, not merely correct ------------------
 # A herder does not read release notes: if the grazing ledger is not in the menu,
 # the number pad, the location path AND the map, it may as well not exist.

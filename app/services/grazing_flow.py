@@ -400,27 +400,102 @@ def better_patch(point_id: str | None, pin_lon: float, pin_lat: float,
             "walk_km": round(walk, 1), "quality": q, "direction": direction}
 
 
+def patch_candidates(lon: float, lat: float, species: str, interval: str,
+                     hint_id: str | None = None, limit: int = 4) -> list[str]:
+    """Water points to try for a tap, most plausible FIRST.
+
+    The order is the fix for a real complaint: a herder tapped a spot on the
+    satellite picture WE drew for him and was told "we have no satellite picture".
+    The page knows which raster it painted (`id=`), so that one is tried first — he
+    tapped pixels we showed him, so we read the same file. Only then do we guess
+    from the coordinates, because the nearest registered point is not necessarily
+    the one whose picture covers the tap: a brand-new point has no raster at all,
+    and its rings can still be the nearest thing on the map.
+    """
+    from app.config import get_species_rings
+    from app.services import water_reach
+
+    out: list[str] = []
+    if hint_id:
+        out.append(str(hint_id))
+
+    # the point the rest of the system would pick, exactly as before
+    pid, _how = water_source_for_pin(lon, lat, species, interval)
+    if pid:
+        out.append(str(pid))
+
+    # ...and neighbours, because the first guess may have no raster yet
+    try:
+        eff = get_species_rings().effective_radius_km(species, interval)
+        for c in water_reach.find_nearest_reachable_water(
+                lon, lat, species, limit=limit, effective_radius_km=eff):
+            out.append(str(c.water_source_id))
+    except Exception:  # noqa: BLE001
+        log.debug("reach lookup failed for candidates", exc_info=True)
+    try:
+        for n in water_reach.list_nearby_water_sources(lon, lat, limit=limit):
+            if n.get("id"):
+                out.append(str(n["id"]))
+    except Exception:  # noqa: BLE001
+        log.debug("nearby lookup failed for candidates", exc_info=True)
+
+    seen: set[str] = set()
+    final: list[str] = []
+    for candidate in out:
+        if candidate not in seen:
+            seen.add(candidate)
+            final.append(candidate)
+    return final[:limit]
+
+
+def sample_candidates(candidate_ids: list[str], lon: float, lat: float, *,
+                      sample_fn=None) -> tuple[object | None, str | None, str]:
+    """The first candidate whose raster can actually be READ at that spot.
+
+    Returns (sample, point_id, reason) with reason
+    "ok" | "outside" | "no_raster" | "no_point" — because a herder is owed the
+    difference between "we have not measured there", "the point near you is still
+    being built" and "there is no water point anywhere near that spot".
+    """
+    reasons: list[str] = []
+    for pid in candidate_ids:
+        if sample_fn is not None:
+            sample = sample_fn(pid, lon, lat)
+            if sample is not None:
+                return sample, pid, "ok"
+            reasons.append("outside")
+            continue
+        sample, why = forage.sample_patch_detailed(pid, lon, lat)
+        if sample is not None:
+            return sample, pid, "ok"
+        reasons.append("no_raster" if why == "no_overview" else "outside")
+    if not candidate_ids:
+        return None, None, "no_point"
+    return None, None, ("no_raster" if all(r == "no_raster" for r in reasons) else "outside")
+
+
 def analyse(phone: str, pastoralist, lat: float, lon: float, *,
-            sample_fn=None, guidance_fn=None,
+            point_id_hint: str | None = None, sample_fn=None, guidance_fn=None,
             temp_max_c: float | None = None):
     """Pin -> GrazingAdvice. Returns (advice|None, reason).
 
-    `reason` says WHY there is no advice ("no_point", "no_picture"), because "we
-    have nothing for that spot" and "something broke" deserve different words.
+    `reason` says WHY there is no reading, because the herder is owed the
+    difference: "no_point" (no water point registered anywhere near that spot),
+    "no_raster" (the point near him is still being built), "outside" (we measure
+    forage, but not that far). None of them means "no satellite picture" — the map
+    he was just looking at IS a satellite picture.
     """
     species = getattr(pastoralist, "primary_species", None) or "cattle"
     interval = getattr(pastoralist, "water_interval", None) or "daily"
     lang = _lang_key(pastoralist)
 
-    point_id, _how = water_source_for_pin(lon, lat, species, interval)
-    if not point_id:
-        return None, "no_point"
-    snapshot = snapshot_for(point_id)
-    sampler = sample_fn or forage.sample_patch
-    sample = sampler(point_id, lon, lat)
+    candidates = patch_candidates(lon, lat, species, interval, hint_id=point_id_hint)
+    sample, point_id, reason = sample_candidates(candidates, lon, lat, sample_fn=sample_fn)
     if sample is None:
-        return None, "no_picture"
+        log.info("grazing pin unreadable: reason=%s candidates=%d", reason, len(candidates))
+        return None, reason
 
+    snapshot = snapshot_for(point_id)
     quality = forage.quality_from_bands(
         sample.ndvi, sample.satvi, sample.bsi, sample.ndmi, snapshot_as_of=snapshot)
 
@@ -480,7 +555,8 @@ def _is_duplicate(phone: str) -> bool:
 
 
 def handle_pin(phone: str, pastoralist, lat: float, lon: float,
-               source: str = "pin", *, sample_fn=None, guidance_fn=None,
+               source: str = "pin", *, point_id_hint: str | None = None,
+               sample_fn=None, guidance_fn=None,
                temp_max_c: float | None = None) -> GrazingResult:
     """A grazing pin in, the answer out, the walk stored.
 
@@ -492,7 +568,8 @@ def handle_pin(phone: str, pastoralist, lat: float, lon: float,
     lang = _lang_key(pastoralist)
     species = getattr(pastoralist, "primary_species", None) or "cattle"
     try:
-        advice, reason = analyse(phone, pastoralist, lat, lon, sample_fn=sample_fn,
+        advice, reason = analyse(phone, pastoralist, lat, lon,
+                                 point_id_hint=point_id_hint, sample_fn=sample_fn,
                                  guidance_fn=guidance_fn, temp_max_c=temp_max_c)
     except Exception:  # noqa: BLE001
         log.exception("grazing analysis failed")
@@ -513,7 +590,7 @@ def handle_pin(phone: str, pastoralist, lat: float, lon: float,
                 manyatta_id=(existing or {}).get("id"),
                 pastoralist_id=getattr(pastoralist, "id", None), lang=lang)
         return GrazingResult(
-            ok=False, reason=reason, text=forage.no_data_message(lang),
+            ok=False, reason=reason, text=forage.no_data_message(lang, reason),
             ask_manyatta=ask_manyatta, point_id=None)
 
     duplicate = _is_duplicate(phone)
