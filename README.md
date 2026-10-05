@@ -292,9 +292,10 @@ The sender also records the note as the herder's last advisory point, so his rep
 
 The two things that thin a pastoral herd are the two things a herder cannot see from
 where he stands: how much forage is actually over the ridge, and what the walk there
-costs. So he pins where the herd grazed today — one tap on the location button we
-send, a place name, or a tap on `/mapview/?graze=1&t=<token>` — and gets back the
-grass reading and **the offsets that close the gap, free ones first**.
+costs. So he reports where the herd grazed today — **a map he can tap** (a CTA button
+whose message header *is* the map, opening the page with the pasture layer drawn so he
+sees where the grass is), or a location pin, or a place name — and gets back the grass
+reading and **the offsets that close the gap, free ones first**.
 
 **Two axes, never one number.** *Quantity* (can they fill up?) comes from SATVI
 biomass pushed through the intake-rate plateau — above ~450 kg/ha *utilisable* the

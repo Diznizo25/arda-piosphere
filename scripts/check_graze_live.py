@@ -20,6 +20,8 @@ The debug key comes from WHATSAPP_VERIFY_TOKEN in .env (the same guard the other
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 
 sys.path.insert(0, ".")
@@ -93,7 +95,33 @@ def main() -> int:
         print("\ninvariants: gaining -> no options; no drug words in any rendering OK")
 
         point = sys.argv[1] if len(sys.argv) > 1 else None
+
+        # The thing the herder actually TAPS: the map page in graze mode must come
+        # up WITH the pasture layer and the tap handler, or he is choosing where the
+        # herd grazed on a blank street map.
+        page = c.get(f"{base}/mapview/",
+                     params={"lat": 0.5669, "lon": 37.2402, "species": "cattle",
+                             "interval": "daily", "lang": "swa", "graze": 1,
+                             "t": "live-check", **({"id": point} if point else {})})
+        print(f"\n-- tap-the-map page (HTTP {page.status_code}) --")
+        raw = re.search(r"const D = (\{.*?\});\n", page.text, re.S)
+        data = json.loads(raw.group(1)) if raw else {}
+        overlay = data.get("overlay") or {}
+        print("graze mode:", data.get("graze"))
+        print("pasture layer:", {k: overlay.get(k) for k in ("available", "usable_pct")})
+        print("rings:", [r.get("species") for r in data.get("rings", [])])
+        print("tap handler:", "D.graze.endpoint" in page.text,
+              "| banner:", bool((data.get("text") or {}).get("g_hint")))
+        assert data.get("graze", {}).get("on") is True, "graze mode did not reach the page"
+        assert "D.graze.endpoint" in page.text, "the page cannot post the tapped spot"
+
         if point:
+            img = c.get(f"{base}/map/{point}.png",
+                        params={"lat": 0.5669, "lon": 37.2402, "species": "cattle",
+                                "pasture": 1, "lang": "swa", "v": 9})
+            print("map image (for the message header):", img.status_code,
+                  img.headers.get("content-type"), len(img.content), "bytes")
+
             r = c.post(f"{base}/dev/graze",
                        json={"water_source_id": point, "lat": 0.5669, "lon": 37.2402,
                              "species": "cattle", "head_count": 18, "walk_km": 8},

@@ -127,14 +127,28 @@ list is empty**. "Add nothing" is a required output of an honest advisor.
 
 ## The two ways to answer, and why there are two
 
-* **WhatsApp location pin** (one tap on the button we send) — the primary path: it
-  works on any phone, needs no typing and no map.
-* **Tap on the map** (`/mapview/?graze=1&t=<token>`) — for a herder who knows the
-  place by sight. The link carries a **48-hour token, never a phone number**, so a
-  forwarded link cannot become an answer for someone else's herd.
+* **A map he can tap** (the primary path): a CTA-URL button whose message header
+  **is the map picture**, opening `/mapview/?...&graze=1&t=<token>&id=<point>`.
+  The page is opened with the water point id, so it draws the species rings **and
+  the satellite pasture layer** — he has to SEE where the grass is while choosing,
+  not tap a blank street map. One tap on the spot posts it to `/grazing/pin`; the
+  answer arrives on WhatsApp, because the phone is where he keeps his record.
+* **A location pin** (the precision path, and the fallback): one tap on the
+  location button. It is his own GPS at the spot, so it is *more* precise than a
+  tap on a map — it is second only because reaching for 📎 → Location is a
+  gesture, while a button that says "Fungua ramani" is not.
 
-Both call the same flow, so a walk reported by tapping behaves identically to one
-reported by pin — one service, one set of bugs.
+Never both prompts: asking the same thing twice is how a herder learns to ignore
+us. The chain, when a payload is rejected — because that means he receives
+**nothing**, the one failure mode worse than an ugly message — is:
+CTA with the map as the image header → plain CTA → text carrying the URL → the
+one-tap location button. A place name in words ("niko Kipsing") is always
+accepted too, and the **manyatta** step stays a location pin on purpose: a
+homestead is a place the herd starts from, not a spot on a map, and it is asked
+exactly once.
+
+Both grazing routes call the same flow, so a walk reported by tapping behaves
+identically to one reported by pin — one service, one set of bugs.
 
 ## Probes
 
