@@ -117,6 +117,10 @@ ok, why = mentor.insight_ok(BASE, "Mpe dawa ya minyoo.", lang="swa")
 assert not ok and why.startswith("forbidden_word"), why
 ok, why = mentor.insight_ok(BASE, "## Malisho", lang="swa")
 assert not ok and why == "formatting", why
+# ...but a semicolon is prose, not a collapsed list: an insight may use one
+ok, why = mentor.insight_ok(BASE, "Leo mlipopanda mbali kwa nyasi kavu; hamia karibu na maji.",
+                            lang="swa")
+assert ok, why
 ok, why = mentor.insight_ok(BASE, "You grazed far on dry grass today.", lang="swa")
 assert not ok and why == "language_flipped", why
 print("insight guard: numbers optional but never invented, short, clean, same language OK")

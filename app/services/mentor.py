@@ -195,10 +195,14 @@ def insight_ok(base: str, insight: str, *, facts: dict | None = None,
     if lang in ("eng", "english") and _looks_swahili(insight):
         return False, "language_flipped"
 
-    if ";" in insight or "**" in insight or "`" in insight or "##" in insight:
-        return False, "formatting"
     if _urls(insight) - _urls(base):
         return False, "new_url"
+    # Markdown only. A semicolon is NOT a failure here: an insight is prose, and the
+    # semicolon rule belongs to the whole-text rewrite, where "a; b; c" is the sign of
+    # a model collapsing a data list into one line. Applying it here was rejecting
+    # perfectly good insights in both languages.
+    if "**" in insight or "`" in insight or "##" in insight:
+        return False, "formatting"
     if len([ln for ln in insight.splitlines() if ln.strip()]) > 5:
         return False, "too_many_lines"
     if len(insight) > max_chars:
