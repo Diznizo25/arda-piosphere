@@ -30,6 +30,7 @@ from app.services import (
     grazing_flow,
     map_renderer,
     manyattas,
+    mentor,
     pests,
     registration,
     speech,
@@ -1123,7 +1124,11 @@ def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
         _send_reply(phone, pastoralist,
                     PEST_NO_DATA[pastoralist.preferred_language], voice=voice)
         return
-    _send_reply(phone, pastoralist, pests.message(o, lang_key), voice=voice)
+    _send_reply(phone, pastoralist,
+                mentor.rewrite("pest", pests.message(o, lang_key),
+                               facts=mentor.pest_facts(o), lang=lang_key,
+                               max_chars=1000),
+                voice=voice)
     top = o.top
     if top is not None and top.rank >= pests.TIER_ORDER[pests.TIER_WATCH]:
         # Remember which window we asked about, so a bare "1"/"2" is an answer to
@@ -1190,6 +1195,14 @@ def _deliver_grazing_result(phone: str, pastoralist, res) -> None:
     lang = pastoralist.preferred_language
     voice = bool(getattr(pastoralist, "voice_replies", False))
     text = res.text or ""
+    if text and getattr(res, "advice", None) is not None:
+        # The mentor pass: the same facts, said the way a person who knows this
+        # rangeland would say them. Guarded — a rewrite that drops or invents a
+        # number, or loses a safety label, is thrown away and this text goes out
+        # (app/services/mentor.py).
+        text = mentor.rewrite("graze", text, facts=mentor.graze_facts(res.advice),
+                              lang="eng" if lang == "english" else "swa",
+                              max_chars=1100)
     button_text = grazing_flow.LOCATION_BUTTON[
         "english" if lang == "english" else "swahili"]
     try:
@@ -2202,6 +2215,15 @@ def _handle_greeting(phone: str, pastoralist, text: str, voice: bool = False) ->
         lines.append(f"Siku {away_days} zimepita tangu tulipoongea." if sw
                      else f"It has been {away_days} days since we last spoke.")
         lines.extend(_while_you_were_away(pastoralist, lang))
+    if lines:
+        # The mentor pass on the "what changed while you were away" lines: this is
+        # the clearest case of useful data reading like a report instead of a
+        # person. Questions and menus are deliberately NOT rewritten — a reworded
+        # question can break the one-tap answer it belongs to.
+        joined = mentor.rewrite("water", "\n".join(lines),
+                                facts=mentor.water_facts(), lang=lang,
+                                max_chars=500)
+        lines = joined.splitlines()
     _send_reply(phone, pastoralist, "\n".join(lines), voice=voice)
     _show_menu(phone, pastoralist)
     return True

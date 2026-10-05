@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     # a rephrase is only sent when it passes the structural guard in ai.py.
     advisory_rephrase_enabled: bool = True
 
+    # The mentor pass (app/services/mentor.py): every service's message may be
+    # rewritten by the model into plain mentor language, but ONLY if the rewrite
+    # keeps every number, every safety label and the language — see that module's
+    # guard. Off here means the deterministic text goes out unchanged.
+    mentor_insights_enabled: bool = True
+
     # Azure AI Speech — for transcribing herders' WhatsApp voice notes.
     azure_speech_key: str = ""
     azure_speech_region: str = ""

@@ -307,6 +307,64 @@ async def graze_probe(request: Request, x_debug_key: str = Header(default="")) -
     }
 
 
+@router.post("/mentor")
+async def mentor_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """Show the mentor rewrite SIDE BY SIDE with the deterministic data text.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Body:
+      {"kind": "graze|pest|water|note", "text": "<the data message>",
+       "facts": {...}, "lang": "swa|eng"}
+
+    or, to generate the data text from real data:
+      {"kind": "pest", "water_source_id": "<uuid>", "lang": "swa"}
+
+    Returns both texts, whether the rewrite was actually used (`changed`), and the
+    guard's reason when it was not — so the wording is reviewable as wording, and a
+    rejected rewrite is visible rather than silent.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    from app.services import mentor, pests
+
+    payload = await request.json()
+    kind = str(payload.get("kind") or "default")
+    lang = str(payload.get("lang") or "swa")
+    base = str(payload.get("text") or "")
+    facts = payload.get("facts") or {}
+
+    if not base and kind == "pest":
+        point_id = payload.get("water_source_id")
+        if not point_id and payload.get("phone"):
+            from app.services.pastoralists import get_water_source
+
+            point_id = (get_water_source(payload["phone"]) or {}).get("id")
+        if not point_id:
+            return {"ok": False, "error": "water_source_id or phone is required"}
+        o = pests.outlook_for_point(point_id)
+        if o is None:
+            return {"ok": False, "error": "no environment series for that point"}
+        base = pests.message(o, lang)
+        facts = mentor.pest_facts(o)
+
+    if not base.strip():
+        return {"ok": False, "error": "give text, or kind=pest plus a water point"}
+
+    out = mentor.rewrite(kind, base, facts=facts, lang=lang)
+    ok, why = mentor.insight_ok(base, out, lang=lang)
+    return {
+        "ok": True,
+        "kind": kind,
+        "lang": lang,
+        "changed": out != base,
+        "guard": why or "ok",
+        "enabled": bool(get_settings().mentor_insights_enabled),
+        "base": base,
+        "mentor": out,
+    }
+
+
 @router.post("/pest")
 async def pest_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
     """Show the pest/parasite windows and the exact message a herder would get.

@@ -194,6 +194,9 @@ def main() -> int:
                         help="cap the number of herders processed")
     parser.add_argument("--phone", help="only this herder (for a careful test)")
     parser.add_argument("--week", help="week start date (YYYY-MM-DD), for replays")
+    parser.add_argument("--mentor", action="store_true",
+                        help="rewrite each note in the mentor voice (one model call "
+                             "PER HERDER — opt in deliberately, with --limit first)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -224,6 +227,20 @@ def main() -> int:
             log.exception("note build failed for %s (skipped)", phone)
             failed += 1
             continue
+
+        if args.mentor:
+            # Opt-in, and off by default, because this is ONE model call per herder:
+            # a run for 500 herders is 500 calls. The guard inside mentor.rewrite is
+            # what makes the batch safe (any rewrite that loses a number or a safety
+            # label is dropped and the built note is sent instead).
+            try:
+                from app.services import mentor
+
+                body = mentor.rewrite("note", body, facts={"kind": "weekly_note"},
+                                      lang=lang, max_chars=700)
+            except Exception:  # noqa: BLE001
+                log.exception("mentor rewrite failed for %s (deterministic note kept)",
+                              phone)
 
         if _already_handled(phone, week_start):
             already += 1
