@@ -254,6 +254,7 @@ assert "mentor" not in grazing_src, "questions/prompts stay deterministic"
 
 dev = io.open(root / "app/routers/dev.py", encoding="utf-8").read()
 assert '@router.post("/mentor")' in dev, "no /dev/mentor probe to review the wording"
+assert "insight_with_reason" in dev, "a rejected insight must be diagnosable, not silent"
 cfg = io.open(root / "app/config.py", encoding="utf-8").read()
 assert "mentor_insights_enabled" in cfg
 note = io.open(root / "scripts/send_weekly_note.py", encoding="utf-8").read()

@@ -206,37 +206,53 @@ def insight_ok(base: str, insight: str, *, facts: dict | None = None,
     return True, ""
 
 
-def insight(kind: str, base_text: str, *, facts: dict | None = None,
-            lang: str = "swa", max_chars: int = 420) -> str:
-    """A short mentor insight from the computed facts — or "" (fail-open).
+def insight_with_reason(kind: str, base_text: str, *, facts: dict | None = None,
+                        lang: str = "swa",
+                        max_chars: int = 420) -> tuple[str, str]:
+    """(insight, reason) — the insight that may lead the message, and why not.
 
-    This is the piece that answers "the data is right but nobody talks like that":
-    two to four sentences that say what today MEANS, with the figures left to the
-    data block underneath rather than crammed into the sentence.
+    A rejection has to be visible rather than silent: "no_reply" (the model answered
+    nothing), "disabled" (the switch), "no_text" (nothing to lead), or the guard's own
+    reason. That is how a Swahili insight that keeps failing gets diagnosed instead of
+    quietly never appearing.
     """
     base = base_text or ""
+    if not base.strip():
+        return "", "no_text"
     settings = get_settings()
-    if not base.strip() or not getattr(settings, "mentor_insights_enabled", True):
-        return ""
+    if not getattr(settings, "mentor_insights_enabled", True):
+        return "", "disabled"
     payload = json.dumps(facts or {}, ensure_ascii=False, default=str)
     if len(payload) > 2500:
         payload = payload[:2500]
     system = (
         build_system(kind, lang)
-        + "\n\nNOW: write ONLY a short insight — 2 to 4 short sentences, at most 5 "
-          "lines, no lists, no headings, no numbers of your own. Use a figure only if "
-          "it is in FACTS or TEXT and it helps him decide. Say what today means and "
-          "the one thing to do first. The figures themselves are printed under your "
-          "words, so do not repeat them all."
+        + "\n\nNOW: write ONLY a short insight — one short paragraph, at most 3 "
+          "sentences, no line breaks, no lists, no headings, and keep it under 300 "
+          "characters. Use a figure only if it is in FACTS or TEXT and it helps him "
+          "decide. Say what today means and the one thing to do first. The figures "
+          "themselves are printed under your words, so do not repeat them all."
     )
     out = ai._chat(system, f"FACTS={payload}\n\nTEXT:\n{base}")
     if not out:
-        return ""
+        return "", "no_reply"
     ok, why = insight_ok(base, out, facts=facts, lang=lang, max_chars=max_chars)
     if not ok:
         log.warning("mentor insight rejected (%s) - sending the data text alone", why)
-        return ""
-    return out.strip()
+        return "", why
+    return out.strip(), "ok"
+
+
+def insight(kind: str, base_text: str, *, facts: dict | None = None,
+            lang: str = "swa", max_chars: int = 420) -> str:
+    """A short mentor insight from the computed facts — or "" (fail-open).
+
+    This is the piece that answers "the data is right but nobody talks like that":
+    a few sentences that say what today MEANS, with the figures left to the data
+    block underneath rather than crammed into the sentence.
+    """
+    return insight_with_reason(kind, base_text, facts=facts, lang=lang,
+                               max_chars=max_chars)[0]
 
 
 def compose(lead: str, base_text: str) -> str:

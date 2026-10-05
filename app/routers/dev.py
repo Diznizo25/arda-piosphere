@@ -355,8 +355,7 @@ async def mentor_probe(request: Request, x_debug_key: str = Header(default="")) 
     # reviewable: the insight that leads the message (numbers optional, never
     # invented), and the whole-text rewrite (every number kept, for prose services
     # where the text is already a message rather than a data table).
-    lead = mentor.insight(kind, base, facts=facts, lang=lang)
-    lead_ok, lead_why = mentor.insight_ok(base, lead or "", facts=facts, lang=lang)
+    lead, lead_why = mentor.insight_with_reason(kind, base, facts=facts, lang=lang)
     out = mentor.rewrite(kind, base, facts=facts, lang=lang)
     ok, why = mentor.rephrase_ok(base, out, lang=lang) if out != base else (True, "ok")
     return {
@@ -366,7 +365,7 @@ async def mentor_probe(request: Request, x_debug_key: str = Header(default="")) 
         "enabled": bool(get_settings().mentor_insights_enabled),
         "base": base,
         "insight": lead,
-        "insight_guard": (lead_why or "ok") if lead else f"rejected:{lead_why or 'none'}",
+        "insight_reason": lead_why,
         "message": mentor.compose(lead, base),
         "rewrite": out,
         "rewrite_used": out != base,
