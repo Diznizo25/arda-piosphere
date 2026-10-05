@@ -52,6 +52,10 @@ def _t(lang: str) -> dict:
             "s_dry": "dry (reported)", "s_broken": "broken (reported)",
             "s_gone": "gone (reported)", "s_unknown": "not confirmed",
             "mapBase": "Map", "satBase": "Satellite",
+            "g_hint": "Tap where they grazed today — I will send the grass figures and what to add to WhatsApp.",
+            "g_sending": "Sending…",
+            "g_sent": "Thank you! The answer has been sent to WhatsApp.",
+            "g_fail": "That did not work. Open the link again from WhatsApp.",
         }
     return {
         "title": "Ramani hai — malisho na maji",
@@ -74,6 +78,11 @@ def _t(lang: str) -> dict:
         "s_dry": "imekauka (taarifa)", "s_broken": "imeharibika (taarifa)",
         "s_gone": "haipo tena (taarifa)", "s_unknown": "haijathibitishwa",
         "mapBase": "Ramani", "satBase": "Satellite",
+        # Grazing-ledger mode (opened from WhatsApp with graze=1&t=<token>).
+        "g_hint": "Gusa mahali mlipopanda leo — nitatuma hesabu ya malisho na nyongeza kwenye WhatsApp.",
+        "g_sending": "Inatuma…",
+        "g_sent": "Asante! Jibu limekutumwa kwenye WhatsApp.",
+        "g_fail": "Imeshindikana. Fungua link tena kutoka WhatsApp.",
     }
 
 
@@ -231,10 +240,16 @@ def mapview_page(
     name: str | None = Query(default=None, description="herder display label override"),
     focus: int = Query(default=0,
                        description="focus=1: zoom to the water point's rings/pasture"),
+    graze: int = Query(default=0,
+                       description="graze=1: tap-to-pin mode for the grazing ledger"),
+    t: str | None = Query(default=None, description="graze token (see /grazing/pin)"),
 ) -> HTMLResponse:
     try:
         data = _payload(lat, lon, species, interval, id, numbered, name, lang)
         data["focus"] = 1 if focus else 0
+        # Grazing-ledger mode. The token identifies the herder to /grazing/pin
+        # WITHOUT a phone number ever appearing in a URL that gets forwarded.
+        data["graze"] = {"on": bool(graze), "token": t or "", "endpoint": "/grazing/pin"}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"mapview failed: {e}") from e
     html = _PAGE_TEMPLATE.replace("__DATA__", json.dumps(data, ensure_ascii=False))
@@ -531,6 +546,39 @@ document.body.addEventListener('click', function (ev) {
     }
   }
 });
+
+// --- grazing ledger: tap the spot they grazed today -------------------------
+// Only in graze mode (how the link from WhatsApp arrives). The tap goes to
+// /grazing/pin with a short-lived token — never a phone number — and the ANSWER
+// comes back on WhatsApp, because the phone is where a herder keeps his record.
+if (D.graze && D.graze.on && D.graze.token) {
+  const bar = document.createElement('div');
+  // Neutral chrome, NOT green: on this map green means pasture quality and
+  // nothing else (scripts/test_map_palette.py enforces it). An instruction banner
+  // in green would tell a herder "this is good grass" while asking him for input.
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:1000;background:#0f172a;' +
+    'color:#fff;font:700 14px/1.35 system-ui,sans-serif;padding:10px 12px;text-align:center';
+  bar.textContent = TXT.g_hint || 'Tap where they grazed today';
+  document.body.appendChild(bar);
+  let marker = null, busy = false;
+  map.on('click', function (ev) {
+    if (busy) return;
+    busy = true;
+    if (marker) map.removeLayer(marker);
+    // The spot he marks is geometry, so it claims no hue either: white dot, dark
+    // ring — readable over OSM and satellite tiles alike.
+    marker = L.circleMarker(ev.latlng, {radius: 9, color: '#0f172a', weight: 3,
+      fillColor: '#ffffff', fillOpacity: 0.85}).addTo(map);
+    bar.textContent = TXT.g_sending || 'Sending...';
+    fetch(D.graze.endpoint, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lat: ev.latlng.lat, lon: ev.latlng.lng, token: D.graze.token})
+    }).then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { bar.textContent = TXT.g_sent || 'Sent'; })
+      .catch(() => { bar.textContent = TXT.g_fail || 'Failed'; })
+      .finally(() => { busy = false; });
+  });
+}
 
 // Zoom so everyone is on screen; on a focused water point, fit its rings
 // (pasture colour always stays inside the widest ring, so this shows it all).

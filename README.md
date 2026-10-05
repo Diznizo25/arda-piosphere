@@ -288,6 +288,53 @@ link, and exactly one one-tap question. Three things it refuses to fake:
 The sender also records the note as the herder's last advisory point, so his reply
 `2` (imekauka) lands on the right water point instead of being ignored.
 
+## MALISHO YA LEO (where they grazed, what it was worth, what to add)
+
+The two things that thin a pastoral herd are the two things a herder cannot see from
+where he stands: how much forage is actually over the ridge, and what the walk there
+costs. So he pins where the herd grazed today — one tap on the location button we
+send, a place name, or a tap on `/mapview/?graze=1&t=<token>` — and gets back the
+grass reading and **the offsets that close the gap, free ones first**.
+
+**Two axes, never one number.** *Quantity* (can they fill up?) comes from SATVI
+biomass pushed through the intake-rate plateau — above ~450 kg/ha *utilisable* the
+animal's appetite is the only limit, below ~120 it cannot harvest enough whatever the
+hours. *Quality* (does the fill carry energy?) comes from curing stage and greenness,
+9.5 MJ/kg DM green down to 4.5 bare. That seam is the whole point: **"wanashiba lakini
+wanapungua"** — full and still losing — is the state the herder cannot see for himself.
+
+**The ledger, per head per day:** maintenance (0.53 MJ ME/kg^0.75) × (1 + activity
+15% + heat 8% per 5 °C above 30 °C) + locomotion (2 J/kg/m) against intake
+(body weight × DMI% × harvest-factor × ME-density). Distance is *not* the same as
+energy, and the honest gaps are named: slope is **not computed** (`terrain_factor` is
+1.0 on purpose), browse is invisible to the satellite, and body weight is a declared
+class default until the weighing model clears its gate.
+
+**Free first, then cheap, then costed, then the exit:** move to a named patch (found
+in the same COG, measured from the same origin, and quantified in two parts — better
+grass +X MJ, shorter walk +Y MJ); water earlier; salt/mineral lick; energy supplement
+with its price and a warning when feed alone cannot close the gap; sell the finished
+animals. **When they are already gaining, the option list is empty** — "add nothing"
+is a required output.
+
+Every reading is a **band with the satellite date**, the band **widens where the sward
+is thin** and **collapses where it is rich**, and a deficit is only called when the
+whole band is negative — so a noisy reading never becomes "buy feed". No drug, no dose,
+no diagnosis, no body-weight claim: enforced by test, over every string in both
+languages including the voice summary. The manyatta (the homestead the walk starts
+from) is registered **once** from his own pin and never asked for again; without a
+picture for the pin we say so and still record the walk.
+
+Files: `app/services/forage.py` (the model), `grazing_flow.py` (pin → answer → stored
+walk, 48-hour map tokens that carry **no phone number**), `manyattas.py` (registry +
+`grazing_events` audit trail), `config/forage_energy.yaml` (every number, marked
+`needs_review`), `migrations/014_grazing_ledger.sql`, and `docs/grazing_ledger.md` for
+the science and the calibration plan (one-tap herder answers → quadrat clipping → a
+scale day). Probes: `POST /dev/graze` (synthetic indices or a real pin),
+`POST /grazing/pin` (the map tap). Tests: `scripts/test_forage.py`,
+`scripts/test_grazing.py`.
+
+
 **Where the rain fell is a sentence, not a shaded band.** The map stays as it is and
 instead gains a stamp of its own age (`malisho: picha ya 05 Sep - kadirio`). The
 reasoning: our rain data is a value *at a point*, so a band would claim spatial
@@ -651,6 +698,12 @@ The weekly note (migration 013): `pastoralists.last_inbound_at` (WhatsApp's 24-h
 window, so we know who can legally receive a free-form message) and `weekly_notes`
 (one row per herder per week, with `delivered` and `skipped_reason`).
 
+The grazing ledger (migration 014): `manyattas` (the homestead the walk starts from —
+registered once from his own pin, plus `pastoralists.manyatta_id`), `grazing_events`
+(every walk, with its bands, its per-head ledger, the snapshot date it was read from,
+the advice given, and the herder's own one-tap grade of the same patch), and
+`graze_tokens` (short-lived, phone-number-free tokens behind the tap-on-the-map link).
+
 Migrations are applied with `python scripts/apply_migration.py migrations/<file>.sql`
 (`--check <tag>` verifies a migration without applying anything).
 
@@ -681,7 +734,11 @@ Checks & debugging:
   `test_water_loop.py` (queue digits, fan-out rules, repair keywords),
   `test_pests.py` (window thresholds, the moisture gate, and the no-drug /
   no-diagnosis boundary), `test_weekly_note.py` (note shape, 24-hour window,
-  once-a-week rule), `test_conversation_flows.py` (end-to-end WhatsApp flows)
+  once-a-week rule), `test_forage.py` (the grazing ledger: bands, the conservative
+  verdict, free-first offsets, the no-drug / no-body-weight boundary),
+  `test_grazing.py` (the flow: empty states, dedupe, ask-the-manyatta-once,
+  two-messages-max, token-only map endpoint), `test_conversation_flows.py`
+  (end-to-end WhatsApp flows)
 
 Deployment & scheduling:
 - `trigger_render_deploy.py`, `trigger_build_workflow.py`,

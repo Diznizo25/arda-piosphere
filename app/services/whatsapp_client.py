@@ -158,6 +158,42 @@ def send_interactive_payload(payload: dict) -> None:
     _post(payload)
 
 
+def send_location_request(to: str, body: str, button_text: str) -> bool:
+    """A message whose single button opens the phone's location picker.
+
+    This is the whole reason the grazing ledger is usable: the herder does not
+    type coordinates, does not learn a command and does not need GPS skill — he
+    taps once and WhatsApp sends the pin WhatsApp already knows how to make.
+
+    Returns False when the API refuses the payload (older versions of the Cloud
+    API reject `location_request_message`), and every caller falls back to plain
+    text, because a rejected interactive message means the herder receives
+    NOTHING — the one failure mode that is strictly worse than an ugly message.
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "location_request_message",
+            "body": {"text": body},
+            "action": {
+                "name": "send_location",
+            },
+        },
+    }
+    try:
+        _post(payload)
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("location-request message rejected - falling back to text")
+        try:
+            send_text(to, f"{body}\n\n[{button_text}]")
+        except Exception:  # noqa: BLE001
+            log.exception("text fallback for location request also failed")
+        return False
+
+
 def send_menu_list(to: str, body: str, button_text: str,
                     sections: list[tuple[str, list[tuple[str, str, str | None]]]],
                     footer: str | None = None, header: str | None = None) -> None:

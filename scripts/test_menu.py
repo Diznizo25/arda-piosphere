@@ -110,10 +110,11 @@ try:
     for service in sorted(set(wa.SERVICE_ALIASES.values()) | set(wa.MENU_NUMBERS.values())):
         assert f'"{service}"' in body, f"_run_service has no branch for {service!r}"
 
-    # Legacy numbers keep their original meanings.
+    # Legacy numbers keep their original meanings (11 is the grazing ledger, added
+    # last so nothing a herder already learned has moved).
     assert wa.MENU_NUMBERS == {"1": "location", "2": "pin", "3": "weight", "4": "herd",
                                "5": "map", "6": "status", "7": "voice", "8": "rain",
-                               "9": "language", "10": "pest"}, wa.MENU_NUMBERS
+                               "9": "language", "10": "pest", "11": "graze"}, wa.MENU_NUMBERS
     # The text fallback must still list every number.
     for num in wa.MENU_NUMBERS:
         for lang in ("swahili", "english"):

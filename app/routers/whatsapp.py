@@ -26,7 +26,10 @@ from app.services import (
     ai,
     build_tracker,
     conversation,
+    forage,
+    grazing_flow,
     map_renderer,
+    manyattas,
     pests,
     registration,
     speech,
@@ -107,6 +110,16 @@ LANGUAGE_KEYWORDS = {
 MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
+
+# MALISHO YA LEO — the grazing ledger. The words a herder uses for "I am telling
+# you where we grazed today", kept NARROW on purpose: "malisho" alone is also how
+# he asks for the pasture map, and stealing that request to serve this one would
+# break a habit he already has.
+GRAZE_KEYWORDS = [
+    "malisho ya leo", "malisho leo", "nilipanda", "nimepanda", "tulipanda",
+    "walipanda", "malisho ya jana", "nililisha", "nimefuga",
+    "grazing today", "grazed today", "where they grazed", "today's grazing",
+]
 
 # Parasites and pests of LIVESTOCK, in the words a herder uses: kupe (ticks),
 # minyoo (worms), vidonda (wounds), kwato (hooves). "Wadudu" is the generic word for
@@ -350,6 +363,7 @@ MENU_SECTIONS = [
         ("svc:rain", "🌧 Mvua", "Hali ya mvua na ukame karibu nawe"),
         ("svc:animals", "🐄 Wanyama", "Pima uzito wa mnyama au kadiria kundi"),
         ("svc:place", "📍 Eneo langu", "Tuma eneo upate taarifa za malisho"),
+        ("svc:graze", "🌿 Malisho ya leo", "Pin mlipopanda — nyongeza na gharama"),
     ]),
     ("Mipangilio", [
         ("svc:pin", "➕ Chanzo kipya", "Andikisha chanzo kipya cha maji"),
@@ -365,6 +379,7 @@ MENU_SECTIONS_EN = [
         ("svc:rain", "🌧 Rain", "Rain and drought outlook near you"),
         ("svc:animals", "🐄 Animals", "Weigh one animal or estimate the herd"),
         ("svc:place", "📍 My area", "Share a location for pasture info"),
+        ("svc:graze", "🌿 Grazing today", "Pin where you grazed — feed and cost"),
     ]),
     ("Settings", [
         ("svc:pin", "➕ New water point", "Register a new water point"),
@@ -396,6 +411,7 @@ SERVICE_ALIASES = {
     "svc:rain": "rain",
     "svc:animals": "animals",
     "svc:place": "location",
+    "svc:graze": "graze",
     "svc:pin": "pin",
     "svc:status": "status",
     "svc:voice": "voice",
@@ -414,7 +430,8 @@ MENU_MSG = {
                "3. ⚖️ UZITO — pima uzito wa mnyama\n"
                "4. 🐄 HERD — kadiria uzito wa kundi\n"
                "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
-               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n\n"
+               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n"
+               "11. 🌿 MALISHO YA LEO — pin mlipopanda; nyongeza na gharama\n\n"
                "Mipangilio:\n"
                "2. 📍 PIN — andikisha chanzo kipya cha maji\n"
                "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
@@ -429,7 +446,8 @@ MENU_MSG = {
                "3. ⚖️ WEIGHT — measure one animal\n"
                "4. 🐄 HERD — estimate the whole herd\n"
                "8. 🌧 RAIN — rain and drought outlook near you\n"
-               "10. 🔍 TICKS AND WORMS — check your animals\n\n"
+               "10. 🔍 TICKS AND WORMS — check your animals\n"
+               "11. 🌿 GRAZING TODAY — pin where they grazed; feed and cost\n\n"
                "Settings:\n"
                "2. 📍 PIN — register a new water point\n"
                "5. 🗺 MAP — map of the grazing zones\n"
@@ -443,7 +461,7 @@ MENU_MSG = {
 MENU_NUMBERS = {
     "1": "location", "2": "pin", "3": "weight", "4": "herd",
     "5": "map", "6": "status", "7": "voice", "8": "rain",
-    "9": "language", "10": "pest",
+    "9": "language", "10": "pest", "11": "graze",
 }
 
 WEIGHT_ANIMAL_BUTTONS = [
@@ -664,7 +682,11 @@ def _handle_message(message: dict) -> None:
         location = message["location"]
         update_last_location(phone, location["longitude"], location["latitude"])
         state, _ = conversation.get_state(phone)
-        if state and state.startswith("pin."):
+        if state in ("graze.await", "graze.manyatta"):
+            # The next pin is a GRAZING spot (or the manyatta, if that is what we
+            # asked for). Never route it to the water advisory by accident.
+            _handle_graze_location(phone, pastoralist, location)
+        elif state and state.startswith("pin."):
             _handle_active_flow(phone, pastoralist, None)
         elif state and state.startswith("onboarding."):
             if state == "onboarding.water":
@@ -961,6 +983,9 @@ def _handle_water_loop_state(phone: str, pastoralist, text: str,
     own question (the same rule every other flow follows).
     """
     state, data = conversation.get_state(phone)
+    if state == "graze.quality":
+        return _handle_graze_quality(phone, pastoralist, text, voice=voice,
+                                     data=data or {})
     if state not in ("water.queue", "pest.observe"):
         return False
     lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
@@ -1107,6 +1132,139 @@ def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
                                {"water_source_id": point["id"], "pest_key": top.key})
 
 
+def _handle_graze_request(phone: str, pastoralist) -> None:
+    """Start MALISHO YA LEO.
+
+    Two states, and the ORDER matters: without a manyatta we cannot measure the
+    walk, and every energy figure hangs off the walk — so the homestead is asked
+    for ONCE, first, and then never again. After that this is a single tap.
+    """
+    lang = pastoralist.preferred_language
+    try:
+        if manyattas.manyatta_for_phone(phone) is None:
+            grazing_flow.prompt_for_manyatta(phone, pastoralist)
+        else:
+            grazing_flow.prompt_for_pin(phone, pastoralist)
+    except Exception:  # noqa: BLE001
+        log.exception("grazing prompt failed")
+        whatsapp_client.send_text(phone, {
+            "swahili": "Tuma eneo lako (location) la mlipopanda leo, nikupe hesabu "
+                       "ya malisho na nyongeza.",
+            "english": "Send the location where they grazed today and I will give "
+                       "you the grass figures and what to add.",
+        }[lang])
+
+
+def _handle_graze_location(phone: str, pastoralist, location: dict) -> None:
+    """A pin arrived while we were waiting for a manyatta or a grazing spot."""
+    lon, lat = location["longitude"], location["latitude"]
+    try:
+        state, _ = conversation.get_state(phone)
+    except Exception:  # noqa: BLE001
+        state = None
+    try:
+        if state == "graze.manyatta":
+            res = grazing_flow.handle_manyatta(phone, pastoralist, lat, lon)
+        else:
+            res = grazing_flow.handle_pin(phone, pastoralist, lat, lon, source="pin")
+    except Exception:  # noqa: BLE001
+        log.exception("grazing pin handling failed")
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, {
+            "swahili": "Samahani, sikuweza kupima eneo hilo. Jaribu tena baadaye.",
+            "english": "Sorry, I could not read that spot. Please try again shortly.",
+        }[pastoralist.preferred_language])
+        return
+    _deliver_grazing_result(phone, pastoralist, res)
+
+
+def _deliver_grazing_result(phone: str, pastoralist, res) -> None:
+    """Send the ledger, then ONE interactive follow-up.
+
+    Two messages, never three: a herder who gets a wall of messages stops reading
+    them. When the manyatta is still unknown the single follow-up is the location
+    request (it is what makes every future answer sharper); otherwise it is the
+    one-tap grass question, the only thing here that grades our satellite reading
+    against his eyes.
+    """
+    lang = pastoralist.preferred_language
+    voice = bool(getattr(pastoralist, "voice_replies", False))
+    text = res.text or ""
+    button_text = grazing_flow.LOCATION_BUTTON[
+        "english" if lang == "english" else "swahili"]
+    try:
+        if getattr(res, "prompt_location", False):
+            whatsapp_client.send_location_request(phone, text, button_text)
+            return
+        if voice and getattr(res, "spoken", ""):
+            # Numbers to read AND numbers to hear: the spoken summary is what he
+            # listens to walking home, the text is what he can re-read.
+            _send_reply(phone, pastoralist, res.spoken, voice=True)
+            if text:
+                whatsapp_client.send_text(phone, text)
+        else:
+            _send_reply(phone, pastoralist, text, voice=voice)
+    except Exception:  # noqa: BLE001
+        log.exception("grazing reply failed (non-fatal)")
+
+    if getattr(res, "ask_manyatta", False):
+        try:
+            whatsapp_client.send_location_request(
+                phone,
+                {"swahili": "Niambie eneo la manyatta yako ili nipime umbali vizuri "
+                            "kila siku — mara moja tu.",
+                 "english": "Send your manyatta location so I can measure the walk "
+                            "properly — once only."}[lang],
+                button_text)
+        except Exception:  # noqa: BLE001
+            log.debug("manyatta request failed (non-fatal)", exc_info=True)
+        return
+
+    if getattr(res, "question", ""):
+        try:
+            whatsapp_client.send_quick_reply_buttons(
+                phone, res.question + _hint(lang), list(res.buttons))
+        except Exception:  # noqa: BLE001
+            log.debug("grass-quality question failed (non-fatal)", exc_info=True)
+
+
+def _handle_graze_quality(phone: str, pastoralist, text: str, voice: bool = False,
+                          data: dict | None = None) -> bool:
+    """The one-tap "how was the grass there?" answer.
+
+    This is the calibration loop for the whole biomass transfer function: the
+    herder's eyes against our index, on the exact patch he walked. A "fair" answer
+    is stored on the event but NOT written to ground_truth_reports, whose
+    report_type has only good/poor — forcing a middle into one of two buckets
+    would quietly corrupt the very set we are trying to build.
+    """
+    raw = (text or "").strip().lower()
+    if raw.startswith("gq:"):
+        raw = raw[3:]
+    quality = forage.quality_for_digit(raw)
+    if quality is None:
+        # Not an answer to our question: clear it and let the message be handled
+        # normally, so the herder is never trapped by a prompt of ours.
+        conversation.clear_state(phone)
+        return False
+    lang_key = "swa" if pastoralist.preferred_language == "swahili" else "eng"
+    try:
+        manyattas.set_event_quality(phone, quality)
+    except Exception:  # noqa: BLE001
+        log.debug("grazing quality store failed (non-fatal)", exc_info=True)
+    if quality in ("good", "poor"):
+        try:
+            record_ground_truth(
+                pastoralist, "pasture_good" if quality == "good" else "pasture_poor",
+                text, water_source_id=(data or {}).get("water_source_id"))
+        except Exception:  # noqa: BLE001
+            log.debug("pasture ground truth write failed (non-fatal)", exc_info=True)
+    conversation.clear_state(phone)
+    _send_reply(phone, pastoralist, forage.thanks_for_quality(quality, lang_key),
+                voice=voice)
+    return True
+
+
 def _service_note(phone: str, pastoralist, kind: str, **kwargs) -> None:
     """One-turn service answers that need no flow state (kept tiny on purpose)."""
     lang = pastoralist.preferred_language
@@ -1169,6 +1327,8 @@ def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> 
         _handle_rain_request(phone, pastoralist)
     elif service == "pest":
         _handle_pest_request(phone, pastoralist, voice=pastoralist.voice_replies)
+    elif service == "graze":
+        _handle_graze_request(phone, pastoralist)
     elif service == "language":
         _service_note(phone, pastoralist, "language")
     elif service == "menu":
@@ -1319,6 +1479,13 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
                 voice=voice,
             )
             return
+
+    # MALISHO YA LEO: where did they graze, what was the grass worth, and what
+    # closes the gap. Inbound-triggered on purpose — he asks, at the moment he
+    # knows the answer (he has just come back), so it costs us nothing to serve.
+    if any(k in text_lower for k in GRAZE_KEYWORDS):
+        _handle_graze_request(phone, pastoralist)
+        return
 
     # Pest & parasite check: the environmental conditions, where to look on the
     # animal, and one tap back. Never a diagnosis, never a treatment.

@@ -37,6 +37,16 @@ CHECKS = {
         ("column", "environment_daily", "humidity"),
         ("table", "pest_observations", None),
     ],
+    "013": [
+        ("column", "pastoralists", "last_inbound_at"),
+        ("table", "weekly_notes", None),
+    ],
+    "014": [
+        ("table", "manyattas", None),
+        ("column", "pastoralists", "manyatta_id"),
+        ("table", "grazing_events", None),
+        ("table", "graze_tokens", None),
+    ],
 }
 
 

@@ -1,0 +1,142 @@
+# Arda Link — MALISHO YA LEO (grazing ledger) parameters
+#
+# STATUS: needs_review — starting defaults, NOT yet calibrated. Nothing in this
+# file has been checked against a weighing scale, a clipped quadrat or a feed
+# analysis. That is why every number we show a herder is a BAND and every message
+# carries the satellite date and the word "kadirio" (estimate). The calibration
+# path is in docs/grazing_ledger.md: quadrat clipping (stratified by SATVI) to
+# replace `biomass`, a scale day + body condition scoring to replace `energy`.
+#
+# The one thing this file must never do is turn a rule of thumb into a fact. If a
+# value here is uncertain, it stays wide — a wide band that is honest beats a
+# narrow one that is wrong, because the herder spends real money on the advice.
+
+status: needs_review
+
+# --- body weight + how much dry matter an animal can put away ------------------
+# dmi_frac_dry is deliberately lower than dmi_frac_green: mature, cured grass is
+# high-fibre, so rumen fill caps intake well below what green forage allows. This
+# is the mechanism behind "full but losing" and it is the reason the ledger has a
+# quality axis at all.
+species:
+  cattle:
+    body_kg: 250
+    dmi_frac_green: 0.025
+    dmi_frac_dry: 0.018
+    km_per_hour: 4.0
+  shoat:
+    body_kg: 30
+    dmi_frac_green: 0.040
+    dmi_frac_dry: 0.028
+    km_per_hour: 4.5
+  camel:
+    body_kg: 420
+    dmi_frac_green: 0.025
+    dmi_frac_dry: 0.020
+    km_per_hour: 4.5
+
+# --- SATVI -> standing herbaceous biomass -------------------------------------
+# SATVI is the primary dry-forage signal for this system (see
+# advisory_logic.py), so it is also the right carrier for biomass: it was designed
+# to track total herbaceous cover over exposed soil in arid rangelands. The map
+# below is a straight two-point transfer function used UNTIL quadrat calibration
+# replaces it, and `uncertainty_pct` is carried into every message as the width of
+# the band.
+biomass:
+  satvi_min: 0.05          # at/below: effectively no herbaceous cover left
+  satvi_max: 0.40          # at/above: dense standing herbaceous cover
+  kg_ha_min: 60            # kg DM/ha at satvi_min
+  kg_ha_max: 2200          # kg DM/ha at satvi_max
+  uncertainty_pct: 45      # +/- on a single patch, uncalibrated
+
+# --- what the herd can actually take off the sward ----------------------------
+# utilisable = biomass x utilisation. Utilisation is what they can take TODAY
+# without wrecking the sward for the next visit, not the standing crop.
+#
+# UNITS MATTER HERE: the plateau values below are UTILISABLE kg/ha — the same
+# quantity the ledger compares them against. The published intake-rate plateaus
+# that every grazier observes are quoted in STANDING crop (roughly 1,000-1,500
+# kg/ha to fill up, under ~300-500 kg/ha to starve, green forage), and standing x
+# 0.25-0.35 utilisation gives the numbers below. Mixing the two units is the
+# mistake that would have made "gaining" unreachable on the best possible sward:
+# the animal would have been throttled to 85% of its appetite forever.
+utilisation:
+  green: 0.35
+  dry: 0.25
+  bare: 0.0
+  min_kg_ha_to_graze: 60    # utilisable: below this there is nothing to walk to
+  plateau_kg_ha_starve: 120 # utilisable: below this they cannot harvest enough
+  plateau_kg_ha_full: 450   # utilisable: at/above this, appetite is the only limit
+
+# --- forage condition -> energy density ---------------------------------------
+# Metabolisable energy per kg dry matter, by our existing ForageCondition labels
+# (advisory_logic.classify_forage_condition). Protein is a coarse flag ONLY — it
+# tells the wording which supplement to put first, it is never spoken as a number.
+# dry_curing exists because grass cut by a dry spell is the dangerous middle:
+# it still looks edible and is already losing energy.
+quality:
+  green_growing:  {me_mj_per_kg_dm: 9.5, protein: adequate,   label_swa: "nyasi mbichi inayokua", label_eng: "green growing grass"}
+  dry_curing:     {me_mj_per_kg_dm: 8.0, protein: borderline, label_swa: "nyasi inayokauka",     label_eng: "grass curing (drying)"}
+  dry_cured:      {me_mj_per_kg_dm: 6.3, protein: low,        label_swa: "nyasi kavu",           label_eng: "cured dry grass"}
+  bare_degraded:  {me_mj_per_kg_dm: 4.5, protein: low,        label_swa: "ardhi tupu",           label_eng: "bare ground"}
+  uncertain:      {me_mj_per_kg_dm: 7.0, protein: borderline, label_swa: "malisho (haijulikani)", label_eng: "forage (unclear)"}
+
+
+# --- the animal's side of the ledger ------------------------------------------
+# required = maintenance x (1 + activity + heat) + locomotion
+# Locomotion is kept separate from activity, so the round trip is never counted
+# twice: `activity` covers grazing, ruminating and shifting about, locomotion
+# covers the walk only.
+energy:
+  maintenance_mj_per_kg075: 0.53  # MJ ME / kg^0.75 / day (tropical zebu-type)
+  activity_frac: 0.15             # grazing + ruminating + postural
+  locomotion_j_per_kg_m: 2.0      # horizontal walking, ~2 kJ per kg per km
+  terrain_factor: 1.0             # hook for a DEM slope term — NOT computed yet,
+                                  # so it stays 1.0 and the docs say so out loud
+  heat:
+    threshold_c: 30               # above this, heat starts costing energy
+    pct_per_5c: 8                 # +8% of maintenance per 5 C over the threshold
+    max_pct: 30
+  balance_band_pct: 12            # inside +/- this we say "holding", not a verdict
+  walk_round_trip: true           # distance is manyatta -> patch -> back
+
+# --- offsets: free first, always ----------------------------------------------
+# Order matters and is deliberate: the cheapest thing that closes the gap is
+# offered before anything a herder must buy. A supplement that costs more than the
+# weight it adds is a loss, so nothing here is recommended without its cost, and
+# every price is a placeholder that the message labels as needing local confirmation.
+offset:
+  move_patch: true              # shorten the walk / better forage — costs nothing
+  water_earlier: true           # heat + a long watering interval suppress intake
+  mineral:
+    name_swa: "chumvi/mineral"
+    name_eng: "salt/mineral lick"
+    g_per_head_day: 50
+    price_ksh_per_kg: 120       # placeholder — confirm locally before trusting it
+    helps: ["dry_cured", "dry_curing", "bare_degraded"]
+  energy_feed:
+    name_swa: "nyongeza ya nishati"
+    name_eng: "energy supplement"
+    me_mj_per_kg_dm: 11.0       # maize germ / oilseed-cake class
+    price_ksh_per_kg: 55        # placeholder — confirm locally before trusting it
+    max_kg_per_head_day: 2.0
+  hay:
+    name_swa: "nyasi kavu (hay)"
+    name_eng: "hay"
+    me_mj_per_kg_dm: 7.0
+    price_ksh_per_kg: 25
+  sell_finished: true           # last resort: sell rather than feed a losing animal
+  sell_deficit_mj: 6.0          # deficit per head above which selling is offered
+
+# --- wording -------------------------------------------------------------------
+# The message must never sound more certain than the data. These strings travel
+# with every answer.
+disclaimer:
+  swa: "Kadirio kutoka satellite — si vipimo vya mnyama wako."
+  eng: "Satellite estimate — not a measurement of your animals."
+
+# Reused verbatim when there is no COG behind the pin: we say we do not know
+# instead of borrowing a number from somewhere else.
+no_data:
+  swa: "Hatuna picha ya satellite ya eneo hilo bado. Tumeandikisha mlipopanda."
+  eng: "We have no satellite picture for that area yet. We have recorded where you grazed."

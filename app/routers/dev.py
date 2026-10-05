@@ -177,6 +177,121 @@ async def landmark_probe(request: Request, x_debug_key: str = Header(default="")
     }
 
 
+@router.post("/graze")
+async def graze_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """MALISHO YA LEO on chosen numbers — the whole ledger, and the exact message.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Two modes:
+
+      * synthetic — {satvi, ndvi, bsi, ndmi, walk_km, species, head_count,
+                     temp_max_c, better:{satvi,ndvi,bsi,walk_km,direction}}:
+                     runs the pure rules on a season we are not in, so a threshold
+                     can be argued about without waiting for the right weather.
+      * real — {water_source_id (or phone) + lat + lon}: samples the stored COG
+                     exactly as WhatsApp would, and reports the snapshot date.
+
+    Returns the bands, the per-head ledger, every offset with its cost, and the
+    rendered message in both languages — so wording, economics and guardrails are
+    all reviewable without sending a thing to a herder.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    from app.services import forage
+
+    payload = await request.json()
+    species = payload.get("species") or "cattle"
+    head = int(payload.get("head_count") or 0)
+    walk = float(payload.get("walk_km") or 0.0)
+    temp = payload.get("temp_max_c")
+    source = "synthetic"
+    point_id = None
+
+    if payload.get("satvi") is not None:
+        quality = forage.quality_from_bands(
+            float(payload.get("ndvi", 0.12)), float(payload["satvi"]),
+            float(payload.get("bsi", 0.12)), payload.get("ndmi"),
+            snapshot_as_of=payload.get("snapshot"))
+    else:
+        point_id = payload.get("water_source_id")
+        if not point_id and payload.get("phone"):
+            from app.services.pastoralists import get_water_source
+
+            point = get_water_source(payload["phone"])
+            point_id = (point or {}).get("id")
+        lat, lon = payload.get("lat"), payload.get("lon")
+        if not point_id or lat is None or lon is None:
+            return {"ok": False,
+                    "error": "give satvi (synthetic) or water_source_id+lat+lon (real)"}
+        sample = forage.sample_patch(point_id, float(lon), float(lat))
+        if sample is None:
+            return {"ok": False, "error": "no COG covers that point/pin"}
+        from app.services.grazing_flow import snapshot_for
+
+        quality = forage.quality_from_bands(
+            sample.ndvi, sample.satvi, sample.bsi, sample.ndmi,
+            snapshot_as_of=snapshot_for(point_id))
+        source = "satellite"
+
+    better = None
+    bp = payload.get("better")
+    if isinstance(bp, dict) and bp.get("satvi") is not None:
+        bq = forage.quality_from_bands(
+            float(bp.get("ndvi", 0.4)), float(bp["satvi"]),
+            float(bp.get("bsi", 0.08)), bp.get("ndmi"),
+            snapshot_as_of=quality.snapshot_as_of)
+        better = {"quality": bq, "walk_km": float(bp.get("walk_km") or walk * 0.5),
+                  "direction": bp.get("direction")}
+
+    advice = forage.advise(
+        quality, species=species, head_count=head, walk_distance_km=walk,
+        temp_max_c=temp, from_manyatta=bool(payload.get("from_manyatta")),
+        better=better, lang="swa")
+    led = advice.ledger
+    text_swa = forage.message(advice, "swa")
+    text_eng = forage.message(advice, "eng")
+    return {
+        "ok": True,
+        "source": source,
+        "water_source_id": point_id,
+        "quality": {
+            "condition": quality.condition,
+            "label_swa": quality.label_swa,
+            "curing": quality.curing,
+            "protein": quality.protein,
+            "me_mj_per_kg_dm": quality.me_mj_per_kg_dm,
+            "biomass_lo_kg_ha": quality.biomass_lo_kg_ha,
+            "biomass_hi_kg_ha": quality.biomass_hi_kg_ha,
+            "utilisable_lo_kg_ha": quality.utilisable_lo_kg_ha,
+            "utilisable_hi_kg_ha": quality.utilisable_hi_kg_ha,
+            "snapshot_as_of": quality.snapshot_as_of,
+        },
+        "ledger": {
+            "walk_km": led.walk_km, "walk_hours": led.walk_hours,
+            "body_kg": led.body_kg, "head_count": led.head_count,
+            "maintenance_mj": led.maintenance_mj, "activity_mj": led.activity_mj,
+            "locomotion_mj": led.locomotion_mj, "heat_mj": led.heat_mj,
+            "required_mj": led.required_mj, "intake_kg_dm": led.intake_kg_dm,
+            "intake_mj": led.intake_mj, "harvest": led.harvest,
+            "balance_mj": led.balance_mj, "balance_lo_mj": led.balance_lo_mj,
+            "balance_hi_mj": led.balance_hi_mj, "verdict": led.verdict,
+        },
+        "options": [
+            {"code": o.code, "free": o.free, "recommended": o.recommended,
+             "title_swa": o.title_swa, "saves_mj": o.saves_mj,
+             "kg_per_head": o.kg_per_head,
+             "cost_per_head_ksh": o.cost_per_head_ksh,
+             "herd_cost_ksh": o.herd_cost_ksh}
+            for o in advice.options],
+        "message_swa": text_swa,
+        "message_eng": text_eng,
+        "spoken_swa": forage.spoken_summary(advice, "swa"),
+        "spoken_eng": forage.spoken_summary(advice, "eng"),
+        "guardrails": "clean (no drug, no dose, no diagnosis, no body-weight claim)",
+    }
+
+
 @router.post("/pest")
 async def pest_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
     """Show the pest/parasite windows and the exact message a herder would get.
