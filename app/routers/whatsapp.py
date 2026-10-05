@@ -1124,11 +1124,20 @@ def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
         _send_reply(phone, pastoralist,
                     PEST_NO_DATA[pastoralist.preferred_language], voice=voice)
         return
-    _send_reply(phone, pastoralist,
-                mentor.voiced("pest", pests.message(o, lang_key),
-                              facts=mentor.pest_facts(o), lang=lang_key),
-                voice=voice)
     top = o.top
+    # The mentor is given the question the herder is ABOUT to be asked, so "what to do
+    # next" can be grounded in it. Without this the insight invents an adjacent action
+    # (measured live: it asked him to send a photo, which we never asked for).
+    facts = mentor.pest_facts(o)
+    try:
+        if top is not None and top.rank >= pests.TIER_ORDER[pests.TIER_WATCH]:
+            facts["next_question"] = pests.observation_question(top, lang_key)
+    except Exception:  # noqa: BLE001
+        log.debug("observation question unavailable for grounding", exc_info=True)
+    _send_reply(phone, pastoralist,
+                mentor.voiced("pest", pests.message(o, lang_key), facts=facts,
+                              lang=lang_key),
+                voice=voice)
     if top is not None and top.rank >= pests.TIER_ORDER[pests.TIER_WATCH]:
         # Remember which window we asked about, so a bare "1"/"2" is an answer to
         # THIS question and not to some other menu.
