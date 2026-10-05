@@ -351,17 +351,26 @@ async def mentor_probe(request: Request, x_debug_key: str = Header(default="")) 
     if not base.strip():
         return {"ok": False, "error": "give text, or kind=pest plus a water point"}
 
+    # Two ways the model may help, and the probe reports BOTH so the choice is
+    # reviewable: the insight that leads the message (numbers optional, never
+    # invented), and the whole-text rewrite (every number kept, for prose services
+    # where the text is already a message rather than a data table).
+    lead = mentor.insight(kind, base, facts=facts, lang=lang)
+    lead_ok, lead_why = mentor.insight_ok(base, lead or "", facts=facts, lang=lang)
     out = mentor.rewrite(kind, base, facts=facts, lang=lang)
-    ok, why = mentor.insight_ok(base, out, lang=lang)
+    ok, why = mentor.rephrase_ok(base, out, lang=lang) if out != base else (True, "ok")
     return {
         "ok": True,
         "kind": kind,
         "lang": lang,
-        "changed": out != base,
-        "guard": why or "ok",
         "enabled": bool(get_settings().mentor_insights_enabled),
         "base": base,
-        "mentor": out,
+        "insight": lead,
+        "insight_guard": (lead_why or "ok") if lead else f"rejected:{lead_why or 'none'}",
+        "message": mentor.compose(lead, base),
+        "rewrite": out,
+        "rewrite_used": out != base,
+        "rewrite_guard": why or "ok",
     }
 
 

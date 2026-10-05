@@ -51,7 +51,7 @@ GOOD = "\n".join([
     "Kadirio kutoka satellite — si vipimo vya mnyama wako.",
 ])
 
-ok, why = mentor.insight_ok(BASE, GOOD, lang="swa")
+ok, why = mentor.rephrase_ok(BASE, GOOD, lang="swa")
 assert ok, why
 
 cases = [
@@ -71,7 +71,7 @@ cases = [
     (GOOD + "\n" + ("nyasi " * 400), "too_long"),
 ]
 for text, expected in cases:
-    ok, why = mentor.insight_ok(BASE, text, lang="swa")
+    ok, why = mentor.rephrase_ok(BASE, text, lang="swa")
     assert not ok, f"the guard let through: {expected}"
     assert why.split(":")[0] == expected, (expected, why)
 
@@ -83,12 +83,43 @@ FLAT_BASE = "\n".join([
     "Ng'ombe wako 18 wanahitaji lita 400 kwa siku.",
     "Kadirio tu.",
 ])
-ok, why = mentor.insight_ok(FLAT_BASE, " ".join(FLAT_BASE.splitlines()), lang="swa")
+ok, why = mentor.rephrase_ok(FLAT_BASE, " ".join(FLAT_BASE.splitlines()), lang="swa")
 assert not ok and why == "flattened", why
-ok, why = mentor.insight_ok(FLAT_BASE, "\n".join(FLAT_BASE.splitlines()[:2]), lang="swa")
+ok, why = mentor.rephrase_ok(FLAT_BASE, "\n".join(FLAT_BASE.splitlines()[:2]), lang="swa")
 assert not ok and why.startswith("dropped_number"), why
 print("guard: empty, drug word, invented/dropped number, lost safety label, language flip,")
 print("       semicolon, colon run, markdown, new link, flattening, padding — all blocked OK")
+
+# --- 2b) the INSIGHT guard: fewer numbers allowed, none invented ------------
+lead = ("Mlipopanda mbali kwa nyasi kavu, hivyo wanashiba lakini wanapungua. "
+        "Kwanza hamia km 4 kaskazini — nyasi mbichi inayokua, bila gharama.")
+ok, why = mentor.insight_ok(BASE, lead, lang="swa")
+assert ok, why
+# a number that IS in the data may be quoted
+ok, why = mentor.insight_ok(BASE, "Leo mlipopanda km 14.0 kwa nyasi kavu. Hamia karibu.",
+                            lang="swa")
+assert ok, why
+# a number the data never produced is the one thing that must never pass
+ok, why = mentor.insight_ok(BASE, lead + " Wanaweza kupoteza kilo 30.", lang="swa")
+assert not ok and why.startswith("new_number"), why
+# ...unless it comes from the computed FACTS, which is where a fact may be quoted
+ok, why = mentor.insight_ok(BASE, "Upungufu ni 24 kwa kila mnyama.", lang="swa")
+assert ok, why
+ok, why = mentor.insight_ok(BASE, "Malisho yanatosha siku 9.", lang="swa",
+                            facts={"days_of_feed": 9})
+assert ok, why
+# an essay is not an insight
+ok, why = mentor.insight_ok(BASE, "\n".join(["mstari wa maelezo"] * 6), lang="swa")
+assert not ok and why == "too_many_lines", why
+ok, why = mentor.insight_ok(BASE, "nyasi " * 200, lang="swa")
+assert not ok and why == "too_long", why
+ok, why = mentor.insight_ok(BASE, "Mpe dawa ya minyoo.", lang="swa")
+assert not ok and why.startswith("forbidden_word"), why
+ok, why = mentor.insight_ok(BASE, "## Malisho", lang="swa")
+assert not ok and why == "formatting", why
+ok, why = mentor.insight_ok(BASE, "You grazed far on dry grass today.", lang="swa")
+assert not ok and why == "language_flipped", why
+print("insight guard: numbers optional but never invented, short, clean, same language OK")
 
 # --- 3) fail-open, twice over: no model, and a model that misbehaves ---------
 real_chat = mentor.ai._chat
@@ -137,6 +168,38 @@ finally:
     mentor.ai._chat = real_chat
 print("fail-open: no model, a misbehaving model, and the off switch all keep the text OK")
 
+# --- 3b) the insight path: fails open, and the FIGURES ALWAYS SHIP ----------
+INSIGHT = ("Mlipopanda mbali kwa nyasi kavu. Wanashiba lakini wanapungua. "
+           "Kwanza hamia km 4 kaskazini, kuna nyasi mbichi inayokua.")
+
+mentor.ai._chat = lambda system, user: None
+try:
+    assert mentor.insight("graze", BASE, lang="swa") == "", "no reply must mean no lead"
+    assert mentor.voiced("graze", BASE, lang="swa") == BASE, "and the data text alone"
+finally:
+    mentor.ai._chat = real_chat
+
+mentor.ai._chat = lambda system, user: INSIGHT
+try:
+    assert mentor.insight("graze", BASE, lang="swa") == INSIGHT
+    composed = mentor.voiced("graze", BASE, lang="swa")
+finally:
+    mentor.ai._chat = real_chat
+assert composed.startswith(INSIGHT), composed[:80]
+assert "———" in composed
+# The evidence block is the data text VERBATIM: an insight can never be the reason
+# a herder loses a figure, because the figures are still all there underneath it.
+assert composed.endswith(BASE), composed[-90:]
+assert mentor._nums(BASE) <= mentor._nums(composed)
+
+# an insight that invents a figure is dropped, and the data text goes alone
+mentor.ai._chat = lambda system, user: INSIGHT + " Wanaweza kupoteza kilo 30."
+try:
+    assert mentor.voiced("graze", BASE, lang="swa") == BASE
+finally:
+    mentor.ai._chat = real_chat
+print("insight: fails open, and the figures always ship verbatim underneath OK")
+
 # --- 4) the facts handed to the model come from the computed objects ---------
 from app.services import forage  # noqa: E402
 
@@ -174,16 +237,18 @@ print("facts: the ledger and the pest window are flattened for grounding OK")
 # --- 5) it is WIRED, and only where a rewrite is safe -----------------------
 root = pathlib.Path(__file__).resolve().parents[1]
 wa = io.open(root / "app/routers/whatsapp.py", encoding="utf-8").read()
-assert 'mentor.rewrite("graze"' in wa, "the grazing ledger is not mentor-voiced"
-assert 'mentor.rewrite("pest"' in wa, "the pest message is not mentor-voiced"
+assert 'mentor.insight("graze"' in wa and "mentor.compose(" in wa, \
+    "the grazing ledger is not mentor-led (insight + figures underneath)"
+assert 'mentor.voiced("pest"' in wa, "the pest message is not mentor-led"
 assert 'mentor.rewrite("water"' in wa, "the welcome-back insights are not mentor-voiced"
 # A question must never be rewritten: a reworded question breaks the one-tap answer
 # it belongs to (the state machine matches digits, and the herder answers what he read).
 import re  # noqa: E402
 
-for call in re.findall(r"mentor\.rewrite\((.{0,240}?)\)\n", wa, re.S):
-    assert "question" not in call.lower(), f"a question reached the mentor pass: {call[:80]}"
-assert "forage.quality_question" not in wa.split("mentor.rewrite")[1][:600]
+for call in re.findall(r"mentor\.(?:rewrite|insight|voiced|compose)\((.{0,240}?)\)\n", wa,
+                       re.S):
+    assert "question" not in call.lower(), f"a question reached the mentor: {call[:80]}"
+assert "forage.quality_question" not in wa.split("mentor.")[1][:800]
 grazing_src = io.open(root / "app/services/grazing_flow.py", encoding="utf-8").read()
 assert "mentor" not in grazing_src, "questions/prompts stay deterministic"
 

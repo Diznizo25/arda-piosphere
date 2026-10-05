@@ -15,7 +15,8 @@ allowed exactly one job: **say the same facts like a mentor.**
 (`ai.rephrase_advisory`); this layer generalises it to every service, because a model
 that can touch the pest message needs the pest boundary enforced somewhere.
 
-`mentor.insight_ok(base, out)` throws a rewrite away for any of these:
+`mentor.rephrase_ok(base, out)` (the whole-text guard) and `mentor.insight_ok(base,
+insight)` (the lead guard) throw a candidate away for any of these:
 
 | Way to lose | Why it matters |
 |---|---|
@@ -35,16 +36,52 @@ written to be read aloud — and the reason is logged. Fail-open is not a fallba
 here, it is the normal case: `mentor_rewrite rejected (dropped_number:4.3)` in the
 logs is the system working.
 
+## Two shapes, and why both exist
+
+The model may help in two ways, and using the wrong one is how the first version
+failed live: the grazing message is dense with figures (bands, mega-joules, prices),
+so a *whole-text* rewrite held to "keep every number" had nothing left to improve and
+was rejected — the herder kept reading a table.
+
+|  | `insight()` — 2–4 sentences | `rewrite()` — whole text |
+|---|---|---|
+| Use when | the text is a **data table** (the grazing ledger, the pest window) | the text is already **prose** (the welcome-back lines, the weekly note) |
+| Numbers | optional — and any number used must exist in the text or the facts | **every** number must survive |
+| Safety labels | not required, because the data text is sent underneath them | required (kadirio, a named vet) |
+| Length | ≤ 5 short lines / ~420 chars | ≤ 900 chars |
+| Guard | `insight_ok` | `rephrase_ok` |
+| On failure | the data text ships alone | the original ships |
+
+`voiced()` composes the insight **above** the data text:
+
+```
+Mlipopanda mbali kwa nyasi kavu, hivyo wanashiba lakini wanapungua.
+Kwanza hamia km 4 kaskazini, kuna nyasi mbichi inayokua.
+
+———
+🌿 MALISHO YA LEO
+📍 Mlipopanda ~km 14.0 kutoka manyatta yako
+…every figure, unchanged…
+```
+
+That composition is the second safety property, and the test asserts it literally:
+**the evidence block is the deterministic text verbatim.** An insight can use fewer
+numbers, but it can never be the reason a herder loses one — and because the labels
+travel with the figures they belong to, an insight cannot lose a label either.
+
+The voice reply speaks the **insight**, not the table: a voice note reading out
+mega-joules is noise, and those two sentences are what a herder acts on.
+
 ## Where it is applied — and where it deliberately is not
 
-| Service | Rewritten | Why |
+| Service | Shape | Why |
 |---|---|---|
-| Grazing ledger (`graze`) | yes | the whole point: bands and MJ are not how a herder thinks |
-| Pest windows (`pest`) | yes | conditions → "look here" reads best as advice |
-| Welcome-back lines (`water`) | yes | "what changed while you were away" is the clearest case of useful data reading like a report |
-| Water advisory | already was, by `ai.rephrase_advisory` — a stricter, distance-specific guard | it predates this layer; unifying the two guards is a follow-up, not an emergency |
+| Grazing ledger (`graze`) | insight + figures | bands and MJ are not how a herder thinks |
+| Pest windows (`pest`) | insight + figures | conditions → "look here" reads best as advice |
+| Welcome-back lines (`water`) | whole-text rewrite | already prose, and the clearest case of useful data reading like a report |
+| Water advisory | already was, via `ai.rephrase_advisory` (stricter, distance-specific) | it predates this layer; unifying the guards is a follow-up |
 | **Questions and menus** | **never** | a reworded question breaks the one-tap answer it belongs to: the state machine matches digits, and the herder answers what he *read* |
-| Weekly note | opt-in (`--mentor`) | one model call **per herder**: a 500-herder run is 500 calls, so it is never silently switched on |
+| Weekly note | whole-text rewrite, opt-in (`--mentor`) | one model call **per herder**: a 500-herder run is 500 calls, never silently on |
 
 ## The voice
 
@@ -61,8 +98,10 @@ POST /dev/mentor   X-Debug-Key: <WHATSAPP_VERIFY_TOKEN>
   {"kind":"pest","water_source_id":"<uuid>","lang":"swa"}      # builds the text for you
 ```
 
-Returns `base`, `mentor`, `changed` and the guard's `guard` reason — both texts side
-by side, so the wording is reviewable as wording.
+Returns `base`, `insight` (+ `insight_guard`), the composed `message` a herder would
+receive, and the whole-text `rewrite` (+ `rewrite_used`, `rewrite_guard`) — so the
+wording is reviewable as wording, and a rejection is visible rather than silent.
+`scripts/check_mentor_live.py` prints all three side by side against production.
 
 ## The switch
 

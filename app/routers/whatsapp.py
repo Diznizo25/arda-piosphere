@@ -1125,9 +1125,8 @@ def _handle_pest_request(phone: str, pastoralist, voice: bool = False) -> None:
                     PEST_NO_DATA[pastoralist.preferred_language], voice=voice)
         return
     _send_reply(phone, pastoralist,
-                mentor.rewrite("pest", pests.message(o, lang_key),
-                               facts=mentor.pest_facts(o), lang=lang_key,
-                               max_chars=1000),
+                mentor.voiced("pest", pests.message(o, lang_key),
+                              facts=mentor.pest_facts(o), lang=lang_key),
                 voice=voice)
     top = o.top
     if top is not None and top.rank >= pests.TIER_ORDER[pests.TIER_WATCH]:
@@ -1195,14 +1194,17 @@ def _deliver_grazing_result(phone: str, pastoralist, res) -> None:
     lang = pastoralist.preferred_language
     voice = bool(getattr(pastoralist, "voice_replies", False))
     text = res.text or ""
+    lead = ""
     if text and getattr(res, "advice", None) is not None:
-        # The mentor pass: the same facts, said the way a person who knows this
-        # rangeland would say them. Guarded — a rewrite that drops or invents a
-        # number, or loses a safety label, is thrown away and this text goes out
-        # (app/services/mentor.py).
-        text = mentor.rewrite("graze", text, facts=mentor.graze_facts(res.advice),
-                              lang="eng" if lang == "english" else "swa",
-                              max_chars=1100)
+        # The mentor pass. For the grazing ledger the data IS the message (bands,
+        # mega-joules, prices), so a whole-text rewrite is the wrong tool: the model
+        # writes a short INSIGHT, and the figures ship underneath it as the evidence.
+        # Guarded: an insight may not contain a number we did not compute, and if it
+        # breaks any rule we send the data text alone (app/services/mentor.py).
+        facts = mentor.graze_facts(res.advice)
+        lead = mentor.insight("graze", text, facts=facts,
+                              lang="eng" if lang == "english" else "swa")
+        text = mentor.compose(lead, text)
     button_text = grazing_flow.LOCATION_BUTTON[
         "english" if lang == "english" else "swahili"]
     try:
@@ -1213,10 +1215,11 @@ def _deliver_grazing_result(phone: str, pastoralist, res) -> None:
                 phone, pastoralist, text,
                 lon=getattr(res, "lon", None), lat=getattr(res, "lat", None))
             return
-        if voice and getattr(res, "spoken", ""):
-            # Numbers to read AND numbers to hear: the spoken summary is what he
-            # listens to walking home, the text is what he can re-read.
-            _send_reply(phone, pastoralist, res.spoken, voice=True)
+        spoken = lead or getattr(res, "spoken", "")
+        if voice and spoken:
+            # Speak the mentor's insight, not the table: a voice note reading out
+            # mega-joules is noise, and those two sentences are what he needs.
+            _send_reply(phone, pastoralist, spoken, voice=True)
             if text:
                 whatsapp_client.send_text(phone, text)
         else:

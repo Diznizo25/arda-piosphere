@@ -39,11 +39,13 @@ def _mentor(c: httpx.Client, base_url: str, headers: dict, kind: str, text: str,
     return r.json() if r.status_code == 200 else {"ok": False, "error": r.text[:200]}
 
 
-def show(label: str, base: str, out: str, changed: bool, guard: str) -> None:
-    print(f"\n{'=' * 78}\n{label}   (mentor used: {changed} | guard: {guard})\n{'=' * 78}")
-    print("--- what the RULES compose (sent if the rewrite is rejected) ---")
+def show(label: str, base: str, out: str, insight: str, guard: str) -> None:
+    print(f"\n{'=' * 78}\n{label}   (insight guard: {guard})\n{'=' * 78}")
+    print("--- what the RULES compose (the evidence block, always sent) ---")
     print(base)
-    print("--- what the MENTOR says ---")
+    print("--- the MENTOR's insight (leads the message when it passes) ---")
+    print(insight or "(none — the data text goes alone)")
+    print("--- the WHOLE message a herder receives ---")
     print(out)
 
 
@@ -65,8 +67,8 @@ def main() -> int:
                 continue
             res = _mentor(c, base_url, headers, "graze", data, facts=body.get("ledger"),
                           lang=lang)
-            show(label, data, res.get("mentor", ""), bool(res.get("changed")),
-                 str(res.get("guard")))
+            show(label, data, res.get("message", data), res.get("insight", ""),
+                 str(res.get("insight_guard")))
 
         # 2) the pest windows, built from stored data for a real point.
         if point:
@@ -74,8 +76,8 @@ def main() -> int:
                          json={"kind": "pest", "water_source_id": point, "lang": "swa"},
                          headers=headers).json()
             if res.get("ok"):
-                show("PEST WINDOWS — Swahili", res.get("base", ""), res.get("mentor", ""),
-                     bool(res.get("changed")), str(res.get("guard")))
+                show("PEST WINDOWS — Swahili", res.get("base", ""), res.get("message", ""),
+                     res.get("insight", ""), str(res.get("insight_guard")))
             else:
                 print("\npest:", res.get("error"))
         else:

@@ -99,12 +99,17 @@ def _urls(text: str) -> set[str]:
     return set(re.findall(r"https?://\S+", text or ""))
 
 
-def insight_ok(base: str, out: str, *, lang: str | None = None,
-               max_chars: int = 900) -> tuple[bool, str]:
-    """May this rewrite replace the deterministic text? (ok, reason-if-not)
+def rephrase_ok(base: str, out: str, *, lang: str | None = None,
+                max_chars: int = 900) -> tuple[bool, str]:
+    """May this whole-text REWRITE replace the deterministic text? (ok, reason)
 
     Written as a list of ways to LOSE, because the failure mode that matters is a
     rewrite that reads beautifully and says something we never measured.
+
+    This is the strict sibling of `insight_ok`: here the text IS the message, so every
+    figure must survive. Use it for prose services (a pest window, the welcome-back
+    lines); use `insight_ok` when the message is a data table and the model is writing
+    a short lead instead of a replacement.
     """
     base, out = base or "", (out or "").strip()
     if not out:
@@ -153,13 +158,113 @@ def insight_ok(base: str, out: str, *, lang: str | None = None,
     return True, ""
 
 
+def insight_ok(base: str, insight: str, *, facts: dict | None = None,
+               lang: str | None = None, max_chars: int = 420) -> tuple[bool, str]:
+    """May this INSIGHT lead the message? (ok, reason-if-not)
+
+    Different shape from `rephrase_ok` on purpose. A whole-text rewrite is held to
+    "every number must survive", which is right when the text IS the message — and
+    useless when the text is a data table, because then the model cannot write
+    anything human without failing. So an insight may use FEWER numbers — and never
+    one we did not compute:
+
+      * a number in the insight must exist in the data text or the facts (no invented
+        figures — the one rule that must never bend),
+      * it must stay an insight: short, a few lines, no markdown, no new link,
+      * it may not carry a forbidden word, and it may not flip language.
+
+    The estimate labels are NOT required here, because the composed message sends the
+    data text underneath the insight — the labels travel with the figures they belong
+    to. That is also why a missing label cannot be lost by an insight.
+    """
+    base, insight = base or "", (insight or "").strip()
+    if not insight:
+        return False, "empty"
+    low = insight.lower()
+    for word in FORBIDDEN_WORDS:
+        if word in low:
+            return False, f"forbidden_word:{word}"
+
+    allowed = _nums(base) | _nums(json.dumps(facts or {}, default=str))
+    invented = _nums(insight) - allowed
+    if invented:
+        return False, f"new_number:{sorted(invented)[0]}"
+
+    if lang in ("swa", "swahili") and _looks_swahili(base) and not _looks_swahili(insight):
+        return False, "language_flipped"
+    if lang in ("eng", "english") and _looks_swahili(insight):
+        return False, "language_flipped"
+
+    if ";" in insight or "**" in insight or "`" in insight or "##" in insight:
+        return False, "formatting"
+    if _urls(insight) - _urls(base):
+        return False, "new_url"
+    if len([ln for ln in insight.splitlines() if ln.strip()]) > 5:
+        return False, "too_many_lines"
+    if len(insight) > max_chars:
+        return False, "too_long"
+    return True, ""
+
+
+def insight(kind: str, base_text: str, *, facts: dict | None = None,
+            lang: str = "swa", max_chars: int = 420) -> str:
+    """A short mentor insight from the computed facts — or "" (fail-open).
+
+    This is the piece that answers "the data is right but nobody talks like that":
+    two to four sentences that say what today MEANS, with the figures left to the
+    data block underneath rather than crammed into the sentence.
+    """
+    base = base_text or ""
+    settings = get_settings()
+    if not base.strip() or not getattr(settings, "mentor_insights_enabled", True):
+        return ""
+    payload = json.dumps(facts or {}, ensure_ascii=False, default=str)
+    if len(payload) > 2500:
+        payload = payload[:2500]
+    system = (
+        build_system(kind, lang)
+        + "\n\nNOW: write ONLY a short insight — 2 to 4 short sentences, at most 5 "
+          "lines, no lists, no headings, no numbers of your own. Use a figure only if "
+          "it is in FACTS or TEXT and it helps him decide. Say what today means and "
+          "the one thing to do first. The figures themselves are printed under your "
+          "words, so do not repeat them all."
+    )
+    out = ai._chat(system, f"FACTS={payload}\n\nTEXT:\n{base}")
+    if not out:
+        return ""
+    ok, why = insight_ok(base, out, facts=facts, lang=lang, max_chars=max_chars)
+    if not ok:
+        log.warning("mentor insight rejected (%s) - sending the data text alone", why)
+        return ""
+    return out.strip()
+
+
+def compose(lead: str, base_text: str) -> str:
+    """The mentor's words, then the figures behind them. One place, one shape."""
+    return f"{lead}\n\n———\n{base_text}" if lead else base_text
+
+
+def voiced(kind: str, base_text: str, *, facts: dict | None = None,
+           lang: str = "swa", max_chars: int = 420) -> str:
+    """A message a herder reads: the mentor's insight, then the data underneath.
+
+    Insight first because that is what a mentor says; figures underneath because they
+    are the evidence for it, and because a herder who wants to argue with us needs the
+    numbers to argue with. Fail-open: no insight, and the data text goes alone.
+    """
+    return compose(insight(kind, base_text, facts=facts, lang=lang, max_chars=max_chars),
+                   base_text)
+
+
 def rewrite(kind: str, base_text: str, *, facts: dict | None = None,
             lang: str = "swa", max_chars: int = 900) -> str:
     """Say the same facts like a mentor — or hand back the text unchanged.
 
-    `facts` is the computed payload (bands, verdict, walk, window, status) so the
-    model explains rather than restates. It is grounding, never a source of new
-    numbers: the number guard runs on the TEXT, which is what the herder reads.
+    The whole-text path: for services whose message is already prose (a pest window,
+    the welcome-back lines), where the rewrite replaces the text and therefore must
+    keep every figure. `facts` is the computed payload (bands, verdict, walk, window,
+    status) so the model explains rather than restates; it is grounding, never a
+    source of new numbers — the number guard runs on the TEXT.
     """
     base = base_text or ""
     if not base.strip():
@@ -176,7 +281,7 @@ def rewrite(kind: str, base_text: str, *, facts: dict | None = None,
     if not out:
         return base
 
-    ok, why = insight_ok(base, out, lang=lang, max_chars=max_chars)
+    ok, why = rephrase_ok(base, out, lang=lang, max_chars=max_chars)
     if not ok:
         log.warning("mentor rewrite rejected (%s) - keeping the deterministic text", why)
         return base

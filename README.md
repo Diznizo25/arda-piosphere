@@ -290,21 +290,25 @@ The sender also records the note as the herder's last advisory point, so his rep
 
 ## The mentor layer (rules compute, the model explains)
 
-Every service now speaks through one guarded rewrite: the model may say the same facts
-the way a person who knows the rangeland would say them, and nothing else. The guard
-(`app/services/mentor.py`) throws a rewrite away for a dropped number, an **invented**
-number, a lost safety label (`kadirio`, a named vet), a flipped language, flattened
-lines, markdown, a new link, padding, or any drug/dose/diagnosis word — and the
-deterministic text, already written to be read aloud, goes out instead. One env var
-(`MENTOR_INSIGHTS_ENABLED=false`) turns the whole layer off without a deploy.
+Every service now speaks through one guarded rewrite. Where the text is a data table
+(the grazing ledger, the pest window) the model writes a **short insight** that leads
+the message — 2–4 sentences saying what today means and the first thing to do — and the
+figures ship underneath it **verbatim** as the evidence, so an insight can never be the
+reason a herder loses a number. Where the text is already prose (the welcome-back
+lines, the weekly note) the model rewrites the whole message, and then every figure
+must survive. The guard (`app/services/mentor.py`) throws a candidate away for a
+dropped number, an **invented** number, a lost safety label (`kadirio`, a named vet), a
+flipped language, flattened lines, markdown, a new link, padding, or any
+drug/dose/diagnosis word — and the deterministic text, already written to be read
+aloud, goes out instead. One env var (`MENTOR_INSIGHTS_ENABLED=false`) turns the whole
+layer off without a deploy.
 
-Applied to the grazing ledger, the pest windows and the welcome-back insights;
-**never** to questions or menus (a reworded question breaks the one-tap answer it
-belongs to), and the weekly note only with an explicit `--mentor` because it costs one
-model call per herder. The advisory keeps its older, distance-specific guard from
-`ai.rephrase_advisory`. Review the wording with `POST /dev/mentor`; see
-`docs/mentor.md` for the whole table of ways a rewrite can lose, and
-`scripts/test_mentor.py` for the assertions.
+**Never** applied to questions or menus (a reworded question breaks the one-tap answer
+it belongs to), and the weekly note only with an explicit `--mentor` because it costs
+one model call per herder. The advisory keeps its older, distance-specific guard from
+`ai.rephrase_advisory`. Review the wording with `POST /dev/mentor` (it returns the data
+text, the insight and the composed message); see `docs/mentor.md` for the whole table
+of ways a rewrite can lose, and `scripts/test_mentor.py` for the assertions.
 
 ## MALISHO YA LEO (where they grazed, what it was worth, what to add)
 
