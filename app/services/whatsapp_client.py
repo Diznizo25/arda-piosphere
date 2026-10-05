@@ -158,6 +158,54 @@ def send_interactive_payload(payload: dict) -> None:
     _post(payload)
 
 
+def send_cta_url_button(to: str, body: str, button_text: str, url: str,
+                        image_url: str | None = None) -> bool:
+    """A message whose single button OPENS A URL — the tap-the-map prompt.
+
+    This is how a herder gets a map he can actually touch: WhatsApp will not
+    return coordinates from an image, but a call-to-action button opens our map
+    page in ONE tap, and that page sends back the spot he touches.
+
+    Fallback chain, because a rejected interactive payload means he receives
+    NOTHING — the one failure mode worse than an ugly message:
+      CTA with the map as an image header  ->  plain CTA  ->  text with the URL.
+
+    Returns True when the link reached him in some form, so the caller can fall
+    back to the location button when it did not.
+    """
+    def _payload(with_image: bool) -> dict:
+        inter: dict = {
+            "type": "cta_url",
+            "body": {"text": body},
+            "action": {
+                "name": "cta_url",
+                "parameters": {"display_text": button_text[:20], "url": url},
+            },
+        }
+        if with_image and image_url:
+            inter["header"] = {"type": "image", "image": {"link": image_url}}
+        return {"messaging_product": "whatsapp", "to": to,
+                "type": "interactive", "interactive": inter}
+
+    if image_url:
+        try:
+            _post(_payload(True))
+            return True
+        except Exception:  # noqa: BLE001
+            log.warning("CTA with an image header was rejected - retrying without it")
+    try:
+        _post(_payload(False))
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("CTA button was rejected - sending the link as plain text")
+    try:
+        send_text(to, f"{body}\n{url}")
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("text fallback for the map link also failed")
+        return False
+
+
 def send_location_request(to: str, body: str, button_text: str) -> bool:
     """A message whose single button opens the phone's location picker.
 

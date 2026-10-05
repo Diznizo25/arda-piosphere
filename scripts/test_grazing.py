@@ -76,12 +76,57 @@ DRY = forage.PatchSample(ndvi=0.08, satvi=0.30, bsi=0.06, ndmi=-0.05,
 GREEN = forage.PatchSample(ndvi=0.46, satvi=0.33, bsi=0.06, ndmi=0.05,
                            n_pixels=40, radius_m=250.0, pixel_m=94.0)
 
-# --- 1) the prompt: three ways in, no dangling link -------------------------
+# --- 1) the prompt: a MAP he can tap, and the honest fallback ---------------
 base = grazing_flow.prompt_text("swa", "https://x/mapview/?graze=1&t=tok")
-assert "ramani" in base and "https://x/mapview" in base, base
-assert "ramani" not in grazing_flow.prompt_text("swa", ""), "dangling map bullet"
+assert "ramani" in base.lower() and "https://x/mapview" in base, base
+# the map is the PRIMARY instruction now, so the body mentions it even with no
+# link; what disappears when there is no URL is the URL itself
+assert "ramani" in grazing_flow.prompt_text("swa", "").lower()
+assert "https://" not in grazing_flow.prompt_text("swa", "")
 assert "location" in grazing_flow.prompt_text("eng", "").lower()
 assert set(grazing_flow.LOCATION_BUTTON) == {"swahili", "english"}
+assert set(grazing_flow.MAP_BUTTON) == {"swahili", "english"}
+assert len(grazing_flow.MAP_BUTTON["swahili"]) <= 20, "WhatsApp's button-text limit"
+print("prompt: map first, URL only as the fallback, both buttons present OK")
+
+# --- 1b) the tappable map is what actually goes out -------------------------
+sent: list = []
+grazing_flow.whatsapp_client.send_cta_url_button = \
+    lambda to, body, btn, url, image_url=None: (
+        sent.append(("cta", body, btn, url, image_url)), True)[1]
+grazing_flow.whatsapp_client.send_location_request = \
+    lambda to, body, btn: sent.append(("loc", body, btn))
+grazing_flow.map_url = lambda phone, p, lon=None, lat=None, point_id=None: (
+    "https://x/mapview/?lat=0.35&lon=37.58&species=cattle&interval=daily"
+    "&lang=swa&graze=1&t=tok-abc123" + (f"&id={point_id}" if point_id else ""))
+grazing_flow.map_image_url = lambda p, lon, lat, pid: (
+    f"https://x/map/{pid}.png?lat={lat}&lon={lon}&pasture=1" if pid else None)
+grazing_flow.water_source_for_pin = lambda lon, lat, sp, iv: ("point-1", "reachable")
+
+CALLS["states"].clear()
+grazing_flow.prompt_for_pin("+254700000001", Herder(), lon=0.35, lat=37.58)
+assert [s[0] for s in sent] == ["cta"], sent
+assert sent[0][2] == grazing_flow.MAP_BUTTON["swahili"], sent[0][2]
+assert "graze=1&t=tok-abc123" in sent[0][3], sent[0][3]
+# the water point id is what makes the page draw the pasture layer: he must SEE
+# where the grass is while choosing, not tap a blank street map
+assert "id=point-1" in sent[0][3], sent[0][3]
+assert sent[0][4] and "map/point-1.png" in sent[0][4], sent[0][4]
+assert "ramani" in sent[0][1].lower()
+# the state is set BEFORE the prompt, so a fast reply is never missed
+assert CALLS["states"] and CALLS["states"][-1][0] == "graze.await", CALLS["states"]
+
+# no map link possible: the one-tap location button takes over, and it is the
+# ONLY message — asking twice is how a herder learns to ignore us
+sent.clear()
+grazing_flow.whatsapp_client.send_cta_url_button = lambda *a, **k: False
+grazing_flow.prompt_for_pin("+254700000001", Herder(), lon=0.35, lat=37.58)
+assert [s[0] for s in sent] == ["loc"], sent
+assert "ramani" in sent[0][1].lower() and "https://x/mapview" in sent[0][1], sent[0][1]
+grazing_flow.whatsapp_client.send_cta_url_button = \
+    lambda to, body, btn, url, image_url=None: (
+        sent.append(("cta", body, btn, url, image_url)), True)[1]
+print("prompt wiring: CTA with the map image, token in the URL, single-message fallback OK")
 # --- 2) a real reading: the whole answer, and the calibration question ------
 CALLS["records"].clear()
 CALLS["states"].clear()
@@ -177,6 +222,9 @@ from app.routers import whatsapp as wa  # noqa: E402
 out: list = []
 wa.whatsapp_client.send_location_request = \
     lambda to, body, btn, *a, **k: out.append(("loc", body, btn))
+wa.whatsapp_client.send_cta_url_button = \
+    lambda to, body, btn, url, image_url=None, *a, **k: (
+        out.append(("cta", body, url)), True)[1]
 wa.whatsapp_client.send_quick_reply_buttons = \
     lambda to, body, btns, *a, **k: out.append(("btn", body, btns))
 wa.whatsapp_client.send_text = lambda to, body, *a, **k: out.append(("text", body))
@@ -205,9 +253,12 @@ assert [o[0] for o in out] == ["reply", "text", "btn"], out
 assert out[0][1] == "SPOKEN" and out[0][2] is True, "voice first, numbers as text too"
 assert out[1][1] == "TEXT"
 out.clear()
-wa._deliver_grazing_result("+254", Herder(), _result(prompt_location=True, ask_manyatta=True))
-assert [o[0] for o in out] == ["loc"], "the manyatta prompt is one message, not three"
-assert out[0][1] == "TEXT" and out[0][2], "the prompt carries its one-tap button"
+wa._deliver_grazing_result("+254", Herder(),
+                           _result(prompt_location=True, ask_manyatta=True,
+                                   lon=0.35, lat=37.58))
+assert [o[0] for o in out] == ["cta"], \
+    "after the manyatta, the grazing prompt must be the MAP, and only the map"
+assert "graze=1&t=" in out[0][2] and "id=point-1" in out[0][2], out[0]
 print("delivery: never more than two messages, voice carries the spoken summary OK")
 
 # --- 8) reachability + the token policy (source-level, no live API) ---------

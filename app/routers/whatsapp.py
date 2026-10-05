@@ -1194,7 +1194,11 @@ def _deliver_grazing_result(phone: str, pastoralist, res) -> None:
         "english" if lang == "english" else "swahili"]
     try:
         if getattr(res, "prompt_location", False):
-            whatsapp_client.send_location_request(phone, text, button_text)
+            # The manyatta is registered; what he needs now is the GRAZING spot —
+            # so this is the map-first prompt, not another location button.
+            grazing_flow.send_pin_prompt(
+                phone, pastoralist, text,
+                lon=getattr(res, "lon", None), lat=getattr(res, "lat", None))
             return
         if voice and getattr(res, "spoken", ""):
             # Numbers to read AND numbers to hear: the spoken summary is what he

@@ -86,24 +86,35 @@ def phone_for_token(token: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 GRAZE_PROMPT = {
-    "swahili": "🌿 MALISHO YA LEO\n\nNiambie mlipopanda leo — kwa njia moja:\n"
-               "• Gusa kitufe hapa chini kutuma eneo (rahisi zaidi)\n"
-               "• Au andika jina la mahali (k.m. 'niko Kipsing')",
-    "english": "🌿 GRAZING TODAY\n\nTell me where you grazed today — one way:\n"
-               "• Tap the button below to send your location (easiest)\n"
-               "• Or type the place name (e.g. 'I am at Kipsing')",
+    "swahili": "🌿 MALISHO YA LEO\n\n"
+               "Gusa kitufe hapa chini kufungua RAMANI, kisha gusa mahali "
+               "mlipopanda leo.\n"
+               "Kijani = malisho mazuri · kahawia = nyasi kavu.\n\n"
+               "Au tuma eneo lako (📎 → Location), au andika jina la mahali.",
+    "english": "🌿 GRAZING TODAY\n\n"
+               "Tap the button below to open the MAP, then tap the spot where "
+               "they grazed today.\n"
+               "Green = good forage · brown = dry grass.\n\n"
+               "Or send your location (📎 → Location), or type the place name.",
 }
 
+# Only used on the fallback path, where no button could be sent and the link has
+# to travel inside the text.
 GRAZE_PROMPT_MAP = {
-    "swahili": "• Au gusa mahali kwenye ramani: {url}",
-    "english": "• Or tap the spot on the map: {url}",
+    "swahili": "🗺 Fungua ramani: {url}",
+    "english": "🗺 Open the map: {url}",
 }
+
+MAP_BUTTON = {"swahili": "🗺 Fungua ramani", "english": "🗺 Open the map"}
 
 
 def prompt_text(lang: str, url: str = "") -> str:
-    """The pin request. The map bullet is dropped (not left dangling) when we have
-    no public URL — a broken link in a herder's hands costs more trust than a
-    missing option."""
+    """The 'where did they graze' question.
+
+    The map is the PRIMARY instruction, because a map a herder can touch asks him
+    for one tap instead of a GPS gesture he may not know. The URL is appended only
+    when it could not travel as a button.
+    """
     key = "english" if lang == "eng" else "swahili"
     out = GRAZE_PROMPT[key]
     if url:
@@ -111,10 +122,12 @@ def prompt_text(lang: str, url: str = "") -> str:
     return out
 
 MANYATTA_PROMPT = {
-    "swahili": "Kwanza niandikishe manyatta yako — mara moja tu, na nakumbuka daima.\n"
-               "Gusa kitufe hapa chini kutuma eneo la manyatta yako.{hint}",
-    "english": "First let me register your manyatta — once only, and I remember it.\n"
-               "Tap the button below to send your manyatta location.{hint}",
+    "swahili": "🏠 MANYATTA YAKO\n\nKwanza niandikishe manyatta yako — mara moja tu, "
+               "na nakumbuka daima.\nGusa kitufe hapa chini kutuma eneo la manyatta "
+               "yako (mahali wanyama wanalala).",
+    "english": "🏠 YOUR MANYATTA\n\nFirst let me register your manyatta — once only, "
+               "and I remember it.\nTap the button below to send your manyatta "
+               "location (where the animals sleep).",
 }
 
 LOCATION_BUTTON = {"swahili": "Tuma eneo langu 📍", "english": "Send my location 📍"}
@@ -125,8 +138,14 @@ def _lang_key(pastoralist) -> str:
 
 
 def map_url(phone: str, pastoralist, lon: float | None = None,
-            lat: float | None = None) -> str:
-    """The tap-the-map link, carrying a token instead of a phone number."""
+            lat: float | None = None, point_id: str | None = None) -> str:
+    """The tap-the-map link, carrying a token instead of a phone number.
+
+    When the covering water point is known we pass `id=`, which is what makes the
+    page draw the species rings AND the satellite pasture layer: a herder choosing
+    where the herd grazed needs to SEE where the grass is, not tap a blank street
+    map. The tap handler then posts the chosen spot back (POST /grazing/pin).
+    """
     from app.config import get_settings
 
     token = mint_token(phone)
@@ -137,31 +156,98 @@ def map_url(phone: str, pastoralist, lon: float | None = None,
         return ""
     species = getattr(pastoralist, "primary_species", None) or "cattle"
     interval = getattr(pastoralist, "water_interval", None) or "daily"
-    return (f"{base}/mapview/?lat={lat or 0.35}&lon={lon or 37.58}&species={species}"
-            f"&interval={interval}&lang={_lang_key(pastoralist)}&graze=1&t={token}")
+    query = (f"lat={lat or 0.35}&lon={lon or 37.58}&species={species}"
+             f"&interval={interval}&lang={_lang_key(pastoralist)}&graze=1&t={token}")
+    if point_id:
+        query += f"&id={point_id}"
+    return f"{base}/mapview/?{query}"
+
+
+def map_image_url(pastoralist, lon: float | None, lat: float | None,
+                  point_id: str | None) -> str | None:
+    """The PNG of the same map, publicly reachable, for the message's image header.
+
+    The picture is what tells him WHICH map the button opens, and it carries its
+    own age stamp (`picha ya 05 Oct — kadirio`), so a forwarded image cannot look
+    fresher than it is.
+    """
+    from app.config import get_settings
+
+    base = (get_settings().app_public_base_url or "").rstrip("/")
+    if not base or not point_id or lon is None or lat is None:
+        return None
+    species = getattr(pastoralist, "primary_species", None) or "cattle"
+    interval = getattr(pastoralist, "water_interval", None) or "daily"
+    confirm = getattr(pastoralist, "water_source_id", None) or ""
+    return (f"{base}/map/{point_id}.png?lat={lat}&lon={lon}&species={species}"
+            f"&pasture=1&lang={_lang_key(pastoralist)}&confirm={confirm}"
+            f"&interval={interval}&v=9")
+
+
+def send_pin_prompt(phone: str, pastoralist, text: str, *,
+                    lon: float | None = None, lat: float | None = None,
+                    point_id: str | None = None) -> bool:
+    """Send the 'where did they graze' prompt. THE one place the UX rule lives.
+
+    Map first (a CTA button that opens the tap-the-map page, with the map itself as
+    the message header), then — only if no form of the link could be sent — the
+    one-tap location button, which is more precise anyway because it is his own GPS
+    at the spot. Never both: two messages asking for the same thing is how a herder
+    learns to ignore us.
+
+    Returns True when the tappable map reached him.
+    """
+    if point_id is None and lon is not None and lat is not None:
+        species = getattr(pastoralist, "primary_species", None) or "cattle"
+        interval = getattr(pastoralist, "water_interval", None) or "daily"
+        point_id, _how = water_source_for_pin(lon, lat, species, interval)
+
+    url = map_url(phone, pastoralist, lon=lon, lat=lat, point_id=point_id)
+    button = MAP_BUTTON["english" if _lang_key(pastoralist) == "eng" else "swahili"]
+    if url:
+        try:
+            if whatsapp_client.send_cta_url_button(
+                    phone, text, button, url,
+                    image_url=map_image_url(pastoralist, lon, lat, point_id)):
+                return True
+        except Exception:  # noqa: BLE001
+            log.exception("map CTA button failed (non-fatal)")
+
+    lang = _lang_key(pastoralist)
+    try:
+        whatsapp_client.send_location_request(
+            phone, prompt_text(lang, url) if not url else f"{text}\n{url}",
+            LOCATION_BUTTON["english" if lang == "eng" else "swahili"])
+    except Exception:  # noqa: BLE001
+        log.exception("location-request fallback failed (non-fatal)")
+    return False
 
 
 def prompt_for_pin(phone: str, pastoralist, *, lon: float | None = None,
                    lat: float | None = None) -> None:
-    """Ask for the pin — with a one-tap location button as the primary path.
+    """Ask for the grazing spot, centred on where the herd starts from.
 
-    Three ways in, because three kinds of herder will use this: the button (one
-    tap, works with any phone), a place name in words (works with no data bundle
-    to speak of), and the map (works when he is somewhere he knows by sight).
+    The origin (manyatta, else water point, else his last pin) is what the map is
+    drawn around, so the field he sees is the range he actually walks.
     """
+    if lon is None or lat is None:
+        origin = origin_for(phone, pastoralist)
+        lon, lat = origin.get("lon"), origin.get("lat")
     lang = _lang_key(pastoralist)
-    url = map_url(phone, pastoralist, lon=lon, lat=lat)
     conversation.set_state(phone, "graze.await", {})
-    whatsapp_client.send_location_request(phone, prompt_text(lang, url), LOCATION_BUTTON[lang])
+    send_pin_prompt(phone, pastoralist, prompt_text(lang), lon=lon, lat=lat)
 
 
 def prompt_for_manyatta(phone: str, pastoralist) -> None:
     """Register the homestead once. We never ask again after this."""
     lang = _lang_key(pastoralist)
     conversation.set_state(phone, "graze.manyatta", {})
-    whatsapp_client.send_location_request(
-        phone, MANYATTA_PROMPT["english" if lang == "eng" else "swahili"].format(hint=""),
-        LOCATION_BUTTON[lang])
+    try:
+        whatsapp_client.send_location_request(
+            phone, MANYATTA_PROMPT["english" if lang == "eng" else "swahili"],
+            LOCATION_BUTTON["english" if lang == "eng" else "swahili"])
+    except Exception:  # noqa: BLE001
+        log.exception("manyatta prompt failed (non-fatal)")
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +464,10 @@ class GrazingResult:
     ask_manyatta: bool = False
     prompt_location: bool = False
     point_id: str | None = None
+    # The spot this result is about (the manyatta when we just registered it), so
+    # the caller can centre the next prompt's map on it without a second lookup.
+    lon: float | None = None
+    lat: float | None = None
 
 
 QUALITY_BUTTONS = [("gq:1", "1 · mazuri"), ("gq:2", "2 · kati"), ("gq:3", "3 · mabaya")]
@@ -468,5 +558,7 @@ def handle_manyatta(phone: str, pastoralist, lat: float, lon: float,
         head = "✅ Your manyatta is registered. I will not ask again."
     else:
         head = "✅ Manyatta yako imeandikishwa. Sitakuuliza tena."
+    # The next input is the GRAZING spot, so this is where the tap-the-map prompt
+    # belongs (the caller sends it through send_pin_prompt, map first).
     return GrazingResult(ok=True, reason="registered", prompt_location=True,
-                         text=f"{head}\n\n{prompt_text(lang, url)}")
+                         text=f"{head}\n\n{prompt_text(lang)}", lon=lon, lat=lat)

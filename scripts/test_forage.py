@@ -316,9 +316,16 @@ assert "GRAZE_KEYWORDS" in wa and "malisho ya leo" in wa
 assert 'record_ground_truth' in wa and 'pasture_good' in wa, "no calibration loop"
 
 wac = io.open(root / "app/services/whatsapp_client.py", encoding="utf-8").read()
-assert "def send_location_request" in wac, "no one-tap location button"
-assert "location_request_message" in wac
+assert "def send_cta_url_button" in wac, "no tap-the-map button"
+assert '"cta_url"' in wac and '"display_text"' in wac
+assert "image header" in wac, "the map must ride as the message header"
+assert "send_location_request" in wac and "location_request_message" in wac
 assert "falling back to text" in wac, "a rejected button must fall back to text"
+gr_src = io.open(root / "app/services/grazing_flow.py", encoding="utf-8").read()
+assert "def send_pin_prompt" in gr_src, "the map-first prompt is not a single place"
+assert "MAP_BUTTON" in gr_src and "&id=" in gr_src, \
+    "the tap-map must be sent with the water point id so the pasture layer draws"
+assert "def map_image_url" in gr_src, "no map image for the message header"
 
 dev = io.open(root / "app/routers/dev.py", encoding="utf-8").read()
 assert '@router.post("/graze")' in dev, "no /dev/graze probe to review the wording"
