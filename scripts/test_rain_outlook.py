@@ -230,3 +230,50 @@ assert 'cron: "0 3 * * 1"' in weekly_src, "the satellite refresh must be weekly"
 print("map age stamp + weekly satellite refresh wiring OK")
 
 
+
+# --- 11) the two nonsense sentences a herder caught us in ---------------------
+# a) "0 days without real rain". The day count IS the sentence, so zero has to read
+#    as "it rained today", not as a count of nothing.
+from app.services.chat import deterministic_answer  # noqa: E402
+
+sw_today = deterministic_answer({"rain": {"dry_spell_days": 0,
+                                          "rain_over_past_30_days_mm": 12.0,
+                                          "normal_for_the_same_30_days_mm": 20.0}},
+                                "swahili")
+assert "ilinyesha leo" in sw_today, sw_today
+assert "siku 0" not in sw_today, sw_today
+en_today = deterministic_answer({"rain": {"dry_spell_days": 0}}, "english")
+assert "today" in en_today and "0 days" not in en_today, en_today
+assert "jana" in deterministic_answer({"rain": {"dry_spell_days": 1}}, "swahili")
+assert "siku 14 bila mvua" in deterministic_answer({"rain": {"dry_spell_days": 14}}, "swahili")
+
+# b) "it rained today" AND "rain may start in about 1 day" in the same message. The
+#    onset comes from the forecast, which does not know onset already happened.
+started = f.RainOutlook(dry_spell_days=0, rain_30d_mm=12.0, normal_30d_mm=20.0,
+                        deficit_pct=-40.0, has_forecast=True, horizon_days=15,
+                        forecast_total_mm=18.0, generated_on=date(2026, 10, 5),
+                        onset_date=date(2026, 10, 6), confidence="high")
+line = f.rain_line(started, "swahili")
+assert line and "imeanza" in line, line
+assert "inaweza kuanza" not in line, line
+assert "bila mvua" not in line, line
+# ...while a herder who has NOT had rain still gets the forecast honestly.
+pred = f.RainOutlook(dry_spell_days=14, rain_30d_mm=1.0, normal_30d_mm=20.0,
+                     deficit_pct=-95.0, has_forecast=True, horizon_days=15,
+                     forecast_total_mm=22.0, generated_on=date(2026, 10, 5),
+                     onset_date=date(2026, 10, 8), confidence="high")
+assert "inaweza kuanza" in (f.rain_line(pred, "swahili") or ""), f.rain_line(pred, "swahili")
+print("rain wording: no 'zero days', and onset becomes an observation once it rains OK")
+
+# --- 12) a greeting must not list what we do not know -------------------------
+# A herder greeted the system and got his water, the queue, the report age and the
+# pests back, one "we do not know" line each. Only a status we HAVE may be spoken.
+wa_src = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
+greeting = wa_src.split("def _while_you_were_away")[1].split("def _handle_greeting")[0]
+assert 'if status and status != "unknown":' in greeting, \
+    "an unknown water status must not be announced as news"
+assert "if n >= 1:" in greeting, "'the report came 0 days ago' is not information"
+assert "away_days >= 7 and len(lines) > 1" in wa_src, \
+    "the greeting mentor pass must be gated on having something to say"
+print("greeting: silence instead of a list of 'we do not know' OK")
+

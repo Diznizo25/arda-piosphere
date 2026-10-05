@@ -602,9 +602,17 @@ def deterministic_answer(facts: dict, lang: str = "swahili") -> str:
     rain = facts.get("rain") or {}
     if rain:
         bits: list[str] = []
-        if rain.get("dry_spell_days") is not None:
-            bits.append(f"siku {rain['dry_spell_days']} bila mvua ya maana" if sw
-                        else f"{rain['dry_spell_days']} days without real rain")
+        dry = rain.get("dry_spell_days")
+        if dry is not None:
+            if dry == 0:
+                # "0 days without real rain" is nonsense a herder caught us in — and
+                # the day count is the whole point of the sentence.
+                bits.append("mvua ilinyesha leo" if sw else "it rained today")
+            elif dry == 1:
+                bits.append("mvua ilinyesha jana" if sw else "it rained yesterday")
+            else:
+                bits.append(f"siku {dry} bila mvua ya maana" if sw
+                            else f"{dry} days without real rain")
         if rain.get("normal_for_the_same_30_days_mm") is not None:
             bits.append(
                 (f"mvua ya siku 30 zilizopita ni "

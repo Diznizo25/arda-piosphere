@@ -2179,14 +2179,20 @@ def _while_you_were_away(pastoralist, lang: str) -> list[str]:
         from app.services.ground_truth import water_status_for
 
         info = water_status_for(point["id"]) or {}
-        sentence = water_status.status_sentence(
-            info.get("status"), "swa" if sw else "eng")
-        age = water_status.age_days(info.get("status_updated_at"))
-        if age is not None:
-            n = round(age)
-            sentence += (f" Taarifa ya mwisho ilikuja siku {n} zilizopita." if sw
-                         else f" The last report came {n} days ago.")
-        out.append(sentence)
+        status = info.get("status")
+        # Only report a status we ACTUALLY have. A herder greeted the system and got a
+        # list of "we do not know" lines — his water, the queue, the report age, the
+        # pests — which reads as the system having nothing to say. Silence is better.
+        if status and status != "unknown":
+            sentence = water_status.status_sentence(status, "swa" if sw else "eng")
+            age = water_status.age_days(info.get("status_updated_at"))
+            n = round(age) if age is not None else 0
+            if n >= 1:
+                # "The last report came 0 days ago" is not more information than
+                # saying nothing.
+                sentence += (f" Taarifa ya mwisho ilikuja siku {n} zilizopita." if sw
+                             else f" The last report came {n} days ago.")
+            out.append(sentence)
     except Exception:  # noqa: BLE001
         log.debug("water line for welcome-back failed (non-fatal)", exc_info=True)
     try:
@@ -2227,11 +2233,13 @@ def _handle_greeting(phone: str, pastoralist, text: str, voice: bool = False) ->
         lines.append(f"Siku {away_days} zimepita tangu tulipoongea." if sw
                      else f"It has been {away_days} days since we last spoke.")
         lines.extend(_while_you_were_away(pastoralist, lang))
-    if lines:
+    if away_days >= 7 and len(lines) > 1:
         # The mentor pass on the "what changed while you were away" lines: this is
         # the clearest case of useful data reading like a report instead of a
-        # person. Questions and menus are deliberately NOT rewritten — a reworded
-        # question can break the one-tap answer it belongs to.
+        # person. Gated on there actually being something to say — a bare welcome
+        # needs no model call, and spending one on every "hello" is latency and
+        # money for nothing. Questions and menus are never rewritten: a reworded
+        # question breaks the one-tap answer it belongs to.
         joined = mentor.rewrite("water", "\n".join(lines),
                                 facts=mentor.water_facts(), lang=lang,
                                 max_chars=500)

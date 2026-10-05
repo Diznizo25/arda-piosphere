@@ -269,8 +269,16 @@ def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
         sev_text = _SEV_SW[sev] if sw else _SEV_EN[sev]
         parts.append(sev_text[:1].upper() + sev_text[1:] + ".")
 
+    # "It rained today" followed by "rain may start in about 1 day" is a contradiction
+    # a herder caught us in. The onset comes from the FORECAST, which does not know
+    # that onset has already happened — so once it has rained today, onset is no longer
+    # a prediction, it is an observation.
+    already_started = o.dry_spell_days == 0
     if o.has_forecast and o.horizon_days:
-        if o.onset_date:
+        if o.onset_date and already_started:
+            parts.append("Mvua imeanza. Endelea kufuatilia." if sw
+                         else "The rains have started. Keep watching.")
+        elif o.onset_date:
             days = max(0, (o.onset_date - (o.generated_on or o.onset_date)).days)
             if o.confidence == "high":
                 parts.append(
