@@ -52,7 +52,7 @@ def _t(lang: str) -> dict:
             "s_dry": "dry (reported)", "s_broken": "broken (reported)",
             "s_gone": "gone (reported)", "s_unknown": "not confirmed",
             "mapBase": "Map", "satBase": "Satellite",
-            "g_hint": "Tap where they grazed today — I will send the grass figures and what to add to WhatsApp.",
+            "g_hint": "Tap where they grazed today — inside the pasture colours (green or brown). That is where we measure the grass.",
             "g_sending": "Sending…",
             "g_sent": "Thank you! The answer has been sent to WhatsApp.",
             "g_fail": "That did not work. Open the link again from WhatsApp.",
@@ -79,7 +79,7 @@ def _t(lang: str) -> dict:
         "s_gone": "haipo tena (taarifa)", "s_unknown": "haijathibitishwa",
         "mapBase": "Ramani", "satBase": "Satellite",
         # Grazing-ledger mode (opened from WhatsApp with graze=1&t=<token>).
-        "g_hint": "Gusa mahali mlipopanda leo — nitatuma hesabu ya malisho na nyongeza kwenye WhatsApp.",
+        "g_hint": "Gusa mahali mlipopanda leo — ndani ya rangi ya malisho (kijani au kahawia). Hapo tu tunapima nyasi.",
         "g_sending": "Inatuma…",
         "g_sent": "Asante! Jibu limekutumwa kwenye WhatsApp.",
         "g_fail": "Imeshindikana. Fungua link tena kutoka WhatsApp.",
@@ -249,7 +249,14 @@ def mapview_page(
         data["focus"] = 1 if focus else 0
         # Grazing-ledger mode. The token identifies the herder to /grazing/pin
         # WITHOUT a phone number ever appearing in a URL that gets forwarded.
-        data["graze"] = {"on": bool(graze), "token": t or "", "endpoint": "/grazing/pin"}
+        #
+        # Coerced explicitly, because this function is also called directly (tests,
+        # and any future caller) where FastAPI's Query defaults are still objects:
+        # putting a Query into the payload explodes in json.dumps.
+        graze_on = graze is True or (isinstance(graze, int) and graze > 0)
+        data["graze"] = {"on": graze_on,
+                         "token": t if isinstance(t, str) else "",
+                         "endpoint": "/grazing/pin"}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"mapview failed: {e}") from e
     html = _PAGE_TEMPLATE.replace("__DATA__", json.dumps(data, ensure_ascii=False))

@@ -135,6 +135,27 @@ def main() -> int:
             body = r.json()
             print(json_summary(body))
             print(body.get("message_swa"))
+
+            # The complaint this guards: a tap outside every raster answered "we have
+            # no satellite picture", which is nonsense while looking at satellite
+            # imagery. The wording must explain which situation it is.
+            far = c.post(f"{base}/dev/graze",
+                         json={"water_source_id": point, "lat": 1.5, "lon": 38.5,
+                               "species": "cattle", "head_count": 18, "walk_km": 6},
+                         headers=headers)
+            print(f"\n-- a tap far outside every raster (HTTP {far.status_code}) --")
+            if far.status_code == 200:
+                fb = far.json()
+                print("reason:", fb.get("reason"), "| tried:", len(fb.get("candidates") or []))
+                print(fb.get("message_swa"))
+                assert fb.get("ok") is False, "there is no raster 150 km away"
+                assert "nje ya eneo" in (fb.get("message_swa") or ""), \
+                    "the outside answer must say the spot is outside our measurement area"
+                assert "picha ya satellite" in (fb.get("message_swa") or ""), \
+                    "and it must not deny the picture he was looking at"
+                print("outside-coverage wording OK")
+            else:
+                print("body:", far.text[:300])
         else:
             print("\n(pass a water_source_id to also read the real stored COG)")
     return 0
