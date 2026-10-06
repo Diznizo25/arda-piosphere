@@ -21,7 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "docs" / "field" / "mom_test_field_kit.md"
-SRC_Q = ROOT / "docs" / "field" / "mom_test_questions_only.md"
+SRC_GUIDE = ROOT / "docs" / "field" / "mom_test_conversation_guide.md"
+SRC_BANK = ROOT / "docs" / "field" / "mom_test_question_bank.md"
 OUT = ROOT / "docs" / "field"
 TITLE = "Arda Link — Mom Test Field Kit"
 VERSION = "v1.0 · Isiolo County"
@@ -956,21 +957,32 @@ def main() -> int:
     print(f"wrote {tracker.name}  ({tracker.stat().st_size / 1024:.0f} KB, "
           f"{len(HYPOTHESES)} hypotheses tracked)")
 
-    # The one simple document: the questions, Swahili + English, nothing else.
-    if SRC_Q.exists():
-        q_blocks = parse_md(SRC_Q.read_text(encoding="utf-8"))
-        q_title = "Arda Link — Maswali ya Mom Test kwa Wachungaji"
-        q_sub = ("Kiswahili (kuuliza) + English (reference) · maswali 60 · "
-                 "dakika 40–60 · docs/field/mom_test_questions_only.md")
-        q_pdf = OUT / "ArdaLink_Mom_Test_Questions.pdf"
-        q_docx = OUT / "ArdaLink_Mom_Test_Questions.docx"
-        render_pdf(q_blocks, q_pdf, q_sub, title=q_title)
-        render_docx(q_blocks, q_docx, q_sub)
-        print(f"wrote {q_pdf.name} + {q_docx.name}  "
-              f"({q_pdf.stat().st_size / 1024:.0f} / {q_docx.stat().st_size / 1024:.0f} KB, "
-              f"questions only)")
+    # The one simple document: the conversation — 8 questions, Swahili + English.
+    if SRC_GUIDE.exists():
+        g_blocks = parse_md(SRC_GUIDE.read_text(encoding="utf-8"))
+        g_title = "Arda Link — Maswali 8: mazungumzo na mchungaji"
+        g_sub = ("Mom Test · dakika 30–40 · Kiswahili kwa kuuliza, English kwa kumbukumbu "
+                 "· docs/field/mom_test_conversation_guide.md")
+        g_pdf = OUT / "ArdaLink_Mom_Test_Questions.pdf"
+        g_docx = OUT / "ArdaLink_Mom_Test_Questions.docx"
+        render_pdf(g_blocks, g_pdf, g_sub, title=g_title)
+        render_docx(g_blocks, g_docx, g_sub)
+        print(f"wrote {g_pdf.name} + {g_docx.name}  "
+              f"({g_pdf.stat().st_size / 1024:.0f} / {g_docx.stat().st_size / 1024:.0f} KB, "
+              f"8 questions + probes, 1-2 pages)")
     else:
-        print(f"note: {SRC_Q.name} not found, skipped the questions-only document")
+        print(f"note: {SRC_GUIDE.name} not found, skipped the conversation guide")
+
+    # The pool behind it: never read aloud, kept for analysis and coverage checks.
+    if SRC_BANK.exists():
+        b_blocks = parse_md(SRC_BANK.read_text(encoding="utf-8"))
+        b_title = "Arda Link — Question Bank (maswali 60) · reference only"
+        b_sub = ("USIISOME KWA SAUTI · DO NOT READ ALOUD · "
+                 "docs/field/mom_test_question_bank.md")
+        b_pdf = OUT / "ArdaLink_Mom_Test_Question_Bank.pdf"
+        render_pdf(b_blocks, b_pdf, b_sub, title=b_title)
+        print(f"wrote {b_pdf.name}  ({b_pdf.stat().st_size / 1024:.0f} KB, "
+              f"{len(b_blocks)} blocks, reference only)")
     return 0
 
 

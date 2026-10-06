@@ -181,10 +181,37 @@ The herder never becomes our customer.
 
 ---
 
-## 4. The interview guide (40–60 minutes)
+## 4. The interview: 8 questions, not 60
 
-After every block there is a **Listen for** line: that is what counts as evidence. And
-an **Avoid** line: that is the trap that fills notebooks with nothing.
+**Do not read the bank aloud.** An interview is eight story questions, in his language,
+with silence in between. Everything else in this section is what you ask *while he is
+telling you those stories*. A herder answering a list becomes a form-filler — and a form
+fills with polite answers.
+
+The eight, in the order they work. Each one is a story he can tell, not an opinion he can
+agree with:
+
+| # | Ask | It opens |
+|---|---|---|
+| 1 | Tell me about yesterday — wake-up to bed | the division of labour: who holds the phone, who fetches water, who decides |
+| 2 | The last time you moved the herd — which month, what made you decide? | the decision: who he asked, how long it took, what it cost |
+| 3 | The last time you walked to water and it was not enough | the water failure: distance, hours, what he did next |
+| 4 | When did the grass near your water last run out — and how did you know? | pasture: who saw it, what he tried, what he lost |
+| 5 | The last time you found ticks or worms — what did you buy, at what price? | health spend, and who he trusts |
+| 6 | Where do you get news of rain and grazing — and what has been wrong? | the incumbent sources, and their failures |
+| 7 | Show me your phone: what do you do with a message you do not understand? | literacy, voice, network, charging, shared phones |
+| 8 | If I asked you now, could you send one message about the water here? | the supply side: one tap, and how trust travels in the group |
+
+Then the close (three asks), then twenty minutes alone with the notes. The one-page version
+is `ArdaLink_Mom_Test_Questions.pdf` — that is what you carry.
+
+**Everything below is the question bank:** the follow-ups, and the coverage list. Use it
+*after* the conversation, to see which block the conversation did not reach and to record
+what you heard (also in `ArdaLink_Mom_Test_Question_Bank.pdf`). The numbering is shared, so
+a note tagged "D19" means the same thing in your notebook, in the bank, and in the tracker.
+
+After each block there is a **Listen for** line — what counts as evidence — and an
+**Avoid** line: the trap that fills notebooks with nothing.
 
 ### A. Warm-up: a normal day (5 min)
 

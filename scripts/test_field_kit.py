@@ -26,7 +26,7 @@ SECTIONS = [
     "## 1. The rules of the conversation (Mom Test)",
     "## 2. Who we are testing: users vs beneficiaries vs payers",
     "## 3. The sample: 10 pastoralists (plus 5 informants)",
-    "## 4. The interview guide",
+    "## 4. The interview: 8 questions, not 60",
     "## 5. Watch, do not talk",
     "## 6. Notes: what counts as evidence",
     "## 7. The hypotheses, and what would prove us wrong",
@@ -116,20 +116,27 @@ assert src.index("### M. Close: ask for something") < src.index("## 5. Watch"), 
     "the commitment ask belongs to the interview, before the product tests"
 print("section order OK (ethics before scripts, close before the product tests)")
 
-# --- 7) the one simple document: the same questions, both languages ----------
-Q = Path("docs/field/mom_test_questions_only.md")
+# --- 7) the one-page conversation guide, and the bank behind it ---------------
+Q = Path("docs/field/mom_test_conversation_guide.md")
 qsrc = io.open(Q, encoding="utf-8").read()
-qnums = sorted({int(n) for n in re.findall(r"^(\d+)\. ", qsrc, re.M)})
-assert qnums == numbers, "the two documents must share the same question numbering"
-assert qnums == list(range(1, 61)), f"the questions-only doc has holes: {qnums}"
-for block in ("## A. Maisha", "## C. Maji", "## E. Kupe", "## F. Habari", "## G. Simu",
-              "## H. Fedha", "## I. Kuamini", "## J. Wengine", "## K. Nyumbani",
-              "## L. Kuchangia taarifa", "## M. Omba kitu"):
-    assert block in qsrc, f"missing from the questions-only doc: {block}"
-assert "Kiswahili" in qsrc and "English" in qsrc, "the doc must be bilingual"
-assert qsrc.count("*(") >= 50, "every question needs its English in italics"
-assert "hakuna malipo ya fedha" in qsrc, "the consent line belongs at the top of the doc"
-assert "Usimwambie tunatengeneza nini" in qsrc, "the never-pitch rule belongs in the doc"
-print("questions-only document: 60 bilingual questions, 13 blocks, same numbering")
+guide_nums = [int(n) for n in re.findall(r"\*\*(\d)\. ", qsrc)]
+assert guide_nums == list(range(1, 9)), \
+    f"the guide must be 8 questions, in order: {guide_nums}"
+assert "Usisome orodha hii kama fomu" in qsrc, \
+    "the guide must say: do not read this as a form"
+assert "Probes" in qsrc and "omba namba" in qsrc.lower(), "the guide needs the probes"
+assert "hakuna malipo ya fedha" in qsrc, "the consent line belongs at the top of the guide"
+assert qsrc.count("*(") >= 8, "each guide question carries its English reference"
+assert "Question_Bank" in qsrc, "the guide must point at the bank for what it left out"
+print("conversation guide: 8 questions + probes + close OK")
+
+B = Path("docs/field/mom_test_question_bank.md")
+bsrc = io.open(B, encoding="utf-8").read()
+bnums = sorted({int(n) for n in re.findall(r"^(\d+)\. ", bsrc, re.M)})
+assert bnums == numbers, "the bank and the kit must share the same question numbering"
+assert bnums == list(range(1, 61)), f"the bank has holes: {bnums}"
+assert "DO NOT READ THIS ALOUD" in bsrc, "the bank must warn against being read out"
+assert "maswali **8** tu" in bsrc, "the bank must point back at the 8-question guide"
+print("question bank: 60 questions, reference only, shared numbering")
 
 print("\nfield kit source OK")

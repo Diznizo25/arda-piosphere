@@ -1,6 +1,20 @@
-# Arda Link — Maswali ya Mom Test kwa Wachungaji
+# Arda Link — Mom Test: Question Bank (maswali 60)
 
-*Kiswahili (kuuliza) + English (reference). Dakika 40–60. Sehemu 13, maswali 60.*
+*Kiswahili (kuuliza) + English (reference). Sehemu 13, maswali 60.*
+
+---
+
+## ⚠️ USIISOME ORODHA HII KWA SAUTI · DO NOT READ THIS ALOUD
+
+Hii ni **hifadhi ya maswali**, si hati ya mahojiano. Mahojiano ni maswali **8** tu
+(`ArdaLink_Mom_Test_Questions.pdf`). Ukisoma orodha hii kwa sauti, unageuza mazungumzo
+kuwa fomu — na mchungaji atajibu kama fomu.
+
+Tumia hii baada ya mahojiano: kuangalia sehemu ambazo mazungumzo hayakufikia, na
+kuandika kile ulichosikia.
+
+*(This is a pool, not a script. Interview with the 8-question guide; come back here
+afterwards to see which block the conversation did not reach.)*
 
 ---
 
