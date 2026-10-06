@@ -245,6 +245,99 @@ _SEV_EN = {
 }
 
 
+# --- the rain sentences that must never contradict each other ------------------
+# There are TWO rain renderers: rain_line() for the advisory and mvua_message() for
+# the `mvua` service, which is also what the voice note speaks. They drifted, and a
+# herder heard it: "no real rain for 0 days" and "rain may start in about 5 days"
+# about rain that had already fallen. Both now come from these builders, so the
+# copies cannot drift again.
+
+STARTED_SW = "Mvua imeanza. Endelea kufuatilia."
+STARTED_EN = "The rains have started. Keep watching."
+# The predicted window has ARRIVED but nothing has fallen here yet. Saying "the rains
+# have started" would be us claiming to know something the herder can see is false
+# from his own door, so the prediction is reported as due, not as done.
+DUE_SW = "Mvua ilitarajiwa kuanza siku hizi. Endelea kufuatilia."
+DUE_EN = "Rain was expected to start around now. Keep watching."
+
+
+def dry_spell_sentence(o: RainOutlook | None, sw: bool) -> str | None:
+    """How long it has been dry — or, at zero, the plain fact that it rained.
+
+    "No real rain for 0 days" is a count of nothing. Zero days dry MEANS it rained
+    today, so that is what it says. One day is said the way a person says it.
+    """
+    if o is None or o.dry_spell_days is None:
+        return None
+    if o.dry_spell_days == 0:
+        return "Mvua ilinyesha leo." if sw else "It rained today."
+    if o.dry_spell_days == 1:
+        return "Mvua ilinyesha jana." if sw else "It rained yesterday."
+    return (f"Siku {o.dry_spell_days} zimepita bila mvua ya maana." if sw
+            else f"No real rain for {o.dry_spell_days} days.")
+
+
+def onset_days(o: RainOutlook | None) -> int | None:
+    """Days until the first wet window, counted from TODAY.
+
+    Counting from `generated_on` — when the forecast was FETCHED — is how we told a
+    herder "rain may start in about 5 days" about a window that opened that morning:
+    the cached forecast was already 5 days old. An outlook carries its own as-of date
+    as generated_on + forecast_age_days, so this stays pure and testable.
+    """
+    if o is None or o.onset_date is None or o.generated_on is None:
+        return None
+    base = o.generated_on
+    if o.forecast_age_days:
+        base = base + timedelta(days=o.forecast_age_days)
+    return (o.onset_date - base).days
+
+
+def onset_when(o: RainOutlook | None, sw: bool) -> str:
+    """The onset timing said the way a person says it: "tomorrow", not "in 1 day"."""
+    days = onset_days(o)
+    if days is None:
+        return "baada ya siku chache" if sw else "in a few days"
+    if days <= 1:
+        return "kesho" if sw else "tomorrow"
+    return (f"baada ya siku {days}" if sw else f"in about {days} days")
+
+
+def onset_state(o: RainOutlook | None) -> str:
+    """ONE place that decides whether an onset prediction is still legitimate.
+
+    none    — nothing to say
+    rained  — it has rained today: onset is an OBSERVATION
+    due     — the predicted window has arrived but nothing has fallen here yet: the
+              forecast is due, not done (claiming "the rains have started" here is a
+              claim the herder can see is wrong from his own door)
+    future  — genuinely ahead: a prediction is honest
+    """
+    if o is None or not (o.has_forecast and o.horizon_days) or not o.onset_date:
+        return "none"
+    if o.dry_spell_days == 0:
+        return "rained"
+    days = onset_days(o)
+    if days is None:
+        return "future"
+    return "due" if days <= 0 else "future"
+
+
+def onset_has_started(o: RainOutlook | None) -> bool:
+    """True when onset is no longer a prediction (it rained, or the window arrived)."""
+    return onset_state(o) in ("rained", "due")
+
+
+def onset_now_sentence(o: RainOutlook | None, sw: bool) -> str | None:
+    """The clause for the two states where predicting onset would be a lie."""
+    state = onset_state(o)
+    if state == "rained":
+        return STARTED_SW if sw else STARTED_EN
+    if state == "due":
+        return DUE_SW if sw else DUE_EN
+    return None
+
+
 def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
     """One short, honest line for the advisory. None when we have nothing to say.
 
@@ -258,12 +351,9 @@ def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
     sw = lang != "english"
     parts: list[str] = []
 
-    if o.dry_spell_days is not None:
-        if o.dry_spell_days == 0:
-            parts.append("Mvua ilinyesha leo." if sw else "It rained today.")
-        else:
-            parts.append((f"Siku {o.dry_spell_days} zimepita bila mvua ya maana." if sw
-                          else f"No real rain for {o.dry_spell_days} days."))
+    spell = dry_spell_sentence(o, sw)
+    if spell:
+        parts.append(spell)
     if o.deficit_pct is not None:
         sev = outlook_severity(o)
         sev_text = _SEV_SW[sev] if sw else _SEV_EN[sev]
@@ -271,20 +361,18 @@ def rain_line(o: RainOutlook | None, lang: str = "swahili") -> str | None:
 
     # "It rained today" followed by "rain may start in about 1 day" is a contradiction
     # a herder caught us in. The onset comes from the FORECAST, which does not know
-    # that onset has already happened — so once it has rained today, onset is no longer
-    # a prediction, it is an observation.
-    already_started = o.dry_spell_days == 0
+    # what has already happened — so onset_now_sentence() (one decision site, shared
+    # with mvua_message) decides whether predicting is still honest.
+    onset_now = onset_now_sentence(o, sw)
     if o.has_forecast and o.horizon_days:
-        if o.onset_date and already_started:
-            parts.append("Mvua imeanza. Endelea kufuatilia." if sw
-                         else "The rains have started. Keep watching.")
+        if onset_now:
+            parts.append(onset_now)
         elif o.onset_date:
-            days = max(0, (o.onset_date - (o.generated_on or o.onset_date)).days)
             if o.confidence == "high":
                 parts.append(
-                    (f"Mvua inaweza kuanza baada ya siku {days}. Huu ni utabiri "
+                    (f"Mvua inaweza kuanza {onset_when(o, True)}. Huu ni utabiri "
                      f"wa siku chache, wa kuaminika." if sw
-                     else f"Rain may start in about {days} days. This is a "
+                     else f"Rain may start {onset_when(o, False)}. This is a "
                           f"short-range forecast, fairly reliable."))
             else:
                 parts.append(
@@ -371,9 +459,9 @@ def mvua_message(o: RainOutlook | None, place: str | None = None,
     where = f" ({place})" if place else ""
     lines: list[str] = [("🌧 MVUA" if sw else "🌧 RAIN") + where]
 
-    if o.dry_spell_days is not None:
-        lines.append((f"Siku {o.dry_spell_days} zimepita bila mvua ya maana." if sw
-                      else f"No real rain for {o.dry_spell_days} days."))
+    spell = dry_spell_sentence(o, sw)
+    if spell:
+        lines.append(spell)
     if o.deficit_pct is not None and o.normal_30d_mm:
         recent_days = o.extras.get("recent_days", 30)
         lines.append(
@@ -385,13 +473,18 @@ def mvua_message(o: RainOutlook | None, place: str | None = None,
         sev = outlook_severity(o)
         sev_text = _SEV_SW[sev] if sw else _SEV_EN[sev]
         lines.append(sev_text[:1].upper() + sev_text[1:] + ".")
+    onset_now = onset_now_sentence(o, sw)
     if o.has_forecast and o.horizon_days:
-        if o.onset_date:
-            days = max(0, (o.onset_date - (o.generated_on or o.onset_date)).days)
+        if onset_now:
+            # It has rained, or the window we predicted is here: a forecast of onset
+            # at that point adds nothing, and "the rains have started" is only sayable
+            # when rain has actually fallen.
+            lines.append(onset_now)
+        elif o.onset_date:
             lines.append(
-                (f"Mvua inaweza kuanza baada ya siku {days}. Huu ni utabiri, si "
+                (f"Mvua inaweza kuanza {onset_when(o, True)}. Huu ni utabiri, si "
                  f"uhakika." if sw else
-                 f"Rain may start in about {days} days. This is a forecast, not a "
+                 f"Rain may start {onset_when(o, False)}. This is a forecast, not a "
                  f"certainty."))
         elif outlook_severity(o) == "dry_season":
             lines.append(

@@ -4,6 +4,8 @@ Run: python scripts/test_rain_outlook.py
 """
 from __future__ import annotations
 
+import io
+import re
 import sys
 from calendar import monthrange
 from datetime import date, timedelta
@@ -231,7 +233,10 @@ print("map age stamp + weekly satellite refresh wiring OK")
 
 
 
-# --- 11) the two nonsense sentences a herder caught us in ---------------------
+# --- 11) the rain nonsense a herder caught us in -----------------------------
+# Word-bounded on purpose: "siku 0" must not match inside "siku 30", and "0 days"
+# must not match inside "30 days" — the 30-day summary is legitimate in these texts.
+ZERO_COUNT = re.compile(r"\bsiku 0\b|\b0 days\b")
 # a) "0 days without real rain". The day count IS the sentence, so zero has to read
 #    as "it rained today", not as a count of nothing.
 from app.services.chat import deterministic_answer  # noqa: E402
@@ -241,29 +246,87 @@ sw_today = deterministic_answer({"rain": {"dry_spell_days": 0,
                                           "normal_for_the_same_30_days_mm": 20.0}},
                                 "swahili")
 assert "ilinyesha leo" in sw_today, sw_today
-assert "siku 0" not in sw_today, sw_today
+assert not ZERO_COUNT.search(sw_today), sw_today
 en_today = deterministic_answer({"rain": {"dry_spell_days": 0}}, "english")
-assert "today" in en_today and "0 days" not in en_today, en_today
+assert "today" in en_today and not ZERO_COUNT.search(en_today), en_today
 assert "jana" in deterministic_answer({"rain": {"dry_spell_days": 1}}, "swahili")
 assert "siku 14 bila mvua" in deterministic_answer({"rain": {"dry_spell_days": 14}}, "swahili")
 
-# b) "it rained today" AND "rain may start in about 1 day" in the same message. The
-#    onset comes from the forecast, which does not know onset already happened.
-started = f.RainOutlook(dry_spell_days=0, rain_30d_mm=12.0, normal_30d_mm=20.0,
-                        deficit_pct=-40.0, has_forecast=True, horizon_days=15,
-                        forecast_total_mm=18.0, generated_on=date(2026, 10, 5),
-                        onset_date=date(2026, 10, 6), confidence="high")
-line = f.rain_line(started, "swahili")
-assert line and "imeanza" in line, line
-assert "inaweza kuanza" not in line, line
-assert "bila mvua" not in line, line
-# ...while a herder who has NOT had rain still gets the forecast honestly.
-pred = f.RainOutlook(dry_spell_days=14, rain_30d_mm=1.0, normal_30d_mm=20.0,
-                     deficit_pct=-95.0, has_forecast=True, horizon_days=15,
-                     forecast_total_mm=22.0, generated_on=date(2026, 10, 5),
-                     onset_date=date(2026, 10, 8), confidence="high")
-assert "inaweza kuanza" in (f.rain_line(pred, "swahili") or ""), f.rain_line(pred, "swahili")
-print("rain wording: no 'zero days', and onset becomes an observation once it rains OK")
+# b) EVERY renderer, not just the one I happened to read first. The `mvua` service
+#    is a SECOND copy of this wording — and it is the one the VOICE NOTE speaks — so
+#    it kept both bugs after the advisory was fixed. A herder HEARD "no real rain for
+#    0 days" and "rain may start in about 5 days" about rain that had come down that
+#    morning. Anything a caller can reach must pass the same checks.
+BOTH = {
+    "rain_line (advisory)": lambda o, lang="swahili": f.rain_line(o, lang) or "",
+    "mvua_message (service + voice)": lambda o, lang="swahili": f.mvua_message(o, None, lang),
+}
+# Word-bounded: see ZERO_COUNT above.
+for label, render in BOTH.items():
+    # It has rained today: an observation, never a count of zero, and never a
+    # prediction of onset for rain that has already fallen.
+    started = f.RainOutlook(dry_spell_days=0, rain_30d_mm=12.0, normal_30d_mm=20.0,
+                            deficit_pct=-40.0, has_forecast=True, horizon_days=15,
+                            forecast_total_mm=18.0, generated_on=date(2026, 10, 5),
+                            forecast_age_days=0, onset_date=date(2026, 10, 6),
+                            confidence="high")
+    txt, eng_txt = render(started), render(started, "english")
+    assert not ZERO_COUNT.search(txt) and not ZERO_COUNT.search(eng_txt), (label, txt)
+    assert "ilinyesha leo" in txt and "rained today" in eng_txt, (label, txt)
+    assert "inaweza kuanza" not in txt and "may start" not in eng_txt, (label, txt)
+    assert "imeanza" in txt, (label, txt)
+
+    # A cached forecast 5 days old, whose wet window opened TODAY but with nothing
+    # fallen here yet: the count from when the forecast was FETCHED is how "may start
+    # in about 5 days" happened. It is now DUE — not "started", which would be a claim
+    # the herder can see is false from his own door.
+    stale = f.RainOutlook(dry_spell_days=6, rain_30d_mm=2.0, normal_30d_mm=20.0,
+                          deficit_pct=-90.0, has_forecast=True, horizon_days=15,
+                          forecast_total_mm=15.0, generated_on=date(2026, 9, 30),
+                          forecast_age_days=5, onset_date=date(2026, 10, 5),
+                          confidence="high")
+    assert f.onset_days(stale) == 0, f.onset_days(stale)
+    assert f.onset_state(stale) == "due", f.onset_state(stale)
+    stale_txt = render(stale)
+    assert "baada ya siku 5" not in stale_txt, (label, stale_txt)
+    assert "ilitarajiwa kuanza siku hizi" in stale_txt, (label, stale_txt)
+    assert "imeanza" not in stale_txt, (label, stale_txt)  # nothing has fallen yet
+    assert "expected to start around now" in render(stale, "english"), label
+
+    # ...and when rain HAS fallen, the same arrived window is an observation.
+    assert f.onset_state(started) == "rained", f.onset_state(started)
+
+    # No rain yet and a genuinely future onset: the forecast stands, counted from
+    # today, and one day out is said as "tomorrow", not "in about 1 day".
+    pred = f.RainOutlook(dry_spell_days=14, rain_30d_mm=1.0, normal_30d_mm=20.0,
+                         deficit_pct=-95.0, has_forecast=True, horizon_days=15,
+                         forecast_total_mm=22.0, generated_on=date(2026, 10, 5),
+                         forecast_age_days=0, onset_date=date(2026, 10, 10),
+                         confidence="high")
+    assert "inaweza kuanza baada ya siku 5" in render(pred), (label, render(pred))
+    tomorrow = f.RainOutlook(dry_spell_days=9, rain_30d_mm=1.0, normal_30d_mm=20.0,
+                             deficit_pct=-95.0, has_forecast=True, horizon_days=15,
+                             forecast_total_mm=22.0, generated_on=date(2026, 10, 5),
+                             forecast_age_days=0, onset_date=date(2026, 10, 6),
+                             confidence="high")
+    assert "inaweza kuanza kesho" in render(tomorrow), (label, render(tomorrow))
+    assert "siku 1" not in render(tomorrow), (label, render(tomorrow))
+print("both rain renderers: no 'zero days', onset counted from today OK")
+
+# c) One builder per sentence. Two copies is exactly how this bug reached a herder
+#    twice, so a third copy must fail HERE instead of in his ear.
+fc_src = io.open("app/services/forecast.py", encoding="utf-8").read()
+assert fc_src.count("zimepita bila mvua ya maana") == 1, \
+    "the dry-spell sentence must have exactly one builder"
+assert fc_src.count("inaweza kuanza") == 2, \
+    "the onset sentence belongs to the two renderers, and no more"
+assert fc_src.count("onset_now_sentence(o, sw)") == 2, \
+    "both renderers must ask the ONE onset decision site before they predict onset"
+wa_rain = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
+mvua_handler = wa_rain.split("def _handle_rain_request")[1][:2000]
+assert "mvua_message(" in mvua_handler, "the mvua service must send mvua_message"
+assert "voice=" in mvua_handler, "...and that same text is what the voice note speaks"
+print("one builder for rain wording (advisory + mvua service/voice) OK")
 
 # --- 12) a greeting must not list what we do not know -------------------------
 # A herder greeted the system and got his water, the queue, the report age and the
