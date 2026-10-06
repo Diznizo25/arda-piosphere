@@ -260,6 +260,43 @@ STARTED_EN = "The rains have started. Keep watching."
 DUE_SW = "Mvua ilitarajiwa kuanza siku hizi. Endelea kufuatilia."
 DUE_EN = "Rain was expected to start around now. Keep watching."
 
+# --- advice that FOLLOWS the situation, never a fixed template ------------------
+# A herder caught the contradiction: "Mvua imeanza" (the rains have started) closing
+# with "usisubiri mvua ianze ndipo usogeze mifugo" (do not wait for the rains before
+# you move). Those are instructions for opposite situations, so which one he gets is
+# decided from the outlook state AND how spent the pasture is:
+#   rained, season spent -> the first showers are not pasture yet
+#   rained, season fine  -> hold, let it green up, watch the pests
+#   due                  -> it is expected, but never something to bet the herd on
+#   dry, nothing pending -> do NOT wait for rain; if pasture near water is going, move
+#   otherwise            -> keep watching
+ADVICE_RAIN_SW = (
+    "Ushauri: mvua imeanza, basi usikimbilie kusonga mbali. Subiri malisho yachane "
+    "kwa siku chache, na kagua mifugo kwa kupe na minyoo.")
+ADVICE_RAIN_EN = (
+    "Advice: now the rains have started, do not rush to move far. Let the pasture "
+    "green up for a few days, and check the herd for ticks and worms.")
+ADVICE_RAIN_DRY_SW = (
+    "Ushauri: mvua imeanza, lakini malisho bado hayajachana. Usikimbilie kusonga "
+    "mbali; kama mvua itasimama na malisho karibu na maji yanaisha, hamia taratibu.")
+ADVICE_RAIN_DRY_EN = (
+    "Advice: the rain has come, but the pasture has not recovered yet. Do not rush to "
+    "move far; if the rain stops and the pasture near water runs out, move gradually.")
+ADVICE_DUE_SW = (
+    "Ushauri: mvua inatarajiwa siku hizi, lakini usiitegemee. Kama malisho karibu na "
+    "maji yanaisha, hamia taratibu sasa.")
+ADVICE_DUE_EN = (
+    "Advice: rain is expected around now, but do not count on it. If the pasture near "
+    "water is running out, move gradually now.")
+ADVICE_NOWAIT_SW = (
+    "Ushauri: kama malisho karibu na maji yanaisha, hamia taratibu sasa — usisubiri "
+    "mvua ianze.")
+ADVICE_NOWAIT_EN = (
+    "Advice: if the pasture near water is running out, move gradually now — do not "
+    "wait for the rains.")
+ADVICE_WATCH_SW = "Ushauri: fuatilia malisho na maji, na hamia taratibu ikiwa yanaisha."
+ADVICE_WATCH_EN = "Advice: keep watching pasture and water, and move gradually if they run out."
+
 
 def dry_spell_sentence(o: RainOutlook | None, sw: bool) -> str | None:
     """How long it has been dry — or, at zero, the plain fact that it rained.
@@ -441,6 +478,31 @@ def place_rain_line(own_mm: float | None, places: list[dict],
 
 
 
+def advice_line(o: RainOutlook | None, sw: bool) -> str:
+    """What to DO, chosen from what the outlook actually says.
+
+    A fixed advice sentence cannot be right for every outlook: "do not wait for the
+    rains before you move" is the correct push in a spent dry season, and the exact
+    opposite of what a herder needs the morning the rains arrive.
+    """
+    if o is None:
+        return ADVICE_WATCH_SW if sw else ADVICE_WATCH_EN
+    state = onset_state(o)
+    # A clear deficit or a long dry spell means the pasture is spent, whatever the
+    # forecast says about rain arriving.
+    spent = (outlook_severity(o) in ("dry", "very_dry")
+             or (o.dry_spell_days or 0) >= 14)
+    if state == "rained":
+        rain_pair = ((ADVICE_RAIN_DRY_SW, ADVICE_RAIN_DRY_EN) if spent
+                     else (ADVICE_RAIN_SW, ADVICE_RAIN_EN))
+        return rain_pair[0] if sw else rain_pair[1]
+    if state == "due":
+        return ADVICE_DUE_SW if sw else ADVICE_DUE_EN
+    if spent:
+        return ADVICE_NOWAIT_SW if sw else ADVICE_NOWAIT_EN
+    return ADVICE_WATCH_SW if sw else ADVICE_WATCH_EN
+
+
 def mvua_message(o: RainOutlook | None, place: str | None = None,
                  lang: str = "swahili") -> str:
     """The fuller answer for the 'mvua' service request.
@@ -498,9 +560,5 @@ def mvua_message(o: RainOutlook | None, place: str | None = None,
                  f"milimita {o.forecast_total_mm:.0f} pekee. Huu ni makadirio." if sw
                  else f"Only {o.forecast_total_mm:.0f} mm of rain is expected over "
                       f"the next {o.horizon_days} days. This is an estimate."))
-    lines.append(
-        ("Ushauri: usisubiri mvua ianze ndipo usogeze mifugo. Kama malisho karibu na "
-         "maji yanaisha, hamia taratibu sasa." if sw else
-         "Advice: do not wait for the rains before you move the herd. If the "
-         "pasture near water is running out, move gradually now."))
+    lines.append(advice_line(o, sw))
     return "\n".join(lines)

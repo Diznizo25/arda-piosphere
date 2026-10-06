@@ -328,6 +328,47 @@ assert "mvua_message(" in mvua_handler, "the mvua service must send mvua_message
 assert "voice=" in mvua_handler, "...and that same text is what the voice note speaks"
 print("one builder for rain wording (advisory + mvua service/voice) OK")
 
+# d) The advice must fit the situation it is attached to. A herder caught the
+#    contradiction: "Mvua imeanza" (the rains have started) closing with "usisubiri
+#    mvua ianze ndipo usogeze mifugo" (do not wait for the rains before you move) —
+#    opposite instructions for opposite situations, in one message.
+NOWAIT = "usisubiri mvua ianze"
+rained_spent = f.RainOutlook(dry_spell_days=0, rain_30d_mm=1.0, normal_30d_mm=20.0,
+                             deficit_pct=-95.0, has_forecast=True, horizon_days=15,
+                             forecast_total_mm=20.0, generated_on=date(2026, 10, 5),
+                             forecast_age_days=0, onset_date=date(2026, 10, 6),
+                             confidence="high")
+rained_fine = f.RainOutlook(dry_spell_days=0, rain_30d_mm=18.0, normal_30d_mm=20.0,
+                            deficit_pct=-10.0, has_forecast=True, horizon_days=15,
+                            forecast_total_mm=20.0, generated_on=date(2026, 10, 5),
+                            forecast_age_days=0, onset_date=date(2026, 10, 6),
+                            confidence="high")
+assert f.advice_line(rained_spent, True) == f.ADVICE_RAIN_DRY_SW
+assert f.advice_line(rained_fine, True) == f.ADVICE_RAIN_SW
+assert "hayajachana" in f.advice_line(rained_spent, True)          # first showers
+assert "yachane" in f.advice_line(rained_fine, True)               # let it green up
+assert f.advice_line(stale, True) == f.ADVICE_DUE_SW
+assert "usiitegemee" in f.advice_line(stale, True)                 # never a bet
+assert "hamia taratibu sasa" in f.advice_line(stale, True), \
+    "a spent season still gets the move-if-pasture-is-going push, only conditional"
+assert f.advice_line(pred, True) == f.ADVICE_NOWAIT_SW, \
+    "a spent season with rain days away must still say: do not wait for rain"
+assert f.advice_line(f.RainOutlook(deficit_pct=-5.0, has_forecast=False), True) \
+    == f.ADVICE_WATCH_SW
+# The cross-check that would have caught the reported message: no text may tell a
+# herder the rains have started AND to move without waiting for rain.
+for case in (rained_spent, rained_fine, stale, pred, tomorrow):
+    for lang in ("swahili", "english"):
+        text = f.mvua_message(case, None, lang)
+        if ("imeanza" in text) or ("have started" in text):
+            assert "usisubiri mvua ianze" not in text, text
+            assert "do not wait for the rains" not in text, text
+        if ("ilitarajiwa kuanza" in text) or ("expected to start" in text):
+            assert "usisubiri mvua ianze" not in text, text
+            assert "do not wait for the rains" not in text, text
+assert "Ushauri:" in f.mvua_message(rained_fine, None, "swahili")
+print("advice follows the situation (no 'rains started, so do not wait for rains') OK")
+
 # --- 12) a greeting must not list what we do not know -------------------------
 # A herder greeted the system and got his water, the queue, the report age and the
 # pests back, one "we do not know" line each. Only a status we HAVE may be spoken.
