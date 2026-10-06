@@ -898,3 +898,34 @@ curl -X POST localhost:8000/advisory -H 'Content-Type: application/json' \
   -d '{"lat": 0.35, "lon": 37.58, "species": "camel", "language": "swahili"}'
 ```
 
+---
+
+## Field validation: the 10-pastoralist round (Mom Test)
+
+The product claims in this README are still assumptions until ten pastoralists in Isiolo
+have described their last costly water or grazing decision with a month, a place and a
+number. The kit for that round lives in `docs/field/`:
+
+| File | What it is |
+|---|---|
+| `mom_test_field_kit.md` | **Source of truth.** The questions, hypotheses, quotas, ethics, plan and budget |
+| `ArdaLink_Mom_Test_Field_Kit.docx` / `.pdf` | The full kit, for editing and for reading |
+| `ArdaLink_Mom_Test_Print_Pack.pdf` | What you carry: crib sheet, consent card (SW/EN), 15 one-page interview sheets, snowball sheet, Swahili spoken guide |
+| `ArdaLink_Mom_Test_Tracker.xlsx` | Where the interviews become rows: screener, per-hypothesis scoring, quotes, numbers, who-is-who, and a decision gate that fills itself |
+
+Rebuild every format from the markdown after editing it:
+
+```bash
+python scripts/make_mom_test_kit.py
+```
+
+`scripts/test_field_kit.py` (part of the battery) fails if a section, an interview block,
+a hypothesis or a quota disappears from the markdown — a field kit that has quietly lost
+a section is worse than no kit at all.
+
+The round answers five questions, and each has a kill criterion in section 7 of the kit:
+is the decision frequent, hard and expensive; is information the binding constraint; will
+he give one tap back; does our data survive his own knowledge; and **who pays** — because
+today nobody is the buyer, and the interviews are the cheapest place to find out.
+
+
