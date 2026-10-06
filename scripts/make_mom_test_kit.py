@@ -21,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "docs" / "field" / "mom_test_field_kit.md"
+SRC_Q = ROOT / "docs" / "field" / "mom_test_questions_only.md"
 OUT = ROOT / "docs" / "field"
 TITLE = "Arda Link — Mom Test Field Kit"
 VERSION = "v1.0 · Isiolo County"
@@ -658,10 +659,20 @@ HYPOTHESES = [
      "He tolerates estimate wording and keeps using it", "He punishes any miss", 6),
     ("F3", "The map is readable and its age is understood",
      "He finds his place and reads the date / kadirio", "He reads the map as today", 6),
-    ("V1", "Somebody already pays for this kind of information",
-     "A named budget line or a real past payment", "Nobody pays", 5),
-    ("V2", "The herder pays something, however small",
-     ">=4/10 pay monthly for phone or vet services", "0/10 pay anything", 4),
+    ("S1", "He already passes information on, or will", ">=6/10 describe a specific time they passed on water or pest news",
+     "Nobody has ever reported anything to anyone", 6),
+    ("S2", "One tap is a price he will pay for the value he gets back",
+     ">=6/10 complete a report unaided, or agree to a test", "Most refuse", 6),
+    ("S3", "His reports are good enough to sell",
+     "Place names, status and timing are what a buyer would accept", "Too coarse or too late", 6),
+    ("S4", "He keeps contributing without being paid", 
+     "He names a concrete gain and is still reporting two weeks later", "One report, then silence", 6),
+    ("V1", "An institution already pays to collect this kind of data",
+     "A named buyer with a real current spend (fuel, staff, surveys, M&E)",
+     "Nobody spends anything on it", 1),
+    ("V2", "That spend is reachable: a budget line, an owner, a cycle",
+     "A line item, a named officer, a date when it is decided",
+     "Only good intentions, no line", 1),
     ("V3", "The chief, the agrovet and the water committee will carry it",
      ">=3 credible distribution offers, with names", "Nobody carries it", 3),
     ("V4", "No gatekeeper blocks it",
@@ -680,6 +691,19 @@ HYPOTHESES = [
     ("A4", "We can reach him without an NGO or the county", "—",
      "Distribution needs a gatekeeper we do not have", 6),
 ]
+
+HYP_TESTS = {
+    "D1": "B4-B9, C10-C15, D16-D21", "D2": "C11-C12, E23-E26, H38",
+    "D3": "D19, H37, K51", "D4": "B4, C10, D16",
+    "U1": "T1, T3, G36", "U2": "T3, M57", "U3": "T4, G35", "U4": "T2",
+    "F1": "T6", "F2": "T7, I42", "F3": "T5",
+    "S1": "L52-L55", "S2": "T3, L53, M57", "S3": "L54, T2, T3",
+    "S4": "K48, K51, T4, the 2-week call",
+    "V1": "informant C2, C5, J46", "V2": "informant C2.4, C5.2, C5.4",
+    "V3": "M58, M59, informants", "V4": "informants, I44",
+    "I1": "K48-K51, G32", "I2": "C12, D19, K49",
+    "A1": "B4-B9", "A2": "F27-F31, I43", "A3": "T2, T5, T6", "A4": "informants, M58",
+}
 
 SCREEN_COLS = ["#", "Initials", "Sex", "Age band", "Ward", "Water point",
                "Walk time (min)", "Distance band", "Species", "Herd size",
@@ -717,27 +741,37 @@ HOW_TO = [
 
 
 WHO_ROWS = [
-    ("Herder / owner — decision maker", "", "", "Not to lose animals; know where to move",
-     "Wasted walks, dead animals, milk drop", "", ""),
-    ("Young herder — daily with the animals", "", "", "Water today, no wasted walking",
-     "Hours, km, heat", "", ""),
+    ("Herder / owner — user, decision maker", "", "",
+     "Not to lose animals; know where to move", "Wasted walks, dead animals, milk drop",
+     "One-tap report from the point", "Never pays"),
+    ("Young herder — user, daily with the animals", "", "",
+     "Water today, no wasted walking", "Hours, km, heat",
+     "The most reports, most often", "Never pays"),
     ("Woman in the manyatta — user + beneficiary", "", "",
      "Milk, children's food, water, milk price", "Walks to water, milk loss, sick shoats",
-     "", ""),
+     "Queue and shoats observations", "Never pays"),
     ("Household / children / elderly — beneficiary", "", "", "Food, milk, income stability",
-     "Nutrition when herds fail", "", ""),
+     "Nutrition when herds fail", "Nothing — he is why the herder never pays", "Never pays"),
     ("Water point committee / WRUA — gatekeeper", "", "", "A working point, no fights",
-     "Queue conflict, breakdowns", "", ""),
+     "Queue conflict, breakdowns", "Confirms repairs, validates reports", "No (may hold a fund)"),
     ("Agrovet — channel + trust anchor", "", "", "Footfall, correct drug use",
-     "Wrong products bought, no follow-up", "", ""),
-    ("County vet / livestock officer — content review", "", "", "Surveillance",
-     "No ground-level data", "", ""),
+     "Wrong products bought, no follow-up", "Distribution; pest observations at the counter",
+     "Maybe — footfall/stock data"),
+    ("County livestock / water dept — BUYER", "", "",
+     "Surveillance, service delivery, fewer outbreaks",
+     "Collecting ward ground truth by vehicle and phone", "Nothing (or it reviews our wording)",
+     "YES — county budget line"),
+    ("NDMA ward officer — BUYER / data partner", "", "",
+     "Timely ward ground truth on water and pasture", "Fuel, staff time, late reports",
+     "Nothing (it is a consumer)", "YES — monitoring / early-warning line"),
+    ("NGO / CBO project — BUYER (M&E)", "", "", "Reach, evidence for funders",
+     "Expensive last-mile data collection", "Distribution and field access",
+     "YES — per ward per month"),
+    ("Insurer / research institute — buyer, later", "", "",
+     "Underwriting data; longitudinal herd data", "Sample surveys, scarce baselines",
+     "Nothing", "Later — needs 6+ months of records"),
     ("Chief / ward admin — distribution", "", "", "Order, service, being seen to help",
-     "Nothing", "", ""),
-    ("NDMA ward officer / CBO — data + payer candidate", "", "",
-     "Ward ground truth on water and pasture", "Thin, late ground truth", "", ""),
-    ("NGO / county / insurer — payer candidates", "", "", "Reach, M&E, underwriting data",
-     "Expensive last-mile collection", "", ""),
+     "Nothing", "Baraza announcement, signboard", "No"),
 ]
 
 
@@ -782,9 +816,9 @@ def build_tracker(path: Path) -> None:
     for r in range(2, 17):
         ws.cell(row=r, column=1, value=r - 1)
 
-    hyp_cols = (["ID", "Hypothesis", "TRUE if", "FALSE -> kill/pivot", "T"]
-                + [f"I{i:02d}" for i in range(1, 11)] + ["Y count", "N count", "Verdict"])
-    ws = _sheet(wb, "02_Hypotheses", [5, 46, 34, 34, 4] + [5] * 10 + [8, 8, 15])
+    hyp_cols = (["ID", "Hypothesis", "TRUE if", "FALSE -> kill/pivot", "T", "How tested"]
+                + [f"I{i:02d}" for i in range(1, 16)] + ["Y count", "N count", "Verdict"])
+    ws = _sheet(wb, "02_Hypotheses", [5, 46, 34, 34, 4, 20] + [4] * 15 + [8, 8, 15])
     _header(ws, hyp_cols)
     for i, (hid, hypo, true_if, false_if, t) in enumerate(HYPOTHESES):
         r = i + 2
@@ -793,16 +827,18 @@ def build_tracker(path: Path) -> None:
         ws.cell(row=r, column=3, value=true_if)
         ws.cell(row=r, column=4, value=false_if)
         ws.cell(row=r, column=5, value=t)
-        ws.cell(row=r, column=16, value=f'=COUNTIF(F{r}:O{r},"Y")')
-        ws.cell(row=r, column=17, value=f'=COUNTIF(F{r}:O{r},"N")')
-        ws.cell(row=r, column=18,
-                value=f'=IF(P{r}+Q{r}=0,"",IF(P{r}>=E{r},"SUPPORTED",'
-                      f'IF(Q{r}>=11-E{r},"CONTRADICTED","UNKNOWN")))')
-        for c in range(2, 19):
+        ws.cell(row=r, column=6, value=HYP_TESTS.get(hid, "interviews 1-10"))
+        # I01..I15 = the ten pastoralist interviews and the five informants.
+        ws.cell(row=r, column=21, value=f'=COUNTIF(F{r}:T{r},"Y")')
+        ws.cell(row=r, column=22, value=f'=COUNTIF(F{r}:T{r},"N")')
+        ws.cell(row=r, column=23,
+                value=f'=IF(U{r}+V{r}=0,"",IF(U{r}>=E{r},"SUPPORTED",'
+                      f'IF(V{r}>=16-E{r},"CONTRADICTED","UNKNOWN")))')
+        for c in range(2, 24):
             ws.cell(row=r, column=c).alignment = Alignment(wrap_text=True, vertical="top")
     yn = DataValidation(type="list", formula1='"Y,N,?"', allow_blank=True)
     ws.add_data_validation(yn)
-    yn.add(f"F2:O{len(HYPOTHESES) + 1}")
+    yn.add(f"F2:T{len(HYPOTHESES) + 1}")
 
     ws = _sheet(wb, "03_Interview_Log", [4, 11, 18, 12, 7, 7, 8] + [8] * 4 + [30] * 8
                 + [10] * 3 + [40])
@@ -827,7 +863,7 @@ def build_tracker(path: Path) -> None:
 
     ws = _sheet(wb, "06_WhoIsWho", [34, 18, 12, 30, 30, 9, 9, 18, 26, 12, 12])
     _header(ws, ["Role", "Who (real name)", "Ward", "What they want",
-                 "What it costs them today", "Can pay?", "Can block?",
+                 "What it costs them today", "Gives (data)", "Pays?",
                  "Contact", "Next step", "Owner", "Date"])
     for i, row in enumerate(WHO_ROWS, start=2):
         for c, value in enumerate(row, start=1):
@@ -839,21 +875,22 @@ def build_tracker(path: Path) -> None:
     ws["A1"].font = Font(bold=True, size=13)
     _header(ws, ["Metric", "Value", "Threshold", "Where it comes from"], row=3)
     metrics = [
-        ("Interviews completed", "=COUNTA('03_Interview_Log'!A2:A11)", "10",
-         "03_Interview_Log"),
-        ("A specific costly decision described", "='02_Hypotheses'!P2", ">=6",
+        ("Interviews completed (10 pastoralists + 5 informants)",
+         "=COUNTA('03_Interview_Log'!A2:A16)", "15", "03_Interview_Log"),
+        ("A specific costly decision described (D1)", "='02_Hypotheses'!U2", ">=6",
          "hypothesis D1"),
-        ("The channel works unaided", "='02_Hypotheses'!P6", ">=6", "hypothesis U1"),
-        ("A real past payment for info or vet care", "='02_Hypotheses'!P13", ">=5",
-         "hypothesis V1"),
-        ("The herder pays for anything monthly", "='02_Hypotheses'!P14", ">=4",
-         "hypothesis V2"),
+        ("He already reports, or agrees to (S1)", "='02_Hypotheses'!U13", ">=6",
+         "hypothesis S1"),
+        ("One tap completed unaided or accepted (S2)", "='02_Hypotheses'!U14", ">=6",
+         "hypothesis S2"),
+        ("His reports are good enough to sell (S3)", "='02_Hypotheses'!U15", ">=6",
+         "hypothesis S3"),
+        ("A buyer with a real current spend (V1)", "='02_Hypotheses'!U17", ">=1",
+         "hypothesis V1 - informant interviews"),
+        ("A budget line, owner and cycle (V2)", "='02_Hypotheses'!U18", ">=1",
+         "hypothesis V2 - informant interviews"),
         ("Commitments accepted (callback / intro / test)",
-         "=COUNTIF('03_Interview_Log'!S2:U16,\"Y\")", ">=4", "Appendix L"),
-        ("Someone will carry distribution", "='02_Hypotheses'!P15", ">=3",
-         "hypothesis V3"),
-        ("The household (not just the owner) benefits", "='02_Hypotheses'!P17", ">=6",
-         "hypothesis I1"),
+         "=COUNTIF('03_Interview_Log'!S2:U16,\"Y\")", ">=4", "Appendix M / section 4 close"),
     ]
     for i, (name, formula, threshold, source) in enumerate(metrics, start=4):
         ws.cell(row=i, column=1, value=name)
@@ -862,13 +899,15 @@ def build_tracker(path: Path) -> None:
         ws.cell(row=i, column=4, value=source)
     ws["A13"] = "VERDICT"
     ws["A13"].font = Font(bold=True, size=12)
-    ws["B13"] = ('=IF(B4<4,"NOT ENOUGH INTERVIEWS YET",'
+    ws["B13"] = ('=IF(B4<10,"NOT ENOUGH INTERVIEWS YET",'
                  'IF(B5<4,"REFRAME / STOP - fewer than 4 of 10 can describe a specific, '
                  'costly decision",'
-                 'IF(AND(B5>=6,B6>=6,B7>=5,B10>=4),"GO - the problem, the channel, the '
-                 'payer signal and the commitments all clear the bar",'
-                 '"PIVOT - the problem is there but the channel, payer or segment is '
-                 'wrong: re-read section 8")))')
+                 'IF(AND(B5>=6,B6>=6,B7>=6,B9>=1,B10>=1,B11>=4),"GO - the problem, the '
+                 'supply habit, the buyer and the commitments all clear the bar",'
+                 'IF(B9<1,"NO BUYER YET - the service may be real, but no institution '
+                 'currently pays to collect this data: re-read section 8 before building '
+                 'more","PIVOT - the problem or the buyer is there but the supply or the '
+                 'segment is wrong: re-read section 8"))))')
     ws["B13"].font = Font(bold=True)
     ws["A15"] = "Problem clustering (one row per problem; unprompted mentions only)"
     ws["A15"].font = Font(bold=True, size=11)
@@ -916,6 +955,22 @@ def main() -> int:
     build_tracker(tracker)
     print(f"wrote {tracker.name}  ({tracker.stat().st_size / 1024:.0f} KB, "
           f"{len(HYPOTHESES)} hypotheses tracked)")
+
+    # The one simple document: the questions, Swahili + English, nothing else.
+    if SRC_Q.exists():
+        q_blocks = parse_md(SRC_Q.read_text(encoding="utf-8"))
+        q_title = "Arda Link — Maswali ya Mom Test kwa Wachungaji"
+        q_sub = ("Kiswahili (kuuliza) + English (reference) · maswali 60 · "
+                 "dakika 40–60 · docs/field/mom_test_questions_only.md")
+        q_pdf = OUT / "ArdaLink_Mom_Test_Questions.pdf"
+        q_docx = OUT / "ArdaLink_Mom_Test_Questions.docx"
+        render_pdf(q_blocks, q_pdf, q_sub, title=q_title)
+        render_docx(q_blocks, q_docx, q_sub)
+        print(f"wrote {q_pdf.name} + {q_docx.name}  "
+              f"({q_pdf.stat().st_size / 1024:.0f} / {q_docx.stat().st_size / 1024:.0f} KB, "
+              f"questions only)")
+    else:
+        print(f"note: {SRC_Q.name} not found, skipped the questions-only document")
     return 0
 
 

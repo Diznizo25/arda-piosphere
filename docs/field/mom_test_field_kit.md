@@ -83,27 +83,40 @@ hand reads as a distraction or a survey.
 
 ## 2. Who we are testing: users vs beneficiaries vs payers
 
-Fill the empty cells as you go. The empty cells are the point of the round — most of
-these are currently **our assumption**, not a fact. If a "can they pay" or "can they
-block" column is still blank at the end, we have a feature, not a service.
+Fill the empty cells as you go. The empty cells are the point of the round — most of these
+are currently **our assumption**, not a fact.
 
-| Role | Who (Isiolo) | What they want | What it costs them today | How they would use Arda Link | Can pay? | Can block? |
+**The model we are testing (state it before every interview, so nobody drifts):**
+
+> The pastoralist is the **user and the beneficiary**, and he **never pays**. What he gives
+> is different: **the data** — a one-tap water report, a pest observation, a herd change.
+> What we sell is that stream, in aggregate, to the institutions that need ground truth
+> and currently pay to collect it badly: the county, NDMA, NGOs and their M&E, insurers
+> and research. So there are two sides to validate, and both can kill us: **will he
+> supply?** (this round, the 10 interviews) and **will a buyer pay?** (the 5 ecosystem
+> interviews). A service with no supply is empty; a stream with no buyer is a cost.
+
+| Role | Who (Isiolo) | What they want | What it costs them today | How they relate to Arda Link | Gives / pays | Can block? |
 |---|---|---|---|---|---|---|
-| **User — decision maker** | Herd owner (usually an older man) | Not to lose animals; to know where to move | Wasted walks, dead animals, milk drop | Decides movement; may never hold the phone | Owns the animals = the asset base | Yes — if he ignores it, it is dead |
-| **User — the one who is there** | Young herder (moran/youth) who takes animals out daily | Water today, no wasted walking | Hours, km, heat | Highest one-tap compliance; reports status | Rarely | No |
-| **User + primary beneficiary** | Woman in the manyatta (milk, water, shoats) | Milk, children's food, water, milk price | Walks to water, milk loss, sick shoats | Receives voice notes; reports water and queue | Sometimes — milk money | Yes, quietly |
-| **Beneficiary** | Household, children, elderly | Food, milk, income stability | Nutrition when herds fail | Indirectly | No | No |
-| **Gatekeeper + beneficiary** | Water point committee / WRUA | A working point, no fights at the trough | Queue conflict, breakdowns | Fans status out to members | Maybe — a small fund | Yes |
-| **Channel + trust anchor** | Agrovet | Footfall, correct drug use | Wrong products bought, no follow-up | Distributes the number; answers health questions | Yes — a business | Yes |
-| **Authority + content review** | County vet / sub-county livestock officer | Surveillance, fewer outbreaks | No ground-level data | Reviews our pest and health wording | Yes — county budget | Yes |
-| **Distribution** | Chief / assistant chief / ward admin | Order, service delivery, being seen to help | Nothing | Baraza announcement, signboard at the point | No | Yes |
-| **Data partner + payer candidate** | NDMA ward officer / drought monitoring | Ward-level ground truth on water and pasture | Thin, late ground truth | Reads or buys the water-report stream | Possibly — a monitoring line | Yes |
-| **Payer candidates** | NGO/CBO projects, county, insurer | Reach, M&E, underwriting data | Expensive last-mile data collection | White-label our stream | Possibly | — |
-| **Us** | Arda Link | A service that survives the field | — | — | — | — |
+| **User — decision maker** | Herd owner (usually an older man) | Not to lose animals; to know where to move | Wasted walks, dead animals, milk drop | Decides movement; may never hold the phone | **Gives:** a one-tap report when he is at the point | Yes — if he ignores it, it is dead |
+| **User — the one who is there** | Young herder (moran/youth) with the animals daily | Water today, no wasted walking | Hours, km, heat | Highest one-tap compliance; reports status | **Gives:** the most reports, the most often | No |
+| **User + primary beneficiary** | Woman in the manyatta (milk, water, shoats) | Milk, children's food, water, milk price | Walks to water, milk loss, sick shoats | Receives voice notes; reports water and queue | **Gives:** queue and shoats observations | Yes, quietly |
+| **Beneficiary** | Household, children, elderly | Food, milk, income stability | Nutrition when herds fail | Indirectly | Nothing — that is why he never pays | No |
+| **Gatekeeper + beneficiary** | Water point committee / WRUA | A working point, no fights at the trough | Queue conflict, breakdowns | Fans status out to members | **Gives:** confirms repairs, validates reports | Yes |
+| **Channel + trust anchor** | Agrovet | Footfall, correct drug use | Wrong products bought, no follow-up | Distributes the number; answers health questions | **Gives:** distribution; may part-pay for footfall data | Yes |
+| **Buyer — data + authority** | County livestock / water department | Surveillance, fewer outbreaks, service delivery | Collecting ward ground truth by vehicle and phone | Reads or buys the ward-level stream | **PAYS**, from a county budget line | Yes |
+| **Buyer — data partner** | NDMA ward officer / drought monitoring | Timely ward ground truth on water and pasture | Fuel, staff time, late reports | Reads or buys the same stream | **PAYS** (monitoring / early-warning line) | Yes |
+| **Buyer — M&E** | NGO / CBO projects, donor programmes | Reach, evidence, reporting to funders | Expensive last-mile data collection | White-labels the stream for M&E | **PAYS**, per ward per month | Yes |
+| **Buyer — future** | Insurer / Takaful, research institute | Underwriting data; longitudinal herd data | Sample surveys, scarce baselines | Buys history once it exists | **PAYS**, later (needs 6+ months of records) | — |
+| **Distribution** | Chief / assistant chief / ward admin | Order, service delivery, being seen to help | Nothing | Baraza announcement, signboard at the point | Nothing | Yes |
+| **Us** | Arda Link | A service that survives contact with the field | — | — | — | — |
 
-**The uncomfortable question this round must answer:** today **nobody is the buyer** —
-not the herder, not the county, not an insurer. If the round does not surface a real
-past payment or a real budget line, we do not have revenue, we have a donor project.
+**The two questions this round must answer.** (1) **Supply:** will he contribute on a
+rhythm — one tap, honestly, without being chased — because the value he gets back is
+real to him? (2) **Demand:** is there a named institution with a real, current spend on
+collecting this data, and a budget line we could sit in? If the round produces no supply
+habit, there is no product; if it produces no buyer, there is no business — only a
+service somebody else's grant pays for.
 
 Pair this with the **decision-rights** question, because it decides the whole channel:
 
@@ -158,8 +171,13 @@ disagree with you?"* The dissenter is worth three agreeable friends.
 
 **Payment:** do **not** pay for an interview. Tea or a soda, yes. Transport
 reimbursement only if he genuinely travelled to meet us. Never offer airtime for
-answers: it buys polite answers, which are worse than no data. Airtime is a *pilot*
-incentive later, and it must be documented as one.
+*answers*: it buys polite answers, which are worse than no data.
+
+Contribution is a different thing from an interview. He supplies the data that somebody
+else buys, so the honest split is: **he is paid in value** (the water news, the tick
+prompt, standing in the ward), and — only if the pilot shows the habit will not hold
+without it — in airtime or data credit, documented as an incentive and never as a wage.
+The herder never becomes our customer.
 
 ---
 
@@ -268,58 +286,76 @@ plays voice notes, every text-only feature we ship is invisible to him.
     betting? How much per month?
 40. Have you ever paid for advice — a vet, an agrovet, a broker, a transporter? When, how
     much, to whom — and was it worth it?
-41. If a phone service kept water and grazing news coming, who around here normally pays
-    for something like that? (Open question. Never "would you pay 50 bob?")
 
-**Listen for:** real amounts for real things — drugs, transport, airtime, water fees.
-That is the only valid willingness-to-pay evidence, and it lives in the past tense.
+**Listen for:** real amounts for real things — drugs, transport, airtime, water fees. Note
+what this is NOT: it is not willingness-to-pay for our service, because **the herder is not
+the buyer** — the people who pay are the institutions that use the data he supplies
+(county, NDMA, NGO, insurer — see section 2). What it tells us is the size of the loss we
+are reducing, and the phone and airtime he already carries.
 
 ### I. Trust, blame and failure (5 min)
 
-42. Tell me about a time when advice about your animals or the rain turned out to be
+41. Tell me about a time when advice about your animals or the rain turned out to be
     wrong. What did you do about it?
-43. If a phone told you the rain would come in five days and it did not come, what would
+42. If a phone told you the rain would come in five days and it did not come, what would
     you do with that phone?
-44. Who would you believe about rain: the chief, the radio, the vet, a neighbour, or a
+43. Who would you believe about rain: the chief, the radio, the vet, a neighbour, or a
     message on your phone? Why?
-45. What would make you stop trusting a service like this completely?
-46. If a service said "we do not know" about something, is that better or worse than a
+44. What would make you stop trusting a service like this completely?
+45. If a service said "we do not know" about something, is that better or worse than a
     guess?
 
 **Listen for:** his tolerance for uncertainty, and the named authority we are compared
-to. Question 46 is the honesty test — the whole design depends on the answer.
+to. Question 45 is the honesty test — the whole design depends on the answer.
 
 ### J. Have others tried? (3 min)
 
-47. Which organisations have given you information or services like this before — an NGO,
+46. Which organisations have given you information or services like this before — an NGO,
     the county, radio, church, insurance? What happened? Is it still running?
-48. Why do you think it stopped — or what would have made you keep using it?
+47. Why do you think it stopped — or what would have made you keep using it?
 
 **Listen for:** the graveyard of previous attempts, and why they died. Usually: no
 rhythm, no reply, no trust, or the project ended.
 
 ### K. Household and beneficiary — ask the women separately (5 min)
 
-49. When you get news early — about water, grass or rain — who in the household benefits
+48. When you get news early — about water, grass or rain — who in the household benefits
     first, and what do they get?
-50. Who fetches water and waters the small stock? How does the walking change with the
+49. Who fetches water and waters the small stock? How does the walking change with the
     seasons?
-51. Who decides what happens to the small stock and the milk money?
-52. What would change in your house if you never wasted a single walk for water this
+50. Who decides what happens to the small stock and the milk money?
+51. What would change in your house if you never wasted a single walk for water this
     year? What would that be worth to you?
 
 **Listen for:** the beneficiary chain — milk, children, women's time — and whether the
 value lands where we claim it does.
 
-### L. Close: ask for something (5 min)
+### L. Contributing information (5 min) — the side that makes the data sellable
 
-53. May I come back or call you in two weeks with what we learned? *(time)*
-54. Would you show me your phone and let me send one message to this service from your
+We are not testing whether he will pay. We are testing whether he will **supply** — because
+the supply is the product, and somebody else buys it.
+
+52. Have you ever told anyone that a water point was broken, or working? How did you do it
+    — a call, the group, in person?
+53. The last time you were at the water, could you have sent one message if you had been
+    asked? Did you?
+54. When you pass information to a group, how do you make people believe it — a photo, a
+    voice note, your name? Who do they believe?
+55. What would make you stop contributing information?
+
+**Listen for:** whether he already reports by habit (that is our head start), how trust is
+established in the group, and what the honest cost of one tap is to him. Unreliable supply
+kills the data product before any buyer sees it.
+
+### M. Close: ask for something (5 min)
+
+56. May I come back or call you in two weeks with what we learned? *(time)*
+57. Would you show me your phone and let me send one message to this service from your
     number, now, while I watch? *(micro-commitment + an unaided attempt)*
-55. Who else should I talk to — and who would disagree with you? *(introductions)*
-56. Could we do a test at your water point with the committee or the group?
+58. Who else should I talk to — and who would disagree with you? *(introductions)*
+59. Could we do a test at your water point with the committee or the group?
     *(advancement)*
-57. What did I get wrong today? What should I have asked you and did not?
+60. What did I get wrong today? What should I have asked you and did not?
 
 **Listen for:** a yes with a constraint is better than an enthusiastic "yes, definitely"
 with nothing attached. No introduction, no callback, no test = no signal.
@@ -413,14 +449,23 @@ would change the product, so the decision is not made by the person who built it
 | F2 | Rain-onset language survives being wrong | T7, I43 | He tolerates "estimate" wording and keeps using the service | He punishes any miss → probability language only, never a countdown |
 | F3 | The map is readable, and its age is understood | T5 | He finds his place and reads the date/"kadirio" correctly | He reads the map as today's truth → harder age statement, or less map |
 
-### Viability — who pays, and who lets us in?
+### Supply — will he give the data? (the herder never pays; he supplies)
 
-| ID | Hypothesis | Question that tests it | TRUE if | FALSE → kill/pivot if |
+| ID | Hypothesis | Questions that test it | TRUE if | FALSE → kill/pivot if |
 |---|---|---|---|---|
-| V1 | Somebody already pays for this kind of information | H39, H40, informant guides | A named budget line or a real past payment exists | Nobody → grant-dependent: decide whether that is acceptable *before* scaling |
-| V2 | The herder pays something, however small | H39, H41 | ≥4/10 already pay monthly for phone or vet services | 0/10 → herder-pays is off the table for now — say so publicly |
-| V3 | The chief, the agrovet and the water committee will carry it | L55, L56, informant guides | ≥3 credible distribution offers, with names | Nobody carries it → acquisition cost kills it |
-| V4 | No gatekeeper blocks it (politics, both herds, county turf) | Informant guides, I45 | Nobody objects or claims ownership | A veto → negotiate, or change ward |
+| S1 | He already passes information on, or will | L52–L55 | ≥6/10 describe a specific time they passed on water or pest news | Nobody has ever reported anything to anyone → the habit must be created from zero, which is a different product |
+| S2 | One tap is a price he will pay for the value he gets back | T3, L53, M57 | ≥6/10 complete a report unaided, or agree to a test | Most refuse → redesign the loop, or compensate in value (airtime, data, standing) and re-test |
+| S3 | His reports are good enough to sell | L54, T2, T3 | Place names, water status and timing are what a buyer would accept | Reports too coarse or too late → the stream has no buyer, whatever the herder does |
+| S4 | He keeps contributing without being paid for it | K48, K51, T4, the 2-week call | He names a concrete gain (water, hours, milk, standing) and is still reporting two weeks later | He contributes once, then stops → we would be buying data with grants, which does not scale |
+
+### Viability — does somebody buy the data, and will they let us in?
+
+| ID | Hypothesis | Questions that test it | TRUE if | FALSE → kill/pivot if |
+|---|---|---|---|---|
+| V1 | An institution already pays to collect this kind of data | Informant guides C2, C5, J46 | A named buyer with a real, current spend (fuel, staff, surveys, M&E) | Nobody spends anything on it → grant-dependent: decide that openly before scaling |
+| V2 | That spend is reachable: a budget line, an owner, a cycle | Informant guides C2.4, C5.2, C5.4 | A line item, a named officer, and a date when it is decided | Only good intentions, no line → we have a pilot, not a business |
+| V3 | The chief, the agrovet and the water committee will carry it | M58, M59, informant guides | ≥3 credible distribution offers, with names | Nobody carries it → acquisition cost kills it |
+| V4 | No gatekeeper blocks it (politics, both herds, county turf) | Informant guides, I44 | Nobody objects or claims ownership | A veto → negotiate, or change ward |
 
 ### Impact — is the benefit where we claim it is?
 
@@ -474,7 +519,8 @@ Then write, one sentence each:
 
 | Result | Condition | What we do next |
 |---|---|---|
-| **GO** | ≥6/10 describe a specific, recurring, costly water or grazing decision **and** ≥6/10 have a phone/WhatsApp behaviour we can rely on **and** ≥5/10 name a real past payment for information or vet care **and** ≥4/10 accept a commitment | Keep the same loops; move to a 6-week pilot with 30 households in one ward, and measure the reciprocity test |
+| **GO** | ≥6/10 describe a specific, recurring, costly water or grazing decision **and** ≥6/10 either already pass news on or complete a report in front of us (supply) **and** ≥1 named institutional buyer with a real current spend on collecting this data **and** a named budget owner **and** ≥4/10 accept a commitment | Keep the same loops; move to a 6-week pilot with 30 households in one ward, and watch two numbers: reports per point per week, and whether the buyer's conversation reaches a budget line |
+| **PIVOT — supply** | The problem and the buyer are real, but most pastoralists will not report on a rhythm without being paid | Change the loop: report only when something is wrong, piggyback on the agrovet's visit, or pay in airtime/data and measure whether the habit then holds |
 | **PIVOT — channel** | The problem is real, but the decision maker has no phone, or the phone holder does not decide | Change the entry point: voice notes to the phone holder, a signboard at the point, the agrovet as the front door, or the water committee as the account holder |
 | **PIVOT — problem** | The pain is animal health, market price or water infrastructure, not grazing decisions | Re-plan around what they named: keep the platform, change the promise |
 | **PIVOT — segment** | The pain is concentrated: only the far, large-herd households have it | Narrow the segment on purpose; a broad launch spends money on the wrong people |
@@ -521,6 +567,10 @@ either the feature is decoration or the interview guide is missing a question.
 
 **Two rules for reading this table**
 
+- Read every row twice. Once as **his** question: does this make his day better, so he keeps
+  using it? Once as the **buyer's**: does this make the data stream better, so somebody pays
+  for it? A feature that only answers the first is a cost. A feature that only answers the
+  second is a survey, and he will stop opening it.
 - A feature whose evidence column is still empty after ten interviews is a liability: it
   costs attention and buys nothing.
 - A feature whose evidence is **contradicted** is not a failed round. It is the round
@@ -643,7 +693,8 @@ Answer these before the fieldwork, then check them afterwards.
 | The problem is real but he cannot act on it | He says he already knew, and did nothing | Our constraint theory is wrong: look at money, mobility, or the collective decision |
 | The phone is not his at the moment of decision | The phone is shared, or the animals are out with someone else | Redesign around the real decision moment and the real phone holder |
 | Our data cannot bear the claim at the decision moment | He corrects the map, the point status, the kg estimate | Reduce the claim, show the age, or drop the artefact |
-| Nobody pays | No budget line surfaces anywhere, and no past payment exists | Decide the model openly: grant, county, or a paid service to a different buyer |
+| No buyer exists | No budget line surfaces anywhere, and nobody can name a current spend on collecting this data | Keep running on grants deliberately, and hunt the buyer before adding features — or accept that this is a public good and say so |
+| The supply decays | Reports arrive for a week and then stop; nobody reports without being chased | The value he receives is not enough to pay for his one tap: fix the value, or compensate, and re-measure |
 | A gatekeeper blocks us (politics, county turf, both-herd disputes) | Someone asks why they were not consulted first, or claims the data | Negotiate formally — chief, ward, county — in writing |
 | We learn a lot and change nothing | No row in the decisions log with an owner and a date | The round has failed: the log entry is the deliverable, not the notebook |
 
@@ -824,15 +875,19 @@ already being paid for.
    like this before, and what happened?)
 6. How many herders do you see in a week, and do they come on a rhythm?
 
-### C2. County vet / sub-county livestock officer (authority and content)
+### C2. County vet / sub-county livestock officer (authority, content, and likely buyer)
 
 1. What surveillance do you have, and where does it come from today?
-2. What do you spend on data collection per month — people, fuel, airtime?
-3. If a service gave you weekly ground truth on water points and pasture, would that
-   replace or add to something you already pay for?
-4. Which budget line would that come from, and when is it decided?
-5. Whose wording do you want used for tick/worm messaging — and who signs it off?
-6. What would make the county object to this service operating in the ward?
+2. What did you spend last month collecting data from the wards — fuel, staff time,
+   airtime, surveys — and who did that money go to?
+3. Have you ever bought data or a service like this: a survey firm, a CBO, a partner
+   project? What did the contract cost, and which line paid it?
+4. Which budget line would a ward-level water-and-pasture stream come from, who signs it
+   off, and when does that cycle close?
+5. If such a stream arrived weekly, what would it replace — and what would you stop paying
+   for?
+6. Whose wording do you want used for tick/worm messaging — and who signs it off?
+7. What would make the county object to this service operating in the ward?
 
 ### C3. Chief / assistant chief (the gate)
 
@@ -855,10 +910,13 @@ already being paid for.
 
 1. What ward-level data do you hold, how is it collected, and how old is it by the time you
    use it?
-2. What do you pay for that collection, and from which line?
-3. Where does our stream add something yours cannot give you?
-4. What would you need to see before you put it into a budget or a proposal?
-5. Who else in the ward should we be talking to — and who would disagree with this?
+2. What did the last collection round cost, and which line paid for it?
+3. Have you ever bought a data stream or a monitoring service? From whom, how much, and
+   what did you have to do to get it procured?
+4. What would you need to see — and who would you need to convince — before putting this in
+   a budget or a proposal?
+5. Who else in the county or the NGO world buys this kind of data, and what do they pay?
+6. Who else in the ward should we be talking to — and who would disagree with this?
 
 ---
 

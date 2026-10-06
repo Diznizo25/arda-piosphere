@@ -924,8 +924,10 @@ a hypothesis or a quota disappears from the markdown — a field kit that has qu
 a section is worse than no kit at all.
 
 The round answers five questions, and each has a kill criterion in section 7 of the kit:
-is the decision frequent, hard and expensive; is information the binding constraint; will
-he give one tap back; does our data survive his own knowledge; and **who pays** — because
-today nobody is the buyer, and the interviews are the cheapest place to find out.
+is the decision frequent, hard and expensive; will he **supply** the data on a rhythm;
+does our data survive his own knowledge; **who buys it** — because the pastoralist is the
+user and the beneficiary and never pays, while the county, NDMA, NGOs, insurers and
+researchers pay for the ground truth he supplies; and does the value he gets back hold the
+habit without a wage.
 
 
