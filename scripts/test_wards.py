@@ -55,21 +55,55 @@ assert wards.match_ward("xxx") is None
 assert wards.match_ward("") is None and wards.match_ward(None) is None
 print("ward names match case-insensitively, and invented wards are refused")
 
-# --- 4) the pin flow uses it, and confirms the ward back to the herder -------
+# --- 4) the pin flow confirms the ward BEFORE it registers anything ----------
 src = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
 assert "wards.ward_for(lat, lon)" in src, "the pin flow must derive the ward itself"
-assert "ward=hit.ward, county=hit.county" in src, \
-    "the derived ward must be stored on the water source"
-assert 'conversation.set_state(phone, "pin.ward"' in src, \
-    "an unplaceable point must ask the herder, not store an empty ward"
-assert 'elif state == "pin.ward":' in src, "and that answer must be handled"
-assert "water_sources.set_ward(" in src, "the herder's ward must be written to the point"
-assert "ward ya {hit.ward}" in src or "ward {hit.ward}" in src, \
-    "the confirmation must state the ward back to him"
-assert "wards.PERI_URBAN" in src, \
+assert "ward=ward, county=wards.COUNTY" in src, \
+    "the confirmed ward must be the one stored on the water source"
+assert "wards.match_ward(text)" in src, \
+    "a ward he types must be matched against the wards we ship"
+
+# The name step asks; it must not register. Registration lives in the confirm step.
+name_branch = src.split('elif state == "pin.name":')[1].split(
+    'elif state == "pin.ward_confirm":')[0]
+assert "_start_pin_ward_check(" in name_branch, \
+    "after the name we must ask about the ward, not write the point"
+assert "_finish_pin_registration(" not in name_branch, \
+    "the name step must not register the point before the ward is confirmed"
+
+ask_fn = src.split("def _start_pin_ward_check(")[1].split("def _finish_pin_registration(")[0]
+assert 'conversation.set_state(phone, "pin.ward_confirm"' in ask_fn, \
+    "the derived ward must be put to him for confirmation"
+assert "water_sources.create_water_source(" not in ask_fn, \
+    "nothing may be written before he confirms"
+assert "send_quick_reply_buttons" in ask_fn, "one tap to confirm, not a typed word"
+assert 'conversation.set_state(phone, "pin.ward"' in ask_fn, \
+    "an unplaceable point must ask him for the ward"
+assert "_finish_pin_registration(" not in ask_fn, "the ask step must not register"
+
+confirm_branch = src.split('elif state == "pin.ward_confirm":')[1].split(
+    'elif state == "pin.ward":')[0]
+assert "_finish_pin_registration(" in confirm_branch, \
+    "his confirmation is what registers the point"
+assert 'conversation.set_state(phone, "pin.ward", data)' in confirm_branch, \
+    "a 'not right' answer must ask for the ward by name"
+
+ward_branch = src.split('elif state == "pin.ward":')[1].split("elif state ==")[0]
+assert "_finish_pin_registration(" in ward_branch, \
+    "the ward he names must register the point with THAT ward"
+assert "set_ward(" not in ward_branch, "no update-after-the-fact: we register with his ward"
+
+reg_fn = src.split("def _finish_pin_registration(")[1].split("def ")[0]
+assert "conversation.clear_state(phone)" in reg_fn
+assert "wards.context_for(ward) == wards.PERI_URBAN" in src, \
     "peri-urban wards (Isiolo town) must take the different branch"
-ws_src = io.open("app/services/water_sources.py", encoding="utf-8").read()
-assert "def set_ward(" in ws_src, "the service layer needs set_ward"
-print("pin flow: derives the ward, states it back, asks when it cannot tell")
+assert "ward ya {ward}" in src or "ward {ward}" in src, \
+    "the receipt must state the ward he agreed to"
+# The back button works from both ward states: no dead ends inside the flow.
+assert 'if state in ("pin.ward_confirm", "pin.ward"):' in src, \
+    "back/rudi must work from the ward steps"
+worker = io.open("scripts/_run_tests_in_container.sh", encoding="utf-8").read()
+assert "test_wards" in worker, "this suite belongs in the battery"
+print("pin flow: derives the ward, asks HIM, registers only on confirmation")
 
 print("\nward lookup tests OK")
