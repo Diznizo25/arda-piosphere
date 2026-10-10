@@ -20,3 +20,14 @@ and `isiolo_county.geojson` for the full-county scale-up run.
 
 **This repo does not include these files yet — tell me which ward to validate
 on first and I'll fetch/build its boundary, or share a file and I'll wire it in.**
+
+## Isiolo County: already done
+
+All ten Isiolo wards are split out from the national file (no download needed):
+
+```bash
+python scripts/split_wards.py          # writes config/wards/<ward>.geojson for all ten
+python scripts/split_wards.py --list   # report matches and vertex counts, write nothing
+```
+
+See docs/ward_rollout.md for the cost model and the order to roll out.
