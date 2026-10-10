@@ -133,6 +133,19 @@ def create_water_source(
     return ws
 
 
+def set_ward(water_source_id: str, ward: str) -> None:
+    """File a water point under the ward the herder (or our polygons) named."""
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update water_sources set ward = %(ward)s, updated_at = now() "
+                "where id = %(id)s",
+                {"ward": ward, "id": water_source_id},
+            )
+        conn.commit()
+    log.info("water source %s filed under ward %r", water_source_id, ward)
+
+
 def list_water_sources() -> list[WaterSource]:
     with get_pg_connection() as conn:
         with conn.cursor() as cur:

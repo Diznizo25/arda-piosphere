@@ -39,6 +39,7 @@ from app.services import (
     water_sources,
     water_status,
     water_validation,
+    wards,
     weight as weight_service,
     whatsapp_client,
 )
@@ -1952,11 +1953,17 @@ def _finish_pin_registration(phone: str, pastoralist, water_type: str, name: str
     # Confidence from validation: near a known source = moderate; otherwise low
     # until a herder confirms it in the field.
     confidence = 0.6 if result.has_nearby_source else 0.45
+
+    # The ward comes from the coordinates, not from the herder: he names the place
+    # ("Kisima cha Kipsing"), we say which ward it is. Asking a pastoralist to spell his
+    # ward is a question he should never have to answer.
+    hit = wards.ward_for(lat, lon)
     try:
         ws = water_sources.create_water_source(
             lon=lon, lat=lat, source_type="ground_truth",
             source_ref=f"whatsapp:{water_type}:{phone}", name=name,
-            water_type=water_type, confidence=confidence,
+            water_type=water_type, ward=hit.ward, county=hit.county,
+            confidence=confidence,
         )
     except Exception:  # noqa: BLE001
         log.exception(f"Failed to register water point for {phone}")
@@ -1978,15 +1985,40 @@ def _finish_pin_registration(phone: str, pastoralist, water_type: str, name: str
         pastoralist.water_source_id = ws.id
     except Exception:  # noqa: BLE001
         log.exception("failed to set pinned point as confirmed water source (non-fatal)")
-    conversation.clear_state(phone)
+    if hit.known:
+        conversation.clear_state(phone)
+    else:
+        # Keep the flow open for exactly one answer: the next message is read as the ward
+        # name (the polygons could not place it, and he is the one who knows).
+        conversation.set_state(phone, "pin.ward", {"water_source_id": ws.id})
+    sw = pastoralist.preferred_language == "swahili"
+    # He named the place from his own knowledge; we tell him which ward we filed it in, so
+    # a wrong ward is visible to the one person who would notice. Peri-urban wards get one
+    # extra question, because in town the water point is not the grazing place.
+    place = ""
+    tail = ""
+    if hit.known:
+        place = f" — ward ya {hit.ward}" if sw else f" — ward {hit.ward}"
+        if hit.context == wards.PERI_URBAN:
+            tail = ("\n\nKwa mjini, maji si malisho: niambie pia mahali unapeleka mifugo "
+                    "kulisha (tuma eneo la mahali hapo)." if sw else
+                    "\n\nIn town, water is not pasture: tell me too where you take the "
+                    "herd to graze (send that location).")
+    else:
+        tail = ("\n\nHatukuweza kutambua ward kutoka eneo hili. Niambie jina la ward "
+                "(k.m. 'Burat')." if sw else
+                "\n\nWe could not tell which ward this is. Tell me the ward name "
+                "(e.g. 'Burat').")
     _send_reply(
         phone,
         pastoralist,
         {
-            "swahili": "Asante! Eneo lako limeandikishwa kama chanzo cha maji na "
-                       "tumeanza kujenga taarifa zake. Tutakutumia maendeleo ya hatua kwa hatua — subiri kidogo.",
-            "english": "Thank you! Your location is now registered as a water source and "
-                       "we have started building its info. We will send progress updates — hang on.",
+            "swahili": f"Asante! Eneo lako limeandikishwa kama chanzo cha maji{place} na "
+                       f"tumeanza kujenga taarifa zake.{tail} Tutakutumia maendeleo ya "
+                       f"hatua kwa hatua.",
+            "english": f"Thank you! Your location is now registered as a water source"
+                       f"{place} and we have started building its info.{tail} We will "
+                       f"send progress updates.",
         }[pastoralist.preferred_language],
         voice=pastoralist.voice_replies,
     )
@@ -2920,3 +2952,30 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
             if len(candidate) >= 2 and not any(ch.isdigit() for ch in candidate):
                 name = candidate[:60]
         _finish_pin_registration(phone, pastoralist, data.get("water_type", "well"), name)
+
+    elif state == "pin.ward":
+        # We could not place his point from the polygons, so we asked. Accept the ward he
+        # names — but only one we actually ship, so a typo cannot invent a ward.
+        ward = wards.match_ward(text)
+        ws_id = (data or {}).get("water_source_id")
+        if ward and ws_id:
+            try:
+                water_sources.set_ward(str(ws_id), ward)
+                conversation.clear_state(phone)
+                whatsapp_client.send_text(
+                    phone,
+                    {"swahili": f"Asante! Tumeandika chanzo chako katika ward ya {ward}.",
+                     "english": f"Thank you! Your point is now filed under {ward}."}[lang],
+                )
+                return
+            except Exception:  # noqa: BLE001
+                log.exception("could not set ward from herder reply (non-fatal)")
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(
+            phone,
+            {"swahili": "Sikupata ward hiyo. Tuma jina la ward kama 'Burat', au tuma "
+                        "'huduma' kuendelea.",
+             "english": "I did not recognise that ward. Send the ward name like 'Burat', "
+                        "or send 'menu' to continue."}[lang],
+        )
+        return
