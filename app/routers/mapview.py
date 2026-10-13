@@ -83,6 +83,15 @@ def _t(lang: str) -> dict:
         "g_sending": "Inatuma…",
         "g_sent": "Asante! Jibu limekutumwa kwenye WhatsApp.",
         "g_fail": "Imeshindikana. Fungua link tena kutoka WhatsApp.",
+        # The plot: he sizes it, so the number he sees is the area he is telling us about.
+        "g_size": "Ukubwa wa eneo",
+        "g_send": "Tuma eneo hili",
+        "g_across": "upana",
+        "g_ha": "hekta",
+        "g_zoom": "Piga zoom hadi uone eneo lako vizuri, kisha gusa katikati yake.",
+        # Our vegetation reading is 10 m per pixel and is an area mean: zooming in shows
+        # the ground, not more precision from us.
+        "g_data": "Data yetu: pikseli 10 m; thamani ni wastani wa eneo, si ya mti mmoja.",
     }
 
 
@@ -321,14 +330,20 @@ function pinColor(w) {
   return s || WATER_HEX;
 }
 
-const map = L.map('map', { zoomControl: true, attributionControl: true })
+// Zoom like a map app: he has to be able to walk right down to his own plot.
+// maxNativeZoom keeps the satellite sharp to z19 and stretches those tiles beyond it
+// (maxZoom 22) instead of going grey — the usual "the map is broken" surprise.
+const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom: 22 })
   .setView([D.herder.lat, D.herder.lon], 10);
 const osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+  maxZoom: 19, maxNativeZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
 const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
   'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 19,
+  maxZoom: 22, maxNativeZoom: 19,
   attribution: '&copy Esri, Maxar, Earthstar Geographics'});
+// A scale bar, because "precision" has to be readable in metres on the ground.
+L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
 // Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
 L.control.layers(
   { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
@@ -559,6 +574,10 @@ document.body.addEventListener('click', function (ev) {
 // /grazing/pin with a short-lived token — never a phone number — and the ANSWER
 // comes back on WhatsApp, because the phone is where a herder keeps his record.
 if (D.graze && D.graze.on && D.graze.token) {
+  // Tap sets the CENTRE of the patch; he then chooses how big it was, so the hectares we
+  // record are the hectares he means. It is drawn with L.circle, in METRES: a fixed
+  // pixel dot claims a different size on the ground at every zoom level, which is a lie
+  // that gets worse the closer he looks.
   const bar = document.createElement('div');
   // Neutral chrome, NOT green: on this map green means pasture quality and
   // nothing else (scripts/test_map_palette.py enforces it). An instruction banner
@@ -567,28 +586,80 @@ if (D.graze && D.graze.on && D.graze.token) {
     'color:#fff;font:700 14px/1.35 system-ui,sans-serif;padding:10px 12px;text-align:center';
   bar.textContent = TXT.g_hint || 'Tap where they grazed today';
   document.body.appendChild(bar);
-  let marker = null, busy = false;
+
+  const panel = document.createElement('div');
+  panel.style.cssText = 'position:fixed;bottom:52px;left:8px;right:8px;z-index:1000;' +
+    'background:#fff;color:#0f172a;font:600 13px/1.4 system-ui,sans-serif;' +
+    'border-radius:10px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+  document.body.appendChild(panel);
+
+  const SIZES = [50, 100, 250, 500];   // metres of radius: a plot, a field, a grazing area
+  let radius = 100, spot = null, circle = null, centre = null, busy = false;
+
+  function refresh() {
+    if (!spot) {
+      panel.textContent = TXT.g_zoom ||
+        'Zoom in until you see your area, then tap its centre.';
+      return;
+    }
+    const ha = (Math.PI * radius * radius) / 10000;
+    panel.innerHTML = '<div>' + (TXT.g_size || 'Area size') + ': ' +
+      SIZES.map(function (r) {
+        return '<button data-r="' + r + '" style="margin:2px;padding:3px 8px;' +
+          'border-radius:6px;border:1px solid #94a3b8;background:' +
+          (r === radius ? '#0f172a' : '#fff') + ';color:' +
+          (r === radius ? '#fff' : '#0f172a') + '">' + r + ' m</button>';
+      }).join('') + '</div>' +
+      '<div style="margin-top:4px">' + (2 * radius) + ' m ' +
+      (TXT.g_across || 'across') + ' · ' + ha.toFixed(1) + ' ' + (TXT.g_ha || 'hectares') +
+      '</div>' +
+      '<div style="margin-top:2px;color:#475569">' + spot.lat.toFixed(5) + ', ' +
+      spot.lng.toFixed(5) + '</div>' +
+      '<div style="margin-top:2px;color:#64748b;font-weight:400">' +
+      (TXT.g_data || '') + '</div>' +
+      '<button id="gsend" style="margin-top:6px;width:100%;padding:8px;border:0;' +
+      'border-radius:8px;background:#0f172a;color:#fff;font:700 14px system-ui">' +
+      (TXT.g_send || 'Send this area') + '</button>';
+  }
+
   map.on('click', function (ev) {
-    if (busy) return;
-    busy = true;
-    if (marker) map.removeLayer(marker);
-    // The spot he marks is geometry, so it claims no hue either: white dot, dark
-    // ring — readable over OSM and satellite tiles alike.
-    marker = L.circleMarker(ev.latlng, {radius: 9, color: '#0f172a', weight: 3,
-      fillColor: '#ffffff', fillOpacity: 0.85}).addTo(map);
-    bar.textContent = TXT.g_sending || 'Sending...';
-    fetch(D.graze.endpoint, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      // point_id is the raster this page PAINTED: the answer must be read from the
-      // same satellite file he was looking at, not from whichever point happens to
-      // be nearest the tap (a brand-new point has no raster yet at all).
-      body: JSON.stringify({lat: ev.latlng.lat, lon: ev.latlng.lng,
-        token: D.graze.token, point_id: D.main_id || null})
-    }).then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => { bar.textContent = TXT.g_sent || 'Sent'; })
-      .catch(() => { bar.textContent = TXT.g_fail || 'Failed'; })
-      .finally(() => { busy = false; });
+    spot = ev.latlng;
+    if (circle) map.removeLayer(circle);
+    if (centre) map.removeLayer(centre);
+    circle = L.circle(spot, {radius: radius, color: '#0f172a', weight: 2,
+      fillColor: '#ffffff', fillOpacity: 0.25}).addTo(map);
+    centre = L.circleMarker(spot, {radius: 4, color: '#0f172a', weight: 2,
+      fillColor: '#ffffff', fillOpacity: 1}).addTo(map);
+    refresh();
   });
+
+  panel.addEventListener('click', function (ev) {
+    const t = ev.target;
+    if (!t) return;
+    if (t.dataset && t.dataset.r) {
+      radius = parseInt(t.dataset.r, 10) || radius;
+      if (circle) circle.setRadius(radius);
+      refresh();
+      return;
+    }
+    if (t.id === 'gsend' && spot && !busy) {
+      busy = true;
+      bar.textContent = TXT.g_sending || 'Sending...';
+      fetch(D.graze.endpoint, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        // point_id is the raster this page PAINTED: the answer must be read from the
+        // same satellite file he was looking at, not from whichever point happens to
+        // be nearest the tap (a brand-new point has no raster yet at all).
+        // radius_m is the patch he drew, in metres.
+        body: JSON.stringify({lat: spot.lat, lon: spot.lng, radius_m: radius,
+          token: D.graze.token, point_id: D.main_id || null})
+      }).then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(() => { bar.textContent = TXT.g_sent || 'Sent'; panel.innerHTML = ''; })
+        .catch(() => { bar.textContent = TXT.g_fail || 'Failed'; })
+        .finally(() => { busy = false; });
+    }
+  });
+  refresh();
 }
 
 // Zoom so everyone is on screen; on a focused water point, fit its rings

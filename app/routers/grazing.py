@@ -57,6 +57,21 @@ async def grazing_pin(request: Request) -> dict:
         herder = pastoralists.upsert_pastoralist(phone)
 
     hint = str(payload.get("point_id") or "").strip() or None
+
+    # The patch he drew on the map, in metres. Validated here so a bad value can never
+    # reach the ledger; logged so we can see the shape of the areas herders actually
+    # claim (a 50 m plot and a 500 m grazing area are different questions). Storing it
+    # per event needs a column of its own — a separate, deliberate step.
+    try:
+        radius_m = float(payload.get("radius_m"))
+    except (TypeError, ValueError):
+        radius_m = None
+    if radius_m is not None and not (10.0 <= radius_m <= 5000.0):
+        raise HTTPException(status_code=400, detail="radius_m out of range (10-5000 m)")
+    if radius_m is not None:
+        log.info("grazing pin: plot radius %.0f m (%.1f ha) from the map",
+                 radius_m, (3.141592653589793 * radius_m * radius_m) / 10000.0)
+
     try:
         res = grazing_flow.handle_pin(phone, herder, lat, lon, source="map",
                                       point_id_hint=hint)
@@ -89,6 +104,8 @@ async def grazing_pin(request: Request) -> dict:
         "reason": res.reason,
         "recorded": bool(res.recorded),
         "sent_whatsapp": bool(res.text),
+        # Echoed so the page (and the tests) can see the size it sent was accepted.
+        "radius_m": radius_m,
         # The page shows this while he waits for the WhatsApp message. It must not
         # say "no satellite picture" either — the whole point of the reason codes.
         "confirmation": ("Nimepima eneo hilo. Jibu limekutumwa kwenye WhatsApp."

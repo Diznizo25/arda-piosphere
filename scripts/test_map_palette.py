@@ -99,6 +99,11 @@ for label, text in (("map_renderer.py", src), ("mapview.py", mv)):
     allowed = {"#16a34a"} if label == "mapview.py" else set()
     stray = set(green_hexes) - allowed
     assert not stray, f"{label} uses green for something other than pasture: {stray}"
+# Green is a ROLE, not a decoration: in the live map the pasture hex may appear exactly
+# once — as the pasture colour map. A green button or banner tells a herder "this is good
+# grass" while asking him for input. (This rule caught the map's own Send button.)
+assert mv.count("#16a34a") == 1, \
+    f"mapview.py uses the pasture green {mv.count('#16a34a')} times; green is pasture only"
 print("live map: same palette, no stray green")
 
 print("\nMAP PALETTE OK")
