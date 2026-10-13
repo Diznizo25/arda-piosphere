@@ -92,6 +92,15 @@ def _t(lang: str) -> dict:
         # Our vegetation reading is 10 m per pixel and is an area mean: zooming in shows
         # the ground, not more precision from us.
         "g_data": "Data yetu: pikseli 10 m; thamani ni wastani wa eneo, si ya mti mmoja.",
+        # Finding himself on the ground: Google Maps does it with photos and street names;
+        # here it is his own position, the names he told us, and the ground itself.
+        "g_where": "Niko wapi?",
+        "g_where_no": "Simu hii haikuruhusu eneo",
+        "g_recenter": "Nioneshe tena",
+        "g_from": "kutoka",
+        "g_walk": "tembea kama dakika",
+        "g_here": "Uko hapa (sasa)",
+        "g_ground": "Kwa zoom kubwa rangi huondoka ili uone ardhi yenyewe.",
     }
 
 
@@ -349,9 +358,9 @@ L.control.layers(
   { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
   null, { position: 'topright', collapsed: true }).addTo(map);
 // Pasture colours stay semi-transparent so the base map stays readable.
-map.on('baselayerchange', function (e) {
-  if (overlayLayer) overlayLayer.setOpacity(e.layer === esriTiles ? 0.7 : 0.55);
-});
+map.on('baselayerchange', applyOverlayStyle);
+// Depth changes what is useful: the colour fades and then leaves, the names arrive.
+map.on('zoomend', function () { applyOverlayStyle(); applyLabels(); });
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
 function focusUrl(wid) {
@@ -370,6 +379,7 @@ L.marker([D.herder.lat, D.herder.lon], { icon: youIcon })
  .addTo(map).bindPopup('<b>' + D.you + '</b>');
 
 let overlayLayer = null;
+let overlayForced = false;   // he tapped "show pasture" while zoomed right in
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
@@ -379,6 +389,25 @@ const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 if (D.overlay && D.overlay.url && D.overlay.available) {
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
     { opacity: 0.55, interactive: false }).addTo(map);
+}
+
+// THE COLOUR STEPS ASIDE WHEN HE ZOOMS IN. The pasture layer is 10 m pixels: once he
+// is close enough to look for his own plot, one pixel fills the screen and the layer
+// hides exactly the ground he came to see. So it fades with depth and leaves above z16
+// — one tap on the toggle brings it straight back if he wants it.
+const DEEP_ZOOM = 16;
+function applyOverlayStyle() {
+  if (!overlayLayer) return;
+  const z = map.getZoom();
+  const sat = map.hasLayer(esriTiles);
+  if (z > 15 && !overlayForced) {
+    if (map.hasLayer(overlayLayer)) map.removeLayer(overlayLayer);
+    const btn = document.getElementById('ptoggle');
+    if (btn) btn.textContent = TXT.off || 'Onyesha malisho';
+    return;
+  }
+  if (!map.hasLayer(overlayLayer)) map.addLayer(overlayLayer);
+  overlayLayer.setOpacity(z >= 14 ? (sat ? 0.4 : 0.35) : (sat ? 0.7 : 0.55));
 }
 
 // River grazing zones: distance RIBBONS along the river line (a river is long,
@@ -451,6 +480,27 @@ function ringBounds() {
 
 const seenTypes = {};
 const seenStatus = {};
+// Names appear when he is close enough for them to help, and disappear when he zooms
+// out (otherwise the map becomes a wall of text). Rivers and landmarks keep their
+// always-on labels: they are few, long and used for orientation from far away.
+const NAME_ZOOM = 12;
+const nameLayers = [];
+function addName(layer, text) {
+  nameLayers.push({layer: layer, text: text});
+}
+function applyLabels() {
+  const show = map.getZoom() >= NAME_ZOOM;
+  nameLayers.forEach(function (it) {
+    const bound = it.layer.getTooltip();
+    if (show && !bound) {
+      it.layer.bindTooltip(it.text, {permanent: true, direction: 'right',
+        offset: [9, 0], className: 'lm-label'}).openTooltip();
+    } else if (!show && bound) {
+      it.layer.closeTooltip();
+      it.layer.unbindTooltip();
+    }
+  });
+}
 (D.options || []).forEach(w => {
   const c = pinColor(w);
   seenTypes[w.water_type || '?'] = true;
@@ -469,10 +519,14 @@ const seenStatus = {};
     ? '<br><b style="color:' + pinColor(w) + '">' + (statusName[w.status] || w.status) +
       (w.status_age_days != null ? ' (siku ' + w.status_age_days + ')' : '') + '</b>'
     : (w.needs_check ? '<br><span style="color:#6b7280">' + (TXT.s_unknown || 'not confirmed') + '</span>' : '');
-  L.marker([w.lat, w.lon], { icon }).addTo(map)
+  const marker = L.marker([w.lat, w.lon], { icon }).addTo(map)
    .bindPopup('<b>' + label + '</b>' + (type ? '<br>' + type : '') + st + '<br>' + d + ' ' + T.dist +
      '<br><a href="' + focusUrl(w.id) + '" style="font-weight:700">' +
      (TXT.show || 'Show rings + pasture') + '</a>');
+  // His own name for the place, worn on the map itself once he is close enough for a
+  // name to mean something. Zoomed out it would be a wall of text; zoomed in it is how
+  // he recognises where he is standing.
+  addName(marker, label + d);
   fitTargets.push(L.latLng(w.lat, w.lon));
 });
 
@@ -561,11 +615,16 @@ document.body.addEventListener('click', function (ev) {
   if (ev.target && ev.target.id === 'ptoggle' && overlayLayer) {
     if (map.hasLayer(overlayLayer)) {
       map.removeLayer(overlayLayer);
+      overlayForced = false;
       ev.target.textContent = TXT.off || 'Show pasture';
     } else {
+      // He asked for the colour at a depth where it normally steps aside: respect him,
+      // and hand the decision back to the zoom as soon as he zooms out again.
       map.addLayer(overlayLayer);
+      overlayForced = map.getZoom() > 15;
       ev.target.textContent = TXT.on || 'Hide pasture';
     }
+    applyOverlayStyle();
   }
 });
 
@@ -662,6 +721,75 @@ if (D.graze && D.graze.on && D.graze.token) {
   refresh();
 }
 
+// --- "Where am I?" ----------------------------------------------------------
+// The one thing a map app gives a person that we can honestly give him too: his own
+// dot on the ground. Street View does not exist out here (Google has almost no
+// coverage in Isiolo, and the imagery is licensed), so recognition has to come from
+// his position + the names he gave us + the ground itself.
+const whereBtn = document.createElement('button');
+whereBtn.id = 'wherebtn';
+whereBtn.style.cssText = 'position:fixed;left:10px;top:84px;z-index:1000;' +
+  'background:#0f172a;color:#fff;border:0;border-radius:8px;padding:8px 10px;' +
+  'font:700 13px system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.4)';
+whereBtn.textContent = TXT.g_where || 'Where am I?';
+document.body.appendChild(whereBtn);
+const whereBox = document.createElement('div');
+whereBox.style.cssText = 'position:fixed;left:8px;bottom:26px;z-index:1000;background:#fff;' +
+  'color:#0f172a;border-radius:8px;padding:6px 8px;font:600 12px/1.35 system-ui,sans-serif;' +
+  'box-shadow:0 1px 6px rgba(0,0,0,.3);display:none';
+document.body.appendChild(whereBox);
+
+const COMPASS = ['kaskazini', 'kaskazini-mashariki', 'mashariki', 'kusini-mashariki',
+                 'kusini', 'kusini-magharibi', 'magharibi', 'kaskazini-magharibi'];
+let youAcc = null, youDot = null, lastFix = null;
+
+function bearingWord(from, to) {
+  const dLon = (to[1] - from[1]) * Math.cos((from[0] + to[0]) / 2 * Math.PI / 180);
+  const deg = (Math.atan2(dLon, to[0] - from[0]) * 180 / Math.PI + 360) % 360;
+  return COMPASS[Math.round(deg / 45) % 8];
+}
+
+function showFix(latlng, accuracy) {
+  lastFix = latlng;
+  if (youAcc) map.removeLayer(youAcc);
+  if (youDot) map.removeLayer(youDot);
+  // The halo is geometry, so it claims no hue; the dot is the same blue as the "wewe
+  // hapa" pin, so the two can never disagree about which dot is him.
+  youAcc = L.circle(latlng, {radius: accuracy, color: '#0f172a', weight: 1,
+    dashArray: '4 4', fillColor: '#0f172a', fillOpacity: 0.05}).addTo(map);
+  youDot = L.circleMarker(latlng, {radius: 7, color: '#0f172a', weight: 3,
+    fillColor: '#2563eb', fillOpacity: 1}).addTo(map);
+  youDot.bindTooltip((TXT.g_here || 'You are here') + ' ±' + Math.round(accuracy) + ' m');
+  const target = (D.options || []).filter(function (w) { return w.id === D.main_id; })[0];
+  const to = target ? [target.lat, target.lon] : [D.herder.lat, D.herder.lon];
+  const m = map.distance(latlng, to);
+  const dist = m >= 950 ? (m / 1000).toFixed(1) + ' km' : Math.round(m) + ' m';
+  const mins = Math.max(1, Math.round((m / 1000) / 5 * 60));   // ~5 km/h walking
+  whereBox.innerHTML = dist + ' ' + (TXT.g_from || 'from') + ' ' +
+    (target ? (target.name || T.noName) : (D.you || '')) + ' · ' +
+    bearingWord(latlng, to) + '<br>' + (TXT.g_walk || 'walk about') + ' ' + mins + ' dakika';
+  whereBox.style.display = 'block';
+}
+
+map.on('locationfound', function (e) { showFix(e.latlng, e.accuracy || 30); });
+map.on('locationerror', function () {
+  // Honest failure: in-app browsers often refuse location. Say so plainly rather than
+  // leaving him tapping a button that does nothing.
+  whereBtn.textContent = TXT.g_where_no || 'This phone did not allow location';
+  whereBtn.disabled = true;
+  whereBtn.style.opacity = '0.7';
+});
+document.body.addEventListener('click', function (ev) {
+  if (ev.target && ev.target.id === 'wherebtn') {
+    if (lastFix) {
+      map.setView(lastFix, Math.max(map.getZoom(), 16));
+      showFix(lastFix, 30);
+      return;
+    }
+    map.locate({setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 10000});
+  }
+});
+
 // Zoom so everyone is on screen; on a focused water point, fit its rings
 // (pasture colour always stays inside the widest ring, so this shows it all).
 let boundsToFit = null;
@@ -673,6 +801,9 @@ if (rb) {
 }
 if (!boundsToFit && fitTargets.length > 1) boundsToFit = L.latLngBounds(fitTargets);
 if (boundsToFit) map.fitBounds(boundsToFit, { padding: [45, 45], maxZoom: 13 });
+// Apply the depth rules once on load: fitBounds above may have landed on a shallow zoom.
+applyOverlayStyle();
+applyLabels();
 </script>
 </body></html>"""
 

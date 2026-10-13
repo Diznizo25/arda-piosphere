@@ -59,4 +59,30 @@ assert "grazing pin: plot radius" in gr, \
 # --- 5) no green chrome was introduced (the palette rule lives in test_map_palette) --
 assert "background:#16a34a" not in mv, "a green button reads as 'this is good grass'"
 
+# --- 6) what he sees as he zooms: the colour steps aside, the names arrive -----
+assert "const DEEP_ZOOM = 16" in mv and "if (z > 15 && !overlayForced)" in mv, \
+    "the pasture colour must leave when he is close enough to look for his own plot"
+assert "overlayForced" in mv, "...and one tap on the toggle must still bring it back"
+assert "map.on('zoomend'" in mv and "applyOverlayStyle(); applyLabels();" in mv, \
+    "both depth rules must run when he zooms"
+assert "const NAME_ZOOM = 12" in mv and "function applyLabels()" in mv, \
+    "names appear when he is close and stand down when he is far"
+assert "addName(marker, label + d)" in mv, \
+    "every water point must wear the name he gave it"
+assert "it.layer.unbindTooltip()" in mv, "labels must switch off again when zoomed out"
+assert "bindTooltip(rv.name" in mv, \
+    "river labels stay always-on: they are how he orients from far away"
+
+# --- 7) finding himself on the ground -----------------------------------------
+assert "id = 'wherebtn'" in mv and "map.locate(" in mv, "no 'where am I' control"
+assert "enableHighAccuracy: true" in mv, \
+    "a coarse fix is useless for finding one plot on the ground"
+assert "locationerror" in mv and "TXT.g_where_no" in mv, \
+    "a refused location must say so, not fail silently"
+assert "map.distance(latlng, to)" in mv and "bearingWord(" in mv, \
+    "he must be told how far and which way the point is"
+assert "COMPASS = ['kaskazini'" in mv, "direction words must be the Swahili ones he uses"
+assert "/ 5 * 60" in mv, "walking time matters to him, not raw kilometres"
+assert '"g_where": "Niko wapi?"' in mv, "the control needs its Swahili wording"
+
 print("map precision: deep zoom, metre-sized plot, hectares shown, resolution stated OK")
