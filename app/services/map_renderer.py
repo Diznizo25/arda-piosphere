@@ -1435,6 +1435,13 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     # map, so it must not inflate the legend percentages).
     painted = (inside == 1) | (inside == 2) | (inside == 3)
     valid = int(painted.sum())
+    # How much of HIS reach we could not read at all: cloud, shadow, mosaic edge or
+    # no clean pass. Reported as a share of the ring so a herder sees "a few gaps
+    # this week" instead of imagining a broken map — and so a genuinely bad week
+    # (most of the ring unreadable) looks different from a good one.
+    in_ring = int(mask.sum())
+    if in_ring:
+        out["blank_pct"] = round(100.0 * (in_ring - valid) / in_ring)
     if valid:
         frac = {
             "green": round(100.0 * int((inside == 1).sum()) / valid),

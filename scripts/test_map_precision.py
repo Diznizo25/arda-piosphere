@@ -119,5 +119,10 @@ assert '"no_read"' in mv and "hatukisia" in mv, \
     "the legend must say why a pixel is blank (we never guess a pixel)"
 assert '"ring_clip"' in mv, \
     "the legend must say the colour is clipped inside the reach line"
+# The blanks are quantified, and the share is of HIS ring — computed where the mask is.
+assert 'out["blank_pct"]' in io.open(
+    root / "app/services/map_renderer.py", encoding="utf-8").read(), \
+    "the blank share of the herder's ring must be computed, not guessed"
+assert "p.blank_pct" in mv, "the legend must show the blank share it was given"
 
 print("map precision: deep zoom, metre-sized plot, hectares shown, resolution stated OK")

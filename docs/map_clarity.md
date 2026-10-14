@@ -50,9 +50,12 @@ Not every pixel is coloured, and that is deliberate:
 * **Outside the grazing reach** — the colour is clipped inside the species' reach line
   (the dashed ring), so it matches exactly what the rings say. Beyond it, no colour.
 
-The live map now says both of these in the legend, in Swahili, next to the colours — a
-herder who understands why a patch is blank trusts the patches that are not. The rule
-behind it: **we do not guess**, we do not colour a pixel we cannot read.
+The live map now says both of these in the legend, in Swahili, next to the colours — and
+gives the blank share **of his own ring** (e.g. "Sehemu zisizo na rangi: 18% ya upeo wako
+hatukuweza kuzisoma — hatukisia"): a herder who understands why a patch is blank trusts
+the patches that are not. A few gaps look like a few gaps; a clouded week looks like a
+clouded week. The rule behind it: **we do not guess**, we do not colour a pixel we cannot
+read.
 
 ## What we will not do
 

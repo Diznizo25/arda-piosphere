@@ -107,8 +107,9 @@ def _t(lang: str) -> dict:
         # If somebody flew this point (drone/aerial), the page swaps in the sharp image.
         "g_close": "Picha ya karibu ya chanzo hiki (utata wa juu)",
         # Blank pixels are a decision, not a fault: we never colour a pixel we cannot read.
-        "no_read": "Sehemu zisizo na rangi: hatukuweza kuzisoma (wingu, kivuli, au hakuna "
-                   "picha safi) — hatukisia.",
+        "no_read": "Sehemu zisizo na rangi",
+        "no_read_why": "ya upeo wako hatukuweza kuzisoma",
+        "no_guess": "hatukisia (wingu, kivuli, au hakuna picha safi)",
         "ring_clip": "Rangi zinaonekana ndani ya mstari wa kufikia tu (mstari wenye vitone).",
     }
 
@@ -617,10 +618,16 @@ const Legend = L.Control.extend({
       // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
       // satellite cannot be read there (cloud, shadow, no clean pass) or when it is
       // outside his grazing reach. Left unexplained, holes read as "the map is broken";
-      // named, they read as what they are.
-      html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' +
-        (TXT.no_read || 'Uncoloured areas: we could not read them (cloud, shadow) — ' +
-                        'we do not guess.') + '</div>' +
+      // named — and numbered — they read as what they are. The share is of HIS ring, so
+      // a few gaps look like a few gaps and a clouded week looks like a clouded week.
+      let blankTxt = (TXT.no_read || 'Uncoloured patches');
+      if (p.blank_pct != null && p.blank_pct > 0) {
+        blankTxt += ': <b>' + p.blank_pct + '%</b> ' +
+          (TXT.no_read_why || 'of your reach we could not read');
+      }
+      html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' + blankTxt +
+        ' — ' + (TXT.no_guess || 'we do not guess (cloud, shadow, no clean pass)') +
+        '</div>' +
         '<div style="color:#475569;line-height:1.35">' +
         (TXT.ring_clip || 'Colour appears inside the dashed reach line only.') + '</div>';
       html += '<div style="margin-top:3px"><button id="ptoggle" style="font-size:12px">' +
