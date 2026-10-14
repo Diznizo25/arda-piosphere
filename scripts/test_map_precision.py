@@ -25,8 +25,12 @@ gr = io.open(root / "app/routers/grazing.py", encoding="utf-8").read()
 
 # --- 1) zoom like a map app ------------------------------------------------
 assert "maxZoom: 22" in mv, "the map must zoom past the satellite's native level"
-assert mv.count("maxNativeZoom: 19") >= 2, \
-    "tiles must not go grey when he zooms past the native level"
+assert "const ESRI_NATIVE = 18" in mv and "maxNativeZoom: ESRI_NATIVE" in mv, \
+    "the satellite must stop requesting tiles at the level where Isiolo's imagery ends"
+assert "maxNativeZoom: 19" not in mv, \
+    "z19 returns Esri's byte-identical 'Map data not yet available' placeholder here"
+assert "deepNote" in mv and "applyDepthNotes" in mv and "g_stretch" in mv, \
+    "past the native limit the page must say the picture is stretched, not blank"
 assert "L.control.scale(" in mv and "metric: true" in mv, \
     "no scale bar means no readable precision on the ground"
 assert "zoomControl: true" in mv

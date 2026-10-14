@@ -101,6 +101,9 @@ def _t(lang: str) -> dict:
         "g_walk": "tembea kama dakika",
         "g_here": "Uko hapa (sasa)",
         "g_ground": "Kwa zoom kubwa rangi huondoka ili uone ardhi yenyewe.",
+        # The satellite runs out at z18 in Isiolo: past that we stretch the last real
+        # picture, and he is told the ground he is looking at is stretched.
+        "g_stretch": "Satelaiti imepanuliwa (kina cha juu ~0.6 m)",
     }
 
 
@@ -340,27 +343,48 @@ function pinColor(w) {
 }
 
 // Zoom like a map app: he has to be able to walk right down to his own plot.
-// maxNativeZoom keeps the satellite sharp to z19 and stretches those tiles beyond it
-// (maxZoom 22) instead of going grey — the usual "the map is broken" surprise.
+//
+// THE SATELLITE'S REAL LIMIT IS 18, NOT 19 (measured, not guessed): at z19+ Esri serves
+// a byte-identical placeholder — "Map data not yet available" — for this part of Isiolo.
+// maxNativeZoom 18 makes Leaflet fetch the last REAL picture and stretch it for every
+// deeper zoom, so he gets blurred ground instead of a blank tile saying no data.
+const ESRI_NATIVE = 18;
 const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom: 22 })
   .setView([D.herder.lat, D.herder.lon], 10);
 const osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, maxNativeZoom: 19,
+  maxZoom: 19, maxNativeZoom: 18,
   attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
 const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
   'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 22, maxNativeZoom: 19,
+  maxZoom: 22, maxNativeZoom: ESRI_NATIVE,
   attribution: '&copy Esri, Maxar, Earthstar Geographics'});
 // A scale bar, because "precision" has to be readable in metres on the ground.
 L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
+// ...and when the picture is stretched, say so. Blurred ground is still ground; a blank
+// tile claiming "no map data" is worse than either.
+const deepNote = document.createElement('div');
+deepNote.id = 'deepnote';
+deepNote.style.cssText = 'position:fixed;right:8px;bottom:26px;z-index:1000;' +
+  'background:rgba(15,23,42,.85);color:#fff;border-radius:6px;padding:4px 7px;' +
+  'font:600 11px/1.3 system-ui,sans-serif;display:none;max-width:46%';
+deepNote.textContent = TXT.g_stretch ||
+  'Satellite image stretched (deepest real detail ~0.6 m)';
+document.body.appendChild(deepNote);
+function applyDepthNotes() {
+  const stretched = map.hasLayer(esriTiles) && map.getZoom() > ESRI_NATIVE;
+  deepNote.style.display = stretched ? 'block' : 'none';
+}
 // Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
 L.control.layers(
   { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
   null, { position: 'topright', collapsed: true }).addTo(map);
 // Pasture colours stay semi-transparent so the base map stays readable.
-map.on('baselayerchange', applyOverlayStyle);
-// Depth changes what is useful: the colour fades and then leaves, the names arrive.
-map.on('zoomend', function () { applyOverlayStyle(); applyLabels(); });
+map.on('baselayerchange', function () { applyOverlayStyle(); applyDepthNotes(); });
+// Depth changes what is useful: the colour fades and then leaves, the names arrive,
+// and past the imagery's real limit he is told the picture is stretched.
+map.on('zoomend', function () {
+  applyOverlayStyle(); applyLabels(); applyDepthNotes();
+});
 
 // Focus URL for a water point (tap a pin -> its rings + pasture).
 function focusUrl(wid) {
@@ -804,6 +828,7 @@ if (boundsToFit) map.fitBounds(boundsToFit, { padding: [45, 45], maxZoom: 13 });
 // Apply the depth rules once on load: fitBounds above may have landed on a shallow zoom.
 applyOverlayStyle();
 applyLabels();
+applyDepthNotes();
 </script>
 </body></html>"""
 
