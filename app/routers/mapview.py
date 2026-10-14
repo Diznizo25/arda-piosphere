@@ -106,6 +106,10 @@ def _t(lang: str) -> dict:
         "g_stretch": "Satelaiti imepanuliwa (kina cha juu ~0.6 m)",
         # If somebody flew this point (drone/aerial), the page swaps in the sharp image.
         "g_close": "Picha ya karibu ya chanzo hiki (utata wa juu)",
+        # Blank pixels are a decision, not a fault: we never colour a pixel we cannot read.
+        "no_read": "Sehemu zisizo na rangi: hatukuweza kuzisoma (wingu, kivuli, au hakuna "
+                   "picha safi) — hatukisia.",
+        "ring_clip": "Rangi zinaonekana ndani ya mstari wa kufikia tu (mstari wenye vitone).",
     }
 
 
@@ -365,11 +369,18 @@ const map = L.map('map', { zoomControl: true, attributionControl: true, maxZoom:
   .setView([D.herder.lat, D.herder.lon], 10);
 const osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, maxNativeZoom: 18,
-  attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+  attribution: '&copy; OpenStreetMap contributors'});
 const esriTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
   'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 22, maxNativeZoom: ESRI_NATIVE,
   attribution: '&copy Esri, Maxar, Earthstar Geographics'});
+// THE REAL GROUND COMES FIRST. A herder recognises a place from its picture, not from a
+// street drawing, so the satellite is what loads — and the map stays one tap away in the
+// switcher (below), with the pasture colour over the top of it.
+esriTiles.addTo(map);
+L.control.layers(
+  { [TXT.satBase || 'Satellite']: esriTiles, [TXT.mapBase || 'Map']: osmTiles },
+  null, { position: 'topright', collapsed: true }).addTo(map);
 // A scale bar, because "precision" has to be readable in metres on the ground.
 L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
 // ...and when the picture is stretched, say so. Blurred ground is still ground; a blank
@@ -403,10 +414,6 @@ function applyDepthNotes() {
     ? (TXT.g_close || 'Close-up image of this point')
     : (TXT.g_stretch || 'Satellite image stretched (deepest real detail ~0.6 m)');
 }
-// Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
-L.control.layers(
-  { [TXT.mapBase || 'Map']: osmTiles, [TXT.satBase || 'Satellite']: esriTiles },
-  null, { position: 'topright', collapsed: true }).addTo(map);
 // Pasture colours stay semi-transparent so the base map stays readable.
 map.on('baselayerchange', function () { applyOverlayStyle(); applyDepthNotes(); });
 // Depth changes what is useful: the colour fades and then leaves, the names arrive,
@@ -607,6 +614,15 @@ const Legend = L.Control.extend({
         html += '<div style="margin-top:3px;font-weight:700">' + (TXT.summary||'Pasture now') +
           ': <b>' + p.usable_pct + '%</b></div>';
       }
+      // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
+      // satellite cannot be read there (cloud, shadow, no clean pass) or when it is
+      // outside his grazing reach. Left unexplained, holes read as "the map is broken";
+      // named, they read as what they are.
+      html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' +
+        (TXT.no_read || 'Uncoloured areas: we could not read them (cloud, shadow) — ' +
+                        'we do not guess.') + '</div>' +
+        '<div style="color:#475569;line-height:1.35">' +
+        (TXT.ring_clip || 'Colour appears inside the dashed reach line only.') + '</div>';
       html += '<div style="margin-top:3px"><button id="ptoggle" style="font-size:12px">' +
         (TXT.on || 'Hide pasture') + '</button></div>';
     } else if (p.url) {

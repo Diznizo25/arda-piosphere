@@ -104,7 +104,20 @@ assert "orthoLayer" in mv and "TXT.g_close" in mv, \
     "a close-up must be shown above the satellite's real limit, and named as what it is"
 assert '"g_close"' in mv, "the close-up chip needs its Swahili wording"
 doc = io.open(root / "docs/map_clarity.md", encoding="utf-8").read()
-for needle in ("z18", "0.6 m", "3–10 cm", "Photos herders send", "Scrape Google"):
+for needle in ("z18", "0.6 m", "3–10 cm", "Photos herders send", "Scrape Google",
+               "blank pixels", "we do not guess"):
     assert needle in doc, f"docs/map_clarity.md must state {needle!r}"
+
+# --- 9) the real ground loads first, and the blanks are explained --------------
+assert "esriTiles.addTo(map)" in mv, \
+    "the satellite must be the layer that loads first — the ground he recognises"
+assert "[TXT.satBase || 'Satellite']: esriTiles" in mv, \
+    "satellite first in the switcher, with the street map still one tap away"
+assert "osmTiles).addTo(map)" not in mv, "the street map must not be the default any more"
+assert mv.count("L.control.layers(") == 1, "one base-map switcher, not two"
+assert '"no_read"' in mv and "hatukisia" in mv, \
+    "the legend must say why a pixel is blank (we never guess a pixel)"
+assert '"ring_clip"' in mv, \
+    "the legend must say the colour is clipped inside the reach line"
 
 print("map precision: deep zoom, metre-sized plot, hectares shown, resolution stated OK")

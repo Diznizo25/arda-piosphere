@@ -40,6 +40,8 @@ def test_mapview_pages() -> None:
             assert "L.imageOverlay" in body and "pasture.png" in body, "pasture overlay"
             assert "usable_pct" in body
             assert '"landmarks"' in body, "named places embedded"
+            assert "esriTiles.addTo(map)" in body, "satellite base map loads first"
+            assert "no_read" in body, "legend explains why a pixel is blank"
             print(f"{lang} mapview page OK ({len(body)} chars, pasture overlay present)")
         html2 = mapview_page(lat=0.3525, lon=37.583, species="camel", lang="swa",
                              id=None, name=None, interval="daily", focus=0,

@@ -40,6 +40,20 @@ Whenever an orthophoto exists, the map uses it automatically — no code change 
 So the day you fly Oldonyiro's water points, the map gets sharp there immediately, and the
 ward it has not flown keeps telling the truth about its own blur.
 
+## What the blank pixels mean
+
+Not every pixel is coloured, and that is deliberate:
+
+* **The satellite could not be read there** — a cloud, a shadow, or no clean pass that
+  week. We leave the pixel transparent rather than guess, because a guessed colour is a
+  herder walking to grass that is not there.
+* **Outside the grazing reach** — the colour is clipped inside the species' reach line
+  (the dashed ring), so it matches exactly what the rings say. Beyond it, no colour.
+
+The live map now says both of these in the legend, in Swahili, next to the colours — a
+herder who understands why a patch is blank trusts the patches that are not. The rule
+behind it: **we do not guess**, we do not colour a pixel we cannot read.
+
 ## What we will not do
 
 * **Scrape Google's tiles.** Better imagery exists behind their terms; using it would put
