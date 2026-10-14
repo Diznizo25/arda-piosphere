@@ -89,4 +89,22 @@ assert "COMPASS = ['kaskazini'" in mv, "direction words must be the Swahili ones
 assert "/ 5 * 60" in mv, "walking time matters to him, not raw kilometres"
 assert '"g_where": "Niko wapi?"' in mv, "the control needs its Swahili wording"
 
+# --- 8) close-up imagery: sharp where we flew, honest blur where we did not ----
+st = io.open(root / "app/services/storage.py", encoding="utf-8").read()
+mp = io.open(root / "app/routers/maps.py", encoding="utf-8").read()
+mr = io.open(root / "app/services/map_renderer.py", encoding="utf-8").read()
+assert 'return f"ortho/{water_source_id}/ortho.png"' in st, \
+    "the close-up contract (one key per water point) is missing"
+assert '"/{water_source_id}/ortho.png"' in mp, "nothing serves a close-up image"
+assert "def ortho_available(" in mr and "return False" in mr, \
+    "availability must fail open: a missing image means no close-up, never a broken map"
+assert "ortho_available(main_id)" in mv and '"ortho": ortho' in mv, \
+    "the map payload must carry the close-up only when one exists"
+assert "orthoLayer" in mv and "TXT.g_close" in mv, \
+    "a close-up must be shown above the satellite's real limit, and named as what it is"
+assert '"g_close"' in mv, "the close-up chip needs its Swahili wording"
+doc = io.open(root / "docs/map_clarity.md", encoding="utf-8").read()
+for needle in ("z18", "0.6 m", "3–10 cm", "Photos herders send", "Scrape Google"):
+    assert needle in doc, f"docs/map_clarity.md must state {needle!r}"
+
 print("map precision: deep zoom, metre-sized plot, hectares shown, resolution stated OK")

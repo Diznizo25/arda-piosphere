@@ -19,6 +19,13 @@ from botocore.config import Config as BotoConfig
 from app.config import get_settings
 
 
+def ortho_key(water_source_id: str) -> str:
+    """Object key for an optional CLOSE-UP image of a water point (drone or aerial
+    orthophoto). Contract: same footprint as the pasture layer, so the map can swap the
+    stretched satellite for a sharp picture at the same coordinates."""
+    return f"ortho/{water_source_id}/ortho.png"
+
+
 def cog_key(water_source_id: str) -> str:
     """Object key for a given water point's stacked-index COG."""
     return f"cogs/{water_source_id}/indices.tif"

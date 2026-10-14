@@ -116,3 +116,28 @@ def get_pasture_layer(
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
+
+@router.get("/{water_source_id}/ortho.png")
+def get_ortho_layer(water_source_id: str) -> Response:
+    """A CLOSE-UP image of one water point, when somebody flew it (drone/aerial).
+
+    Same footprint as the pasture layer, so the interactive map can swap the stretched
+    satellite for a sharp picture at the same coordinates above z18. 404 when there is
+    none — the map then keeps the (honestly labelled) stretched imagery rather than
+    inventing detail.
+    """
+    from app.config import get_settings
+    from app.services.storage import get_s3_client, ortho_key
+
+    settings = get_settings()
+    if not settings.r2_bucket_name:
+        raise HTTPException(status_code=404, detail="No close-up imagery available")
+    try:
+        obj = get_s3_client().get_object(Bucket=settings.r2_bucket_name,
+                                         Key=ortho_key(water_source_id))
+        png = obj["Body"].read()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="No close-up imagery for this point")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
+

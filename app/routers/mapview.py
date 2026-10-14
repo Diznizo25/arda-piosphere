@@ -104,6 +104,8 @@ def _t(lang: str) -> dict:
         # The satellite runs out at z18 in Isiolo: past that we stretch the last real
         # picture, and he is told the ground he is looking at is stretched.
         "g_stretch": "Satelaiti imepanuliwa (kina cha juu ~0.6 m)",
+        # If somebody flew this point (drone/aerial), the page swaps in the sharp image.
+        "g_close": "Picha ya karibu ya chanzo hiki (utata wa juu)",
     }
 
 
@@ -164,6 +166,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
     rings: list[dict] = []
     eff_km: float | None = None
     overlay: dict | None = None
+    ortho: dict | None = None
     if main_id:
         try:
             from app.config import get_species_rings
@@ -193,6 +196,14 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                     "usable_pct": status["usable_pct"],
                     "frac": status["frac"],
                 }
+                # A close-up image for the SAME footprint, when somebody has flown it.
+                # Above z18 the satellite is stretched, so this is the swap that makes a
+                # plot genuinely sharp — and it stays absent where we have no such image.
+                if map_renderer.ortho_available(main_id):
+                    ortho = {
+                        "url": f"{base}/map/{main_id}/ortho.png",
+                        "bounds": status["bounds"],
+                    }
         except Exception:  # noqa: BLE001
             rings, overlay = [], None
 
@@ -242,6 +253,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
         "interval": interval,
         "main_id": main_id,
         "overlay": overlay,
+        "ortho": ortho,
         "eff_km": eff_km,
         "text": text,
     }
@@ -370,9 +382,26 @@ deepNote.style.cssText = 'position:fixed;right:8px;bottom:26px;z-index:1000;' +
 deepNote.textContent = TXT.g_stretch ||
   'Satellite image stretched (deepest real detail ~0.6 m)';
 document.body.appendChild(deepNote);
+// A CLOSE-UP image (drone/aerial orthophoto) for this point, when one exists: same
+// footprint as the pasture layer, so it can be swapped in at the depth where the
+// satellite turns to blur. Absent image = stretched satellite, honestly labelled.
+let orthoLayer = null;
+if (D.ortho && D.ortho.url && D.ortho.bounds) {
+  orthoLayer = L.imageOverlay(D.ortho.url, L.latLngBounds(D.ortho.bounds),
+    { opacity: 1, interactive: false });
+}
 function applyDepthNotes() {
-  const stretched = map.hasLayer(esriTiles) && map.getZoom() > ESRI_NATIVE;
-  deepNote.style.display = stretched ? 'block' : 'none';
+  const sat = map.hasLayer(esriTiles);
+  const deep = sat && map.getZoom() > ESRI_NATIVE;
+  const sharp = !!orthoLayer && deep;
+  if (orthoLayer) {
+    if (sharp && !map.hasLayer(orthoLayer)) map.addLayer(orthoLayer);
+    else if (!sharp && map.hasLayer(orthoLayer)) map.removeLayer(orthoLayer);
+  }
+  deepNote.style.display = (deep || sharp) ? 'block' : 'none';
+  deepNote.textContent = sharp
+    ? (TXT.g_close || 'Close-up image of this point')
+    : (TXT.g_stretch || 'Satellite image stretched (deepest real detail ~0.6 m)');
 }
 // Base-map switch: 'Map' (street names) or 'Satellite' (real photos).
 L.control.layers(

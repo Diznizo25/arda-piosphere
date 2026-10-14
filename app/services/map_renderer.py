@@ -1387,6 +1387,28 @@ def _overlay_bounds_deg(west: float, north: float, mpp: float):
     return [[float(south_), float(west_)], [float(north_), float(east_)]]
 
 
+def ortho_available(water_source_id: str) -> bool:
+    """Is there a close-up image for this water point? Fail-open False.
+
+    The satellite runs out at ~0.6 m/px in Isiolo; past that the map stretches it. If a
+    drone or aerial orthophoto exists at `ortho/<id>/ortho.png` (same footprint as the
+    pasture layer), the map shows THAT instead: sharp pixels where we flew, honest blur
+    where we did not. Nothing is invented when it is missing.
+    """
+    try:
+        from app.config import get_settings
+        from app.services.storage import get_s3_client, ortho_key
+
+        settings = get_settings()
+        if not settings.r2_bucket_name:
+            return False
+        get_s3_client().head_object(Bucket=settings.r2_bucket_name,
+                                    Key=ortho_key(water_source_id))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def pasture_overlay_status(water_source_id: str, species: str | None = None,
                            water_interval: str = "daily") -> dict | None:
     """For the interactive map: geobounds of the pasture layer + a quantity/
