@@ -200,6 +200,10 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                     "available": status["available"],
                     "usable_pct": status["usable_pct"],
                     "frac": status["frac"],
+                    # How much of HIS reach we could not read. Without this the legend can
+                    # only say "blank means unreadable"; with it he sees how many of the
+                    # blank patches are his problem this week.
+                    "blank_pct": status.get("blank_pct"),
                 }
                 # A close-up image for the SAME footprint, when somebody has flown it.
                 # Above z18 the satellite is stretched, so this is the swap that makes a

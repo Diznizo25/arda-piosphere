@@ -124,5 +124,9 @@ assert 'out["blank_pct"]' in io.open(
     root / "app/services/map_renderer.py", encoding="utf-8").read(), \
     "the blank share of the herder's ring must be computed, not guessed"
 assert "p.blank_pct" in mv, "the legend must show the blank share it was given"
+# ...and the router must PASS IT ON: the overlay payload is an allow-list, so a new
+# status field is invisible to the page until it is named here (this bit us live).
+assert 'status.get("blank_pct")' in mv, \
+    "the overlay payload must carry the blank share through to the page"
 
 print("map precision: deep zoom, metre-sized plot, hectares shown, resolution stated OK")

@@ -27,6 +27,7 @@ def test_mapview_pages() -> None:
     m.pasture_overlay_status = lambda *a, **k: {
         "bounds": [[0.50, 37.20], [0.62, 37.29]], "available": True,
         "usable_pct": 62, "frac": {"green": 20, "dry": 42, "bare": 12, "unclear": 26},
+        "blank_pct": 18,
     }
     try:
         for lang in ("swa", "eng"):
@@ -39,6 +40,8 @@ def test_mapview_pages() -> None:
             assert '"herder"' in body and '"options"' in body
             assert "L.imageOverlay" in body and "pasture.png" in body, "pasture overlay"
             assert "usable_pct" in body
+            assert '"blank_pct": 18' in body, \
+                "the blank share must reach the page (the router allow-list must pass it)"
             assert '"landmarks"' in body, "named places embedded"
             assert "esriTiles.addTo(map)" in body, "satellite base map loads first"
             assert "no_read" in body, "legend explains why a pixel is blank"
