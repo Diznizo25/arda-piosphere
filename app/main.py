@@ -9,12 +9,13 @@ request path.
 from __future__ import annotations
 
 import logging
+import threading
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.db import get_pg_connection
+from app.db import close_pool, get_pg_connection, warm_pool
 from app.routers import advisory, dashboard, dev, grazing, ground_truth, legal, maps, mapview, run, water_sources, whatsapp
 from app.services.storage import get_s3_client
 from app.services.gee_auth import init_earth_engine
@@ -39,6 +40,25 @@ app.include_router(grazing.router)
 app.include_router(dashboard.router)
 app.include_router(legal.router)
 app.include_router(dev.router)
+
+
+@app.on_event("startup")
+def _open_pool_in_background() -> None:
+    """Warm the Postgres pool off the critical path.
+
+    In a thread, not inline: Render restarts must bind the port and answer /health
+    even when Supabase is unreachable, and a blocking connect here would turn a slow
+    database into a failed deploy. The first herder message then finds a warm
+    connection instead of paying the handshake itself.
+    """
+    threading.Thread(target=warm_pool, name="pg-pool-warm", daemon=True).start()
+
+
+@app.on_event("shutdown")
+def _close_pool() -> None:
+    """Return pooled sessions on a clean shutdown (a rolling deploy should not
+    leave Supabase slots occupied until they time out)."""
+    close_pool()
 
 
 @app.get("/health")

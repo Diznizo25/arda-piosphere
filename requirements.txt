@@ -3,7 +3,7 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 pydantic-settings==2.5.2
 asyncpg==0.29.0
-psycopg[binary]==3.2.1
+psycopg[binary,pool]==3.2.10
 SQLAlchemy==2.0.35
 GeoAlchemy2==0.15.2
 supabase==2.9.0
