@@ -27,6 +27,7 @@ import logging
 import threading
 from contextlib import contextmanager
 from functools import lru_cache
+from time import monotonic
 from typing import Iterator
 
 import psycopg
@@ -47,6 +48,8 @@ POOL_WAIT_S = 10.0
 _POOL = None
 _POOL_LOCK = threading.Lock()
 _POOL_FAILED = False
+_POOL_RETRY_AT = 0.0
+POOL_RETRY_S = 300.0  # after a failed open, try again at most every 5 minutes
 
 MISSING_URL_MESSAGE = (
     "DATABASE_URL is not set. Copy .env.example to .env and fill in your "
@@ -80,7 +83,7 @@ def _conninfo() -> str:
 
 def _pool():
     """The shared pool, or None when it cannot be opened (caller falls back)."""
-    global _POOL, _POOL_FAILED
+    global _POOL, _POOL_FAILED, _POOL_RETRY_AT
     if not get_settings().database_url:
         return None
     if _POOL is not None:
@@ -88,9 +91,11 @@ def _pool():
     with _POOL_LOCK:
         if _POOL is not None:
             return _POOL
-        if _POOL_FAILED:
-            # One failed attempt is enough for the life of the process: retrying a
-            # pool open on every message would add its timeout to every reply.
+        if _POOL_FAILED and monotonic() < _POOL_RETRY_AT:
+            # A failed open is remembered for a few minutes: retrying it on every
+            # message would add its timeout to every reply. It must not be forever
+            # either -- Supabase pauses idle free projects, and a process that
+            # booted during the pause should pick up the pool once it wakes.
             return None
         try:
             from psycopg_pool import ConnectionPool
@@ -107,9 +112,11 @@ def _pool():
             pool.open(wait=True, timeout=POOL_WAIT_S)
         except Exception:  # noqa: BLE001
             _POOL_FAILED = True
+            _POOL_RETRY_AT = monotonic() + POOL_RETRY_S
             log.warning("db: pool unavailable, using short-lived connections",
                         exc_info=True)
             return None
+        _POOL_FAILED = False
         _POOL = pool
         # Close before interpreter finalisation: an un-closed pool's __del__ tries to
         # join its worker threads at shutdown and raises PythonFinalizationError,

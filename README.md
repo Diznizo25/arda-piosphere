@@ -454,10 +454,16 @@ a kiosk or a tank, and the pin flow offers those first where the ward is peri-ur
 - advisory rephrasing is memoised on the exact deterministic text: two herders at the
   same point on the same day get the same wording with no second model round trip.
 - the map status behind "is there grass?" is cached for 30 minutes per point.
+- the advisory (water lookup + zone geometry + COG read) is cached per point for 30
+  minutes: three questions from one pin pay that pipeline once, not three times.
+- one pooled Postgres session per process (`psycopg_pool`, min 1 / max 6) instead of a
+  fresh TLS + SCRAM handshake per query. Measured on the fast path: 2.1 s per query
+  before, 0.7 s after — and a chat turn touches several. The pool opens lazily, and on
+  failure the code falls back to the old short-lived connections (retried after 5 min,
+  so a paused Supabase project does not pin a process to the slow path).
 - one log line per chat turn: `chat: sections=... gather=...ms total=...ms model=...`,
   so a slow reply is attributed (our DB/raster work vs the model) instead of guessed
-  at. The remaining measured bottleneck is one short-lived Postgres connection per
-  helper call; a pool is the next step and needs a live check before it is switched on.
+  at.
 
 
 

@@ -12,12 +12,15 @@ What this test pins, without a database:
   * a borrowed connection is RETURNED to the pool, not closed, and an exception
     rolls it back (commit on success);
   * when the pool cannot be opened the code degrades to short-lived connections
-    instead of failing the request.
+    instead of failing the request;
+  * that degraded state is retried after a backoff (a paused Supabase project
+    must not leave the process on the slow path for its whole life).
 
     python scripts/test_db_pool.py
 """
 from __future__ import annotations
 
+import logging
 import sys
 import types
 
@@ -129,6 +132,7 @@ _real_connect = db.psycopg.connect
 db.psycopg.connect = fake_connect
 db.get_settings = lambda: types.SimpleNamespace(database_url="postgresql://fake/db")
 db._POOL_FAILED = True  # the pool already refused to open (no network in tests)
+db._POOL_RETRY_AT = float("inf")  # ...and is inside its retry backoff
 try:
     with db.get_pg_connection():
         pass
@@ -136,7 +140,50 @@ finally:
     db.psycopg.connect = _real_connect
     db.get_settings = _real_settings
     db._POOL_FAILED = False
+    db._POOL_RETRY_AT = 0.0
 assert opened == ["connect", "commit", "close"], opened
 print("fallback: no pool -> connect/commit/close, the old behaviour OK")
+
+
+# --- 5) a failed open is remembered, but retried after the backoff ----------
+# Supabase pauses idle free projects: a process that booted during the pause must
+# pick the pool up once the database is back, without paying the pool timeout on
+# every message in between.
+import psycopg_pool  # noqa: E402
+
+attempts = {"n": 0}
+
+
+class UnopenablePool:
+    def __init__(self, **_kwargs) -> None:
+        attempts["n"] += 1
+        raise RuntimeError("database is asleep")
+
+
+_real_pool_class = psycopg_pool.ConnectionPool
+psycopg_pool.ConnectionPool = UnopenablePool
+_real_level = logging.getLogger("app.db").level
+logging.getLogger("app.db").setLevel(logging.CRITICAL)  # expected failure; no traceback spam
+db.get_settings = lambda: types.SimpleNamespace(database_url="postgresql://fake/db")
+db._POOL_FAILED = False
+db._POOL_RETRY_AT = 0.0
+try:
+    assert db._pool() is None
+    assert attempts["n"] == 1, attempts
+    assert db._POOL_FAILED and db._POOL_RETRY_AT > 0, (db._POOL_FAILED, db._POOL_RETRY_AT)
+    # Inside the backoff: no second attempt, no second timeout.
+    assert db._pool() is None
+    assert attempts["n"] == 1, attempts
+    # Once the backoff has passed, a request tries again.
+    db._POOL_RETRY_AT = 0.0
+    assert db._pool() is None
+    assert attempts["n"] == 2, attempts
+finally:
+    psycopg_pool.ConnectionPool = _real_pool_class
+    logging.getLogger("app.db").setLevel(_real_level)
+    db.get_settings = _real_settings
+    db._POOL_FAILED = False
+    db._POOL_RETRY_AT = 0.0
+print("backoff: a failed pool open is retried, not on every message OK")
 
 print("\nDB POOL OK")
