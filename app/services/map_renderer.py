@@ -174,6 +174,7 @@ _LMARK_CACHE: list[dict] | None = None
 WATER_TYPE_SWA = {
     "river": "Mto", "borehole": "Kisima", "well": "Kisima", "spring": "Chemchemi",
     "pan": "Bwawa", "dam": "Bwawa", "lake": "Ziwa", "tap": "Mfereji",
+    "tank": "Tanki",
 }
 
 

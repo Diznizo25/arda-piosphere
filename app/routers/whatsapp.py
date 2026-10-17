@@ -113,6 +113,12 @@ MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
 
+# "Maji ngapi?" is a WATER-NEEDS question (litres per animal -> the curated knowledge
+# base), not "how is my water point?". The water keyword used to swallow it, so a
+# herder asking how much his cattle drink got a status report about a borehole.
+WATER_NEEDS_KEYWORDS = ["ngapi", "lita", "litre", "liter", "how much", "kunywa",
+                        "kinywa", "maji ngapi", "water need", "bei"]
+
 # MALISHO YA LEO — the grazing ledger. The words a herder uses for "I am telling
 # you where we grazed today", kept NARROW on purpose: "malisho" alone is also how
 # he asks for the pasture map, and stealing that request to serve this one would
@@ -131,6 +137,15 @@ PEST_KEYWORDS = ["kupe", "minyoo", "kupe na minyoo", "tick", "worm", "vidonda",
                  "kwato", "wadudu", "pest", "parasite"]
 
 PIN_KEYWORDS = ["pin", "register", "ongeza", "andika", "new water", "regist"]
+
+# Changing the point he already has. Matched BEFORE the water branch, because
+# "chanzo" and "maji" are water keywords and would otherwise answer a status
+# question to a man who is telling us the point is wrong. Kept narrow on purpose:
+# a bare "badilisha" can also mean changing language.
+CHANGE_KEYWORDS = ["badilisha chanzo", "kubadilisha chanzo", "badili chanzo",
+                   "chanzo kingine", "badilisha maji", "change water", "change my water",
+                   "move my water", "another water", "different water point",
+                   "wrong water point", "change point"]
 
 ASK_SPECIES_TEXT = {
     "swahili": "Kabla sijakupa jibu, niambie wanyama wako ni gani: ng'ombe, kondoo/mbuzi, au ngamia?",
@@ -213,10 +228,10 @@ SOURCE_TYPE_LABEL = {
 
 _PINNED_TYPE_SWA = {"borehole": "kisima (borehole)", "well": "kisima cha kuchimba",
                     "river": "mto", "spring": "chemchemi", "dam": "bwawa (lami)",
-                    "pan": "bwawa", "tap": "mfereji", "lake": "ziwa"}
+                    "pan": "bwawa", "tap": "mfereji", "tank": "tanki", "lake": "ziwa"}
 _EN_TYPE_SWA = {"borehole": "borehole", "well": "well", "river": "river",
                 "spring": "spring", "dam": "dam", "pan": "water pan",
-                "tap": "tap", "lake": "lake"}
+                "tap": "tap", "tank": "water tank", "lake": "lake"}
 
 
 def _water_type_swa(nearby: dict, lang: str = "swahili") -> str:
@@ -368,7 +383,7 @@ MENU_SECTIONS = [
         ("svc:graze", "🌿 Malisho ya leo", "Pin mlipopanda — nyongeza na gharama"),
     ]),
     ("Mipangilio", [
-        ("svc:pin", "➕ Chanzo kipya", "Andikisha chanzo kipya cha maji"),
+        ("svc:pin", "➕ Chanzo cha maji", "Andikisha au badilisha chanzo chako"),
         ("svc:status", "📊 Ujenzi", "Hali ya ujenzi wa chanzo chako"),
         ("svc:voice", "🗣 Sauti", "Majibu kwa sauti au kwa maandishi"),
         ("svc:lang", "🌍 Lugha", "Swahili au English"),
@@ -384,7 +399,7 @@ MENU_SECTIONS_EN = [
         ("svc:graze", "🌿 Grazing today", "Pin where you grazed — feed and cost"),
     ]),
     ("Settings", [
-        ("svc:pin", "➕ New water point", "Register a new water point"),
+        ("svc:pin", "➕ Water point", "Register or change your water point"),
         ("svc:status", "📊 Build status", "Progress of your water point"),
         ("svc:voice", "🗣 Voice", "Voice replies or text replies"),
         ("svc:lang", "🌍 Language", "Swahili or English"),
@@ -415,6 +430,10 @@ SERVICE_ALIASES = {
     "svc:place": "location",
     "svc:graze": "graze",
     "svc:pin": "pin",
+    # No menu row yet (WhatsApp caps a list at 10 rows and the menu is full), but the
+    # id exists so a future row, a quick-reply button or a deep link can reach the
+    # change flow without touching the dispatcher.
+    "svc:change": "change",
     "svc:status": "status",
     "svc:voice": "voice",
     "svc:lang": "language",
@@ -435,7 +454,7 @@ MENU_MSG = {
                "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n"
                "11. 🌿 MALISHO YA LEO — pin mlipopanda; nyongeza na gharama\n\n"
                "Mipangilio:\n"
-               "2. 📍 PIN — andikisha chanzo kipya cha maji\n"
+               "2. 📍 PIN — andikisha au badilisha chanzo cha maji\n"
                "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
                "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
                "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
@@ -451,7 +470,7 @@ MENU_MSG = {
                "10. 🔍 TICKS AND WORMS — check your animals\n"
                "11. 🌿 GRAZING TODAY — pin where they grazed; feed and cost\n\n"
                "Settings:\n"
-               "2. 📍 PIN — register a new water point\n"
+               "2. 📍 PIN — register or change your water point\n"
                "5. 🗺 MAP — map of the grazing zones\n"
                "6. 📊 STATUS — your water point build progress\n"
                "7. 🗣 VOICE — voice replies / TEXT for text\n"
@@ -1323,6 +1342,8 @@ def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> 
         _service_note(phone, pastoralist, "location")
     elif service == "pin":
         _handle_pin_request(phone, pastoralist)
+    elif service == "change":
+        _handle_change_request(phone, pastoralist)
     elif service == "weight":
         _start_weight_flow(phone, pastoralist)
     elif service == "herd":
@@ -1523,8 +1544,18 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _handle_pest_request(phone, pastoralist, voice=voice)
         return
 
-    # Water-point confirmation / info (remembered water source).
-    if any(k in text_lower for k in WATER_KEYWORDS):
+    # Changing the point he already has. BEFORE the water branch on purpose: "chanzo"
+    # and "maji" are water keywords, and answering "how is your point?" to a man who
+    # just said his point is wrong is exactly what makes the bot feel deaf.
+    if any(k in text_lower for k in CHANGE_KEYWORDS):
+        _handle_change_request(phone, pastoralist)
+        return
+
+    # Water-point confirmation / info (remembered water source). A quantity question
+    # ("maji ngapi kwa ng'ombe?") falls through to the grounded chat layer instead:
+    # the curated answer lives there, and a status report is not an answer to it.
+    if (any(k in text_lower for k in WATER_KEYWORDS)
+            and not any(k in text_lower for k in WATER_NEEDS_KEYWORDS)):
         _handle_water_request(phone, pastoralist)
         return
 
@@ -1856,6 +1887,46 @@ def _handle_rain_request(phone: str, pastoralist) -> None:
                 voice=pastoralist.voice_replies)
 
 
+_TYPE_BUTTON_TITLE = {
+    "swahili": {"borehole": "Kisima", "well": "Kisima cha kuchimba", "river": "Mto",
+                "pan": "Bwawa", "spring": "Chemchemi", "tap": "Mfereji", "tank": "Tanki"},
+    "english": {"borehole": "Borehole", "well": "Well", "river": "River",
+                "pan": "Pan / dam", "spring": "Spring", "tap": "Tap", "tank": "Tank"},
+}
+
+
+def _type_button_title(key: str, lang: str = "swahili") -> str:
+    """A one-tap water-type label short enough for WhatsApp (20 chars max)."""
+    table = _TYPE_BUTTON_TITLE.get(lang) or _TYPE_BUTTON_TITLE["swahili"]
+    return (table.get(key) or key)[:20]
+
+
+def _parse_water_type(text: str | None) -> str | None:
+    """Water type from a button id ('type:tap') or a typed word ('mfereji').
+
+    ONE parser for the pin flow and the change flow, so the two can never drift and
+    a type added to water_validation is immediately usable in both. Ordering matters:
+    the more specific phrases are tested before the generic 'kisima'.
+    """
+    t = (text or "").strip().lower()
+    for key in water_validation.WATER_TYPES:
+        if f"type:{key}" in t:
+            return key
+    phrases = {
+        "well": ("kisima cha kuchimba", "kuchimba", "well"),
+        "borehole": ("borehole", "kisima", "bore"),
+        "tap": ("tap", "mfereji", "krania", "piped", "kiosk", "bomba"),
+        "tank": ("tank", "tanki"),
+        "river": ("river", "mto"),
+        "pan": ("pan", "bwawa", "dam", "lami"),
+        "spring": ("spring", "chemchemi"),
+    }
+    for key, words in phrases.items():
+        if any(w in t for w in words):
+            return key
+    return None
+
+
 def _handle_pin_request(phone: str, pastoralist) -> None:
     """Register the herder's last shared location as a new water point.
 
@@ -1878,6 +1949,35 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
 
     result = water_validation.validate_pin(lon, lat)
     if result.is_duplicate:
+        target_id = result.duplicate_water_source_id or result.nearest_source_id
+        already_his = bool(target_id) and target_id == getattr(
+            pastoralist, "water_source_id", None)
+        if target_id and not already_his:
+            # The pin is a point we ALREADY know, and it is not the one on his
+            # profile. That is not a mistake to refuse -- it is a herder telling us
+            # he has moved his animals. Offer the switch in one tap (the change
+            # flow), instead of the old dead end that sent him away.
+            label = None
+            try:
+                ws_obj = water_sources.get_water_source(target_id)
+                label = ws_obj.label if ws_obj else None
+            except Exception:  # noqa: BLE001
+                log.debug("duplicate pin: point lookup failed (non-fatal)", exc_info=True)
+            lang = pastoralist.preferred_language
+            sw = lang == "swahili"
+            label = label or ("chanzo hiki" if sw else "this point")
+            conversation.set_state(phone, "change.switch_confirm",
+                                   {"target": target_id, "lon": lon, "lat": lat})
+            whatsapp_client.send_quick_reply_buttons(
+                phone,
+                (f"Eneo hili ni chanzo tulichokijua: {label}.\n\n"
+                 "Je, wanyama wako wananywa hapa sasa?" if sw else
+                 f"This is a point we already know: {label}.\n\n"
+                 "Do your animals drink here now?"),
+                [("act:switch", "Ndiyo, hapa" if sw else "Yes, here"),
+                 ("act:new", "Hapana, kipya" if sw else "No, new point")],
+            )
+            return
         whatsapp_client.send_text(
             phone,
             {
@@ -1906,19 +2006,26 @@ def _handle_pin_request(phone: str, pastoralist) -> None:
 
     conversation.set_state(phone, "pin.confirm", {"lon": lon, "lat": lat})
     hint = _hint(pastoralist.preferred_language)
+    # WHICH types to offer depends on WHERE he is: in town the honest first choices
+    # are a tap, a tank or a borehole; in the rangelands they are a borehole, a well
+    # or a river. Every other type stays reachable by typing it (see
+    # _parse_water_type), and the hint says so.
+    ward_hit = wards.ward_for(lat, lon)
+    peri_urban = wards.context_for(getattr(ward_hit, "ward", None)) == wards.PERI_URBAN
+    keys = (water_validation.PERI_URBAN_TYPE_BUTTONS if peri_urban
+            else water_validation.RURAL_TYPE_BUTTONS)
+    buttons = [(f"type:{key}", _type_button_title(key, pastoralist.preferred_language))
+               for key in keys]
+    ask = {
+        "swahili": ("Je, eneo hili ni chanzo cha maji hasa? Chagua aina yake:"
+                    + ("\n(Kwa mjini: mfereji, tanki au kisima. Aina nyingine: andika "
+                       "jina lake.)" if peri_urban else "")),
+        "english": ("Is this really a water source? Choose its type:"
+                    + ("\n(In town: tap, tank or borehole. Other types: type the name.)"
+                       if peri_urban else "")),
+    }[pastoralist.preferred_language]
     whatsapp_client.send_quick_reply_buttons(
-        phone,
-        f"{nearby_note}\n\n"
-        + {
-            "swahili": "Je, eneo hili ni chanzo cha maji hasa? Chagua aina yake:",
-            "english": "Is this really a water source? Choose its type:",
-        }[pastoralist.preferred_language]
-        + hint,
-        [
-            ("type:borehole", "Kisima (borehole)"),
-            ("type:well", "Kisima cha kuchimba"),
-            ("type:river", "Mto"),
-        ],
+        phone, f"{nearby_note}\n\n{ask}{hint}", buttons,
     )
 
 
@@ -2181,7 +2288,8 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
         return True
 
     # If the herder names another service mid-flow, jump to it (don't trap them).
-    if state.startswith("weight.") or state.startswith("pin.") or state.startswith("onboarding."):
+    if state.startswith("weight.") or state.startswith("pin.") or state.startswith("onboarding.") \
+            or state.startswith("change."):
         if any(k in t for k in WEIGHT_KEYWORDS) and not state.startswith("weight.species"):
             conversation.clear_state(phone)
             _start_weight_flow(phone, pastoralist)
@@ -2194,6 +2302,10 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
             conversation.clear_state(phone)
             _handle_status_request(phone, pastoralist)
             return True
+        if any(k in t for k in CHANGE_KEYWORDS) and not state.startswith("change."):
+            conversation.clear_state(phone)
+            _handle_change_request(phone, pastoralist)
+            return True
 
     if state.startswith("onboarding."):
         _handle_onboarding_step(phone, pastoralist, text)
@@ -2203,6 +2315,9 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
         return True
     if state.startswith("pin."):
         _handle_pin_step(phone, pastoralist, state, data, text)
+        return True
+    if state.startswith("change."):
+        _handle_change_step(phone, pastoralist, state, data, text)
         return True
     if state == "landmark.confirm":
         if _handle_landmark_confirm(phone, pastoralist, text):
@@ -2969,8 +3084,8 @@ def _species_label(species: str, lang: str) -> str:
 
 ASK_PIN_TYPE = {
     "swahili": "Chagua aina ya chanzo cha maji: borehole, kisima cha kuchimba, "
-               "mto, bwawa, au chemchemi.",
-    "english": "Choose the water type: borehole, well, river, pan, or spring.",
+               "mto, bwawa, chemchemi, mfereji au tanki.",
+    "english": "Choose the water type: borehole, well, river, pan, spring, tap or tank.",
 }
 
 def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str | None) -> None:
@@ -2978,22 +3093,7 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
     t = (text or "").strip().lower()
 
     if state == "pin.confirm":
-        water_type = None
-        for key in water_validation.WATER_TYPES:
-            if f"type:{key}" in t:
-                water_type = key
-                break
-        if water_type is None:
-            if any(w in t for w in ["borehole", "kisima", "bore"]):
-                water_type = "borehole"
-            elif any(w in t for w in ["well", "kuchimba"]):
-                water_type = "well"
-            elif any(w in t for w in ["river", "mto"]):
-                water_type = "river"
-            elif any(w in t for w in ["pan", "bwawa", "dam"]):
-                water_type = "pan"
-            elif any(w in t for w in ["spring", "chemchemi"]):
-                water_type = "spring"
+        water_type = _parse_water_type(text)
         if water_type is None:
             whatsapp_client.send_text(phone, ASK_PIN_TYPE[lang] + _hint(lang))
             return
@@ -3063,3 +3163,278 @@ def _handle_pin_step(phone: str, pastoralist, state: str, data: dict, text: str 
                         "or send 'menu' to continue."}[lang],
         )
         return
+
+
+# --- change water point -------------------------------------------------------
+# A water point is not permanent: the herd moves, a name was wrong, or we filed a
+# tap as a borehole. Before this flow the only answers were "register a duplicate"
+# (and duplicates split the status reports and the rasters) or the dead end in the
+# PIN flow. Everything here either edits HIS PROFILE or the point's name/type/ward
+# -- never the coordinates, because moving a point is a re-pin: its rings and its
+# precomputed rasters have to move with it.
+
+CHANGE_PICK_HELP = {
+    "swahili": ("Tuma namba ya chanzo, 'JINA' kubadilisha jina, 'AINA' kubadilisha "
+                "aina, au 'PIN' kuandikisha chanzo kipya."),
+    "english": ("Send the number of a point, 'NAME' to change its name, 'TYPE' to "
+                "change its type, or 'PIN' to register a new point."),
+}
+
+
+def _type_label(water_type: str | None, lang: str) -> str:
+    if not water_type:
+        return "chanzo cha maji" if lang == "swahili" else "water point"
+    table = _PINNED_TYPE_SWA if lang == "swahili" else _EN_TYPE_SWA
+    return table.get(water_type, water_type)
+
+
+def _change_candidates(phone: str, pastoralist, lon: float, lat: float,
+                       exclude_id: str | None) -> list[dict]:
+    """Points he could switch to: in reach of the herd, and never his current one."""
+    try:
+        nearby = water_reach.list_nearby_water_sources(lon, lat, limit=10)
+    except Exception:  # noqa: BLE001
+        log.exception("change: nearby water lookup failed")
+        return []
+    try:
+        from app.config import get_species_rings
+
+        cap_km = max(get_species_rings().radii_km.values()) + 1.0
+    except Exception:  # noqa: BLE001
+        cap_km = 26.0
+    out = [n for n in nearby
+           if n["water_source_id"] != exclude_id
+           and float(n["distance_km"]) <= cap_km]
+    return out[:6]
+
+
+def _handle_change_request(phone: str, pastoralist) -> None:
+    """Show what he has now, and the safe ways to change it (one tap each)."""
+    lang = pastoralist.preferred_language
+    sw = lang == "swahili"
+    current = None
+    try:
+        current = get_water_source(phone)  # pastoralists: {id, name, ward, lon, lat}
+    except Exception:  # noqa: BLE001
+        log.debug("change: current point lookup failed (non-fatal)", exc_info=True)
+    current_id = (current or {}).get("id") or getattr(pastoralist, "water_source_id", None)
+
+    loc = get_last_location(phone)
+    if loc is not None:
+        lon, lat = loc
+    elif current and current.get("lon") is not None:
+        lon, lat = float(current["lon"]), float(current["lat"])
+    else:
+        whatsapp_client.send_text(phone, {
+            "swahili": "Tuma eneo lako (location) kwanza, kisha tuma 'BADILISHA'.",
+            "english": "Send your location first, then send 'CHANGE'.",
+        }[lang])
+        return
+
+    candidates = _change_candidates(phone, pastoralist, lon, lat, current_id)
+    conversation.set_state(phone, "change.choose", {
+        "nearby": [c["water_source_id"] for c in candidates],
+        "current": current_id,
+        "asked_at": _now_iso(),
+    })
+
+    if current:
+        current_txt = (f"{current.get('name') or 'chanzo chako'}"
+                       f" (ward {current.get('ward') or '-'})")
+    else:
+        current_txt = ("hakuna - hatujui chanzo chako bado" if sw
+                       else "none - we do not know your water point yet")
+
+    if candidates:
+        lines = [f"{i + 1}. {_source_label(c, lang)} - {_water_type_swa(c, lang)}, "
+                 f"{c['distance_km']:.1f} km {c.get('direction_swa', '')}"
+                 for i, c in enumerate(candidates)]
+        body = {
+            "swahili": (f"Chanzo chako cha sasa: {current_txt}.\n\nChanzo kingine "
+                        "karibu nawe:\n" + "\n".join(lines) + "\n\n"
+                        + CHANGE_PICK_HELP["swahili"]),
+            "english": (f"Your current water point: {current_txt}.\n\nOther points "
+                        "near you:\n" + "\n".join(lines) + "\n\n"
+                        + CHANGE_PICK_HELP["english"]),
+        }[lang]
+    else:
+        body = {
+            "swahili": (f"Chanzo chako cha sasa: {current_txt}.\n\nHakuna chanzo kingine "
+                        "kilichosajiliwa karibu nawe. Tuma 'JINA' kubadilisha jina, "
+                        "'AINA' kubadilisha aina, au 'PIN' kuandikisha chanzo kipya."),
+            "english": (f"Your current water point: {current_txt}.\n\nThere is no other "
+                        "registered point near you. Send 'NAME' to change its name, "
+                        "'TYPE' to change its type, or 'PIN' to register a new point."),
+        }[lang]
+    whatsapp_client.send_text(phone, body + _hint(lang))
+
+
+
+def _apply_point_change(phone: str, pastoralist, point_id: str | None,
+                        name: str | None = None, water_type: str | None = None) -> None:
+    """Write ONE correction and say exactly what changed (coordinates are not editable)."""
+    lang = pastoralist.preferred_language
+    sw = lang == "swahili"
+    if not point_id:
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, {
+            "swahili": "Hatujui chanzo unachomaanisha. Tuma eneo lako kisha 'PIN'.",
+            "english": "We do not know which point you mean. Send your location, then 'PIN'.",
+        }[lang])
+        return
+    try:
+        ws = water_sources.update_water_source(point_id, name=name, water_type=water_type)
+    except Exception:  # noqa: BLE001
+        log.exception("change: update failed")
+        ws = None
+    conversation.clear_state(phone)
+    if ws is None:
+        whatsapp_client.send_text(phone, {
+            "swahili": "Samahani, sikuweza kubadilisha chanzo hicho. Jaribu tena baadaye.",
+            "english": "Sorry, I could not change that point. Please try again later.",
+        }[lang])
+        return
+    place = (f", ward ya {ws.ward}" if sw else f", ward {ws.ward}") if ws.ward else ""
+    _send_reply(
+        phone, pastoralist,
+        {"swahili": f"Sawa. Nimebadilisha: {ws.label} - "
+                    f"{_type_label(ws.water_type, lang)}{place}.",
+         "english": f"Done. Updated: {ws.label} - "
+                    f"{_type_label(ws.water_type, lang)}{place}."}[lang],
+        voice=pastoralist.voice_replies,
+    )
+
+
+def _switch_water_point(phone: str, pastoralist, point_id: str | None) -> None:
+    """Make an EXISTING point his point -- the answer to "I moved my animals"."""
+    lang = pastoralist.preferred_language
+    sw = lang == "swahili"
+    ws = None
+    if point_id:
+        try:
+            ws = water_sources.get_water_source(point_id)
+        except Exception:  # noqa: BLE001
+            log.exception("change: point lookup failed")
+    if ws is None:
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, {
+            "swahili": "Sikupata chanzo hicho. Tuma 'BADILISHA' tena.",
+            "english": "I did not get that point. Send 'CHANGE' again.",
+        }[lang])
+        return
+    try:
+        set_water_source(phone, point_id)
+        pastoralist.water_source_id = point_id
+    except Exception:  # noqa: BLE001
+        log.exception("change: could not save the new water point")
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, {
+            "swahili": "Samahani, sikuweza kubadilisha chanzo chako. Jaribu tena baadaye.",
+            "english": "Sorry, I could not change your water point. Please try again later.",
+        }[lang])
+        return
+    conversation.clear_state(phone)
+    place = (f", ward ya {ws.ward}" if sw else f", ward {ws.ward}") if ws.ward else ""
+    whatsapp_client.send_text(phone, {
+        "swahili": f"Sawa. Chanzo chako cha maji sasa ni {ws.label} "
+                   f"({_type_label(ws.water_type, lang)}{place}).",
+        "english": f"Done. Your water point is now {ws.label} "
+                   f"({_type_label(ws.water_type, lang)}{place}).",
+    }[lang])
+    # Same follow-up as the confirm-water flow: the map is the proof he can check.
+    _handle_map_request(phone, pastoralist)
+
+
+
+def _handle_change_step(phone: str, pastoralist, state: str, data: dict,
+                        text: str | None) -> None:
+    """Drive the change flow. Never guesses a target, never traps the herder."""
+    lang = pastoralist.preferred_language
+    t = (text or "").strip().lower()
+    data = data or {}
+
+    if state == "change.switch_confirm":
+        if any(k in t for k in ("act:switch", "ndiyo", "ndio", "yes", "sawa", "hapa")):
+            _switch_water_point(phone, pastoralist, data.get("target"))
+            return
+        conversation.clear_state(phone)
+        whatsapp_client.send_text(phone, {
+            "swahili": "Sawa. Tuma eneo la chanzo kipya, kisha tuma 'PIN'.",
+            "english": "Okay. Send the location of the new point, then send 'PIN'.",
+        }[lang])
+        return
+
+    if state == "change.choose":
+        ids = data.get("nearby") or []
+        if t.startswith("wp:") and t[3:] in ids:
+            _switch_water_point(phone, pastoralist, t[3:])
+            return
+        idx = _parse_int(t)
+        if idx is not None and 1 <= idx <= len(ids):
+            _switch_water_point(phone, pastoralist, ids[idx - 1])
+            return
+        if any(k in t for k in ("jina", "name", "rename")):
+            if not data.get("current"):
+                _handle_change_request(phone, pastoralist)
+                return
+            conversation.set_state(phone, "change.name", data)
+            whatsapp_client.send_text(phone, {
+                "swahili": "Jina jipya la chanzo hiki ni nini? (k.m. 'Kisima cha Kipsing')",
+                "english": "What is the point's new name? (e.g. 'Kipsing borehole')",
+            }[lang] + _hint(lang))
+            return
+        # A type word typed straight away is an ANSWER, not a request to ask again.
+        wt = _parse_water_type(text)
+        if wt and data.get("current"):
+            _apply_point_change(phone, pastoralist, data["current"], water_type=wt)
+            return
+        if any(k in t for k in ("aina", "type")):
+            if not data.get("current"):
+                _handle_change_request(phone, pastoralist)
+                return
+            conversation.set_state(phone, "change.type", data)
+            whatsapp_client.send_text(phone, {
+                "swahili": "Aina gani? (borehole, kisima cha kuchimba, mto, bwawa, "
+                           "chemchemi, mfereji, tanki)",
+                "english": "Which type? (borehole, well, river, pan, spring, tap, tank)",
+            }[lang] + _hint(lang))
+            return
+        if any(k in t for k in ("pin", "mpya", "new", "ongeza", "andika")):
+            conversation.clear_state(phone)
+            _handle_pin_request(phone, pastoralist)
+            return
+        whatsapp_client.send_text(phone, {
+            "swahili": "Sikupata chaguo. " + CHANGE_PICK_HELP["swahili"],
+            "english": "I did not get that. " + CHANGE_PICK_HELP["english"],
+        }[lang])
+        return
+
+    if state == "change.name":
+        name = (text or "").strip().title()
+        if len(name) < 2 or any(ch.isdigit() for ch in name):
+            whatsapp_client.send_text(phone, {
+                "swahili": "Jina hilo si sahihi. Tuma jina la chanzo (herufi, bila namba).",
+                "english": "That is not a usable name. Send the point's name (letters, "
+                           "no digits).",
+            }[lang])
+            return
+        _apply_point_change(phone, pastoralist, data.get("current"), name=name[:60])
+        return
+
+    if state == "change.type":
+        wt = _parse_water_type(text)
+        if not wt:
+            whatsapp_client.send_text(phone, {
+                "swahili": "Sikupata aina hiyo. Chagua: borehole, kisima cha kuchimba, "
+                           "mto, bwawa, chemchemi, mfereji, tanki.",
+                "english": "I did not get that type. Choose: borehole, well, river, pan, "
+                           "spring, tap, tank.",
+            }[lang])
+            return
+        _apply_point_change(phone, pastoralist, data.get("current"), water_type=wt)
+        return
+
+    # Unknown change state: never leave him stuck.
+    conversation.clear_state(phone)
+    _handle_change_request(phone, pastoralist)
+

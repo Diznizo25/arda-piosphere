@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from functools import lru_cache
 
 import yaml
@@ -65,6 +66,20 @@ PASTURE_WORDS = ("malisho", "pasture", "forage", "nyasi", "grass", "grazing",
                  "malisho mabichi", "vci", "green")
 HERD_WORDS = ("mifugo", "ng'ombe", "ngombe", "mbuzi", "kondoo", "ngamia", "cattle",
               "goat", "sheep", "camel", "kundi", "herd")
+# "What can you do?" is a question about US. It used to end at the static menu (or at
+# "sijaelewa"), which is the least useful answer a first-time herder can get. These
+# words route it to the service catalogue (app/services/service_catalog.py), so the
+# answer names a service that the router can actually run.
+SERVICE_WORDS = ("huduma", "unaweza", "unafanya nini", "nisaidie", "kunisaidia",
+                 "msaada", "saidia", "naweza", "service", "services",
+                 "what can you do", "how do i", "how can i", "what do you do")
+# Services that fit a fact section, used to rank the catalogue (see gather_facts).
+SECTION_SERVICES = {
+    "water": ("location",),
+    "rain": ("rain",),
+    "pasture": ("graze", "location"),
+    "herd": ("weight", "herd"),
+}
 
 _SW_MARKERS = ("na", "ya", "kwa", "ni", "wa", "hii", "hiyo", "yako", "wako", "maji",
                "siku", "mvua", "malisho", "kama", "sana", "kabla", "au", "hapa",
@@ -271,6 +286,8 @@ def intent_sections(question: str) -> list[str]:
         sections.append("pasture")
     if any(w in q for w in HERD_WORDS):
         sections.append("herd")
+    if any(w in q for w in SERVICE_WORDS):
+        sections.append("services")
     return sections
 
 
@@ -346,6 +363,175 @@ def validate_answer(answer: str, allowed: set[str],
 
 # --- fact gathering (our own data only; every part fail-open) ---------------
 
+_MAP_CACHE: dict[tuple[str, str, str], tuple[float, dict | None]] = {}
+MAP_CACHE_SECONDS = 1800
+MAP_CACHE_MAX = 512
+
+
+def _map_status(ws_id: str, species: str, interval: str) -> dict | None:
+    """pasture_overlay_status with a short TTL cache.
+
+    Why: the status reads the point's precomputed COG (rasterio) and its classes are
+    only rewritten by the weekly pipeline. Recomputing them on every question is pure
+    latency added to a WhatsApp reply. The TTL bounds staleness after a rebuild
+    without needing a restart or a shared cache.
+    """
+    key = (str(ws_id), species or "cattle", interval or "daily")
+    now = time.monotonic()
+    hit = _MAP_CACHE.get(key)
+    if hit is not None and now - hit[0] < MAP_CACHE_SECONDS:
+        return hit[1]
+    try:
+        from app.services import map_renderer
+
+        value = map_renderer.pasture_overlay_status(ws_id, key[1], key[2])
+    except Exception:  # noqa: BLE001
+        log.exception("chat: map status unavailable (non-fatal)")
+        value = None
+    if len(_MAP_CACHE) >= MAP_CACHE_MAX:
+        _MAP_CACHE.clear()
+    _MAP_CACHE[key] = (now, value)
+    return value
+
+
+def _map_sentence(m: dict, sw: bool) -> str | None:
+    """A ready-made sentence the model may copy verbatim (units in words, no codes)."""
+    usable = m.get("usable_pct")
+    if usable is None:
+        return None
+    if sw:
+        bits = [f"Asilimia {usable} ya eneo lako la malisho inaweza kulika"]
+        if m.get("bare_pct") is not None:
+            bits.append(f"asilimia {m['bare_pct']} ni ardhi tupu")
+        if m.get("blank_pct"):
+            bits.append(f"asilimia {m['blank_pct']} hatukuweza kuisoma kwa satellite")
+        return "; ".join(bits) + "."
+    bits = [f"{usable}% of your grazing ring is usable"]
+    if m.get("bare_pct") is not None:
+        bits.append(f"{m['bare_pct']}% is bare ground")
+    if m.get("blank_pct"):
+        bits.append(f"{m['blank_pct']}% could not be read by satellite")
+    return "; ".join(bits) + "."
+
+
+def _map_facts(pastoralist, lat: float | None = None, lon: float | None = None) -> dict:
+    """What the herder's own map shows, as numbers the model may quote.
+
+    This is the honest half of "the AI reads the map": the numbers come from the
+    SAME raster the /mapview page paints (map_renderer.pasture_overlay_status), so a
+    reply can say "a third of your ring is readable, of that a tenth is usable"
+    without inventing a pixel. A vision model looking at the rendered PNG is a
+    separate route; this one is deterministic, cached and testable today.
+    """
+    ws_id = getattr(pastoralist, "water_source_id", None)
+    if not ws_id:
+        # A herder with no confirmed point still has a map: the nearest reachable
+        # water point is the one the advisory (and the 'mvua' service) speaks about.
+        ws_id = nearest_water_source_id(pastoralist, lat, lon)
+    if not ws_id:
+        return {}
+    lang = getattr(pastoralist, "preferred_language", "swahili")
+    species = getattr(pastoralist, "primary_species", None) or "cattle"
+    interval = getattr(pastoralist, "water_interval", None) or "daily"
+    status = _map_status(ws_id, species, interval)
+    if not status:
+        return {}
+
+    sw = lang != "english"
+    frac = status.get("frac") or {}
+    out: dict = {
+        "what_it_is": (
+            "ramani ya mzunguko wa malisho kuzunguka chanzo chako; kijani = malisho "
+            "mabichi, njano = malisho yaliyokauka, kijivu = ardhi tupu" if sw else
+            "the grazing ring around your water; green = fresh forage, yellow = cured "
+            "or dry forage, grey = bare ground"),
+        "readable": bool(status.get("available")),
+    }
+    if status.get("usable_pct") is not None:
+        out["usable_pct"] = status["usable_pct"]
+    for cls in ("green", "dry", "bare"):
+        if frac.get(cls) is not None:
+            out[f"{cls}_pct"] = frac[cls]
+    if status.get("blank_pct") is not None:
+        out["blank_pct"] = status["blank_pct"]
+        out["blank_means"] = (
+            "sehemu ambazo picha ya satellite haikuweza kusomeka (wingu, kivuli au "
+            "picha haipo) - sio lazima ni ardhi tupu" if sw else
+            "parts the satellite could not read (cloud, shadow or no pass) - not "
+            "necessarily bare ground")
+    try:
+        from app.config import get_species_rings
+
+        out["ring_radius_km"] = get_species_rings().effective_radius_km(species, interval)
+    except Exception:  # noqa: BLE001
+        log.debug("map facts: ring radius unavailable (non-fatal)", exc_info=True)
+    sentence = _map_sentence(out, sw)
+    if sentence:
+        out["suggested_reply"] = sentence
+    return {"map": out}
+
+
+def _services_facts(pastoralist, question: str, sections: list[str]) -> dict:
+    """The catalogue rows that fit this question (grounding for "what can you do?").
+
+    Deterministic: ranking is word overlap, so the model can never invent a service,
+    a trigger word, or a capability we do not run. A capability question (no other
+    section) gets the everyday list; a specific one gets the one or two services
+    that fit.
+    """
+    try:
+        from app.services import service_catalog as catalog
+    except Exception:  # noqa: BLE001
+        log.exception("service catalogue unavailable (non-fatal)")
+        return {}
+    lang = getattr(pastoralist, "preferred_language", "swahili")
+    prefer: list[str] = []
+    for section in sections:
+        prefer.extend(SECTION_SERVICES.get(section, ()))
+    specific = [s for s in sections if s != "services"]
+    rows = catalog.for_question(question, lang,
+                                limit=6 if not specific else 2, prefer=tuple(prefer))
+    if not rows:
+        return {}
+    sw = lang != "english"
+    listing = "; ".join(f"{r['say']} - {r['what']}" for r in rows)
+    fact: dict = {
+        "services": rows,
+        "how_to_ask": ("Tuma neno la huduma (k.m. MAJI) au 'menu' kuona zote." if sw else
+                       "Send the service word (e.g. WATER) or 'menu' to see them all."),
+    }
+    fact["suggested_reply"] = (
+        f"Ninaweza kukusaidia: {listing}." if sw and not specific else
+        f"I can help with: {listing}." if not specific else
+        f"Huduma inayofaa swali lako: {rows[0]['say']} - {rows[0]['what']}." if sw else
+        f"The service that fits your question: {rows[0]['say']} - {rows[0]['what']}.")
+    return {"services": fact}
+
+
+def _herder_facts(pastoralist) -> dict:
+    """Who we are talking to, and the one thing we still need from them.
+
+    Included in every bundle so the model can guide instead of only answer: a herder
+    with no confirmed water point gets the next step (send location, then PIN), in
+    his own language. It is a fact about our records, not a guess.
+    """
+    sw = getattr(pastoralist, "preferred_language", "swahili") != "english"
+    has_point = bool(getattr(pastoralist, "water_source_id", None))
+    out: dict = {"has_confirmed_water_point": has_point}
+    try:
+        out["species_in_herder_words"] = _species_words(pastoralist)
+    except Exception:  # noqa: BLE001
+        pass
+    name = getattr(pastoralist, "first_name", None)
+    if name:
+        out["name"] = name
+    if not has_point:
+        out["next_step"] = (
+            "Bado hatujui chanzo chako cha maji: tuma eneo lako (location), kisha "
+            "tuma PIN." if sw else
+            "We do not know your water point yet: send your location, then send PIN.")
+    return out
+
 def gather_facts(pastoralist, question: str, sections: list[str] | None = None,
                  lat: float | None = None, lon: float | None = None) -> dict:
     """Assemble the facts bundle for this question, from stored data.
@@ -362,6 +548,22 @@ def gather_facts(pastoralist, question: str, sections: list[str] | None = None,
 
     if not sections or "rain" in sections:
         facts.update(_rain_facts(pastoralist, lat, lon))
+
+    # "Where is the grass?" is a question about the MAP. The overlay numbers come
+    # from the same raster the map page paints, so they are facts, not guesses.
+    if "pasture" in sections:
+        facts.update(_map_facts(pastoralist, lat, lon))
+
+    # "What can you do?" is a question about US: answer it from the catalogue the
+    # router can actually run (never from the model's imagination).
+    if "services" in sections:
+        facts.update(_services_facts(pastoralist, question, sections))
+
+    # Herder context explains an answer; it never manufactures one. With no facts at
+    # all the caller must show the services menu (see answer()), so it is only added
+    # when there is something to explain.
+    if facts:
+        facts["herder"] = _herder_facts(pastoralist)
 
     entries = match_knowledge(question)
     if entries:
@@ -565,7 +767,10 @@ SW_SYSTEM = (
     "ugonjwa hata kidogo; (5) usitumie maneno ya kiufundi wala majina ya ndani ya "
     "mfumo (kama dry_season, moderate) - sema kwa maneno ya mchungaji; (6) weka "
     "alama '(makadirio)' kwa mambo ya utabiri; (7) mstari 3 mafupi pekee, bila "
-    "markdown, bila URL. Kama FACTS zina 'suggested_reply', fuata maneno yake."
+    "markdown, bila URL; (8) kama FACTS zina 'services', mwambie huduma MOJA "
+    "inayofaa zaidi na neno lake la kutuma - usiorodheshe zote; (9) kama FACTS zina "
+    "'map', tumia asilimia zake kama zilivyo, na usiseme 'ardhi tupu' pale data "
+    "inasema hatukuweza kusoma. Kama FACTS zina 'suggested_reply', fuata maneno yake."
 )
 EN_SYSTEM = (
     "You are Arda Link, a WhatsApp assistant for pastoralists in Isiolo, Kenya. "
@@ -576,8 +781,11 @@ EN_SYSTEM = (
     "offer the services menu or ask for their location; (4) never give a disease "
     "diagnosis; (5) never use technical or internal field names (like dry_season "
     "or moderate) - speak in a herder's words; (6) mark forecast statements as "
-    "'(estimate)'; (7) at most 3 short lines, no markdown, no URLs. If the FACTS "
-    "contain a 'suggested_reply', stay close to its wording."
+    "'(estimate)'; (7) at most 3 short lines, no markdown, no URLs; (8) if the "
+    "FACTS contain 'services', name the ONE service that fits best and the word to "
+    "send - do not list them all; (9) if the FACTS contain 'map', quote its "
+    "percentages exactly, and never call ground 'bare' when the data says it could "
+    "not be read. If the FACTS contain a 'suggested_reply', stay close to its wording."
 )
 
 
@@ -659,6 +867,25 @@ def deterministic_answer(facts: dict, lang: str = "swahili") -> str:
             else " (general guidance — not yet reviewed by an expert)")
         lines.append(f"{text}{marker}")
         break  # one curated answer is enough in a chat reply
+
+    mapped = facts.get("map") or {}
+    if mapped.get("suggested_reply"):
+        lines.append(mapped["suggested_reply"])
+
+    services = facts.get("services") or {}
+    rows = services.get("services") or []
+    if rows:
+        listing = "; ".join(f"{r['say']} - {r['what']}" for r in rows[:6])
+        lines.append(f"Ninaweza kukusaidia: {listing}." if sw
+                     else f"I can help with: {listing}.")
+        if services.get("how_to_ask"):
+            lines.append(services["how_to_ask"])
+
+    # Only when the answer is thin: a next step is guidance, not a footer to repeat
+    # after every full answer (that reads like a bot, which is the complaint).
+    herder = facts.get("herder") or {}
+    if herder.get("next_step") and len(lines) < 2:
+        lines.append(herder["next_step"])
 
     if not lines:
         return ("Sijaelewa vizuri. Tuma eneo lako (location) au chagua huduma kwa "
@@ -756,6 +983,7 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
         coords = {"lat": lat, "lon": lon}
     elif isinstance(mem, dict) and mem.get("lat") is not None and mem.get("lon") is not None:
         coords = {"lat": mem["lat"], "lon": mem["lon"]}
+    t_gather = time.perf_counter()
     try:
         facts = collect(pastoralist, question, sections, **coords) or {}
     except TypeError:
@@ -769,6 +997,7 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
         # Nothing to ground on: let the caller show the services menu.
         return None
 
+    gather_ms = (time.perf_counter() - t_gather) * 1000.0
     fallback = deterministic_answer(facts, lang)
     allowed = allowed_numbers(facts, question)
 
@@ -798,6 +1027,11 @@ def answer(pastoralist, question: str, lang: str | None = None, *,
         except Exception:  # noqa: BLE001
             log.exception("chat: model call failed")
             candidate = None
+        # Latency, in one line: the number that decides whether a reply feels live.
+        # gather = our DB/raster work; the rest is the model round trip.
+        log.info("chat: sections=%s facts=%d gather=%.0fms total=%.0fms model=%s",
+                 sections, len(facts), gather_ms,
+                 (time.perf_counter() - t_gather) * 1000.0, bool(candidate))
         if candidate:
             ok, why = validate_answer(candidate, allowed, lang,
                                       forbidden=code_tokens(facts))

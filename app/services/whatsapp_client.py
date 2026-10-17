@@ -324,9 +324,24 @@ def download_media(media_id: str) -> bytes | None:
         return None
 
 
+_CLIENT: httpx.Client | None = None
+
+
+def _client() -> httpx.Client:
+    """Shared keep-alive client: a WhatsApp reply is 1-4 sends, and the TLS
+    handshake to graph.facebook.com used to be paid on every single one."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.Client(
+            timeout=15,
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+        )
+    return _CLIENT
+
+
 def _post(payload: dict) -> None:
     try:
-        resp = httpx.post(_base_url(), json=payload, headers=_headers(), timeout=15)
+        resp = _client().post(_base_url(), json=payload, headers=_headers())
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
         log.error(f"WhatsApp send failed: {e.response.status_code} {e.response.text}")

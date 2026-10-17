@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 import httpx
 
@@ -27,6 +28,39 @@ TIMEOUT_S = 20.0
 # the answer. "low" effort keeps WhatsApp latency sane; the budget below leaves
 # plenty of room for both the reasoning pass and the actual answer.
 MAX_TOKENS = 1200
+
+# ONE keep-alive client for the process. Building httpx.Client per call (as this
+# used to) pays a fresh TLS handshake to Azure on EVERY message; on a free-tier
+# instance that handshake is a visible share of the reply's felt latency.
+_CLIENT: httpx.Client | None = None
+_CLIENT_KEY: tuple[str, str] | None = None
+
+# Successful rephrasings only (see rephrase_advisory). Bounded FIFO-clear, which is
+# enough for a cache whose entries are all equally cheap to rebuild.
+_REPHRASE_CACHE: dict[str, str] = {}
+REPHRASE_CACHE_MAX = 512
+
+
+def _client() -> httpx.Client | None:
+    """The shared client, rebuilt only if the endpoint/key actually changed."""
+    global _CLIENT, _CLIENT_KEY
+    settings = get_settings()
+    key = (settings.azure_openai_endpoint.rstrip("/"), settings.azure_openai_api_key)
+    if _CLIENT is not None and _CLIENT_KEY == key:
+        return _CLIENT
+    try:
+        if _CLIENT is not None:
+            _CLIENT.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _CLIENT = httpx.Client(
+        base_url=key[0],
+        headers={"api-key": key[1], "Content-Type": "application/json"},
+        timeout=TIMEOUT_S,
+        limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+    )
+    _CLIENT_KEY = key
+    return _CLIENT
 
 # The four real report types from ground_truth.py, plus "none" for noise.
 REPORT_TYPES = ("water_dry", "water_available", "pasture_good", "pasture_poor", "none")
@@ -42,31 +76,25 @@ def _chat(system: str, user: str) -> str | None:
     settings = get_settings()
     if not settings.azure_openai_api_key or not settings.azure_openai_endpoint:
         return None
+    started = time.perf_counter()
     try:
-        with httpx.Client(
-            base_url=settings.azure_openai_endpoint.rstrip("/"),
-            headers={
-                "api-key": settings.azure_openai_api_key,
-                "Content-Type": "application/json",
+        resp = _client().post(
+            "/openai/v1/chat/completions",
+            json={
+                "model": settings.azure_openai_model or "gpt-5-mini",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_completion_tokens": MAX_TOKENS,
+                "reasoning_effort": "low",
             },
-            timeout=TIMEOUT_S,
-        ) as client:
-            resp = client.post(
-                "/openai/v1/chat/completions",
-                json={
-                    "model": settings.azure_openai_model or "gpt-5-mini",
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    "max_completion_tokens": MAX_TOKENS,
-                    "reasoning_effort": "low",
-                },
-            )
+        )
         if resp.status_code != 200:
             log.warning("Azure OpenAI returned %s: %.160s", resp.status_code, resp.text)
             return None
         content = resp.json()["choices"][0]["message"].get("content") or ""
+        log.info("ai: chat call %.0fms", (time.perf_counter() - started) * 1000.0)
         return content.strip() or None
     except Exception:  # noqa: BLE001
         log.exception("Azure OpenAI call failed - falling back to deterministic path")
@@ -176,11 +204,22 @@ def rephrase_advisory(language: str, base_message: str,
 
     Fail-open twice over: if the model is unavailable OR its output fails the
     structural guard above, the original deterministic message is returned.
+
+    Memoised on the exact (language, distance, message) triple. The advisory is a
+    pure function of stored data, so two herders at the same point on the same day
+    produce the identical base message -- paying a second model round trip (and
+    making them wait for it) would buy nothing. That is the difference between a
+    reply that feels live and one that feels laggy, with no loss of facts: the
+    cache only ever stores text that already passed the guard.
     """
     if not base_message or distance_km is None:
         return base_message
     if not get_settings().advisory_rephrase_enabled:
         return base_message
+    key = f"{language}|{float(distance_km):.4f}|{base_message}"
+    cached = _REPHRASE_CACHE.get(key)
+    if cached:
+        return cached
     system = (
         "You are the text editor for a pastoralist water-and-pasture advisory bot. "
         "Rewrite the message you are given in natural, friendly plain language for a "
@@ -197,4 +236,8 @@ def rephrase_advisory(language: str, base_message: str,
     if not ok:
         log.warning("LLM rephrase rejected (%s) - keeping the deterministic text", why)
         return base_message
-    return out[:600]
+    text = out[:600]
+    if len(_REPHRASE_CACHE) >= REPHRASE_CACHE_MAX:
+        _REPHRASE_CACHE.clear()
+    _REPHRASE_CACHE[key] = text
+    return text

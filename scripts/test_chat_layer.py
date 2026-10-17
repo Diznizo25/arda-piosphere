@@ -316,5 +316,12 @@ assert "def grounded_answer(" in ai_src
 assert "max_completion_tokens" in ai_src and "reasoning_effort" in ai_src
 print("whatsapp + ai wiring OK")
 
+# A water QUANTITY question is a knowledge question, not a status question: the
+# water keyword branch must let it fall through to this chat layer.
+water_call = wa.index("_handle_water_request(phone, pastoralist)\n        return")
+assert "WATER_NEEDS_KEYWORDS" in wa[max(0, water_call - 400):water_call], \
+    "a water-needs question must reach the chat layer, not a status report"
+print("water-needs questions fall through to the grounded answer OK")
+
 print("chat-layer tests OK")
 

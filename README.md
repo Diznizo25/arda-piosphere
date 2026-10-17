@@ -413,6 +413,54 @@ Three more deliberate choices:
   a small `max_completion_tokens` gets fully consumed by the reasoning pass and
   produces an *empty* reply.
 
+
+### What it knows about us: the service catalogue and the map
+
+Two fact sections exist so the assistant can answer the two questions a herder
+actually starts with, without inventing either:
+
+- **`services`** — `app/services/service_catalog.py` is the ONE list of what the
+  router can run: id, the word a herder types, one sentence of what it does, in both
+  languages. "What can you do for me?" is answered from that data (deterministically,
+  no menu), and the model may name **one** service plus its trigger word — never
+  list a capability we do not have. `scripts/test_service_catalog.py` fails if the
+  router grows a service the catalogue cannot describe, or if the catalogue promises
+  one the router cannot run, in either direction.
+- **`map`** — the numbers the `/mapview` page paints (usable share, dry/bare shares,
+  and the share of his ring the satellite could not read) now reach the prompt,
+  cached 30 minutes per point because those classes change only when the weekly
+  pipeline reruns. This is map **reading as numbers**, not image understanding: a
+  vision model looking at the rendered PNG is a separate route, and the layer never
+  claims a share it did not read — when nothing is readable it says nothing, rather
+  than calling the grey patches "bare".
+
+### A water point is never a one-way form
+
+`BADILISHA` / "change my water point" shows the point on his profile plus the nearby
+points in reach, and lets him **switch** to one (numbered), **rename** it, **retype**
+it (`mfereji`, `tanki`, `kisima`, `mto`, ...) or **register a new one** with `PIN`.
+Pinning a location we already know but that is NOT his point now offers a one-tap
+switch instead of "already registered" — that sentence was a dead end for a herder
+who had just moved his animals. Coordinates are deliberately not editable: moving a
+point is a re-pin, because the species rings and the precomputed rasters must move
+with it. Tap and tank are first-class water types: in town a herder buys from a tap,
+a kiosk or a tank, and the pin flow offers those first where the ward is peri-urban
+(`wards.PERI_URBAN`).
+
+### Latency: what makes a reply feel live
+
+- one keep-alive HTTP client per process (Azure OpenAI and the Graph API): a fresh
+  TLS handshake used to be paid on **every** model call and **every** WhatsApp send.
+- advisory rephrasing is memoised on the exact deterministic text: two herders at the
+  same point on the same day get the same wording with no second model round trip.
+- the map status behind "is there grass?" is cached for 30 minutes per point.
+- one log line per chat turn: `chat: sections=... gather=...ms total=...ms model=...`,
+  so a slow reply is attributed (our DB/raster work vs the model) instead of guessed
+  at. The remaining measured bottleneck is one short-lived Postgres connection per
+  helper call; a pool is the next step and needs a live check before it is switched on.
+
+
+
 Test it in production without sending a WhatsApp message:
 
 ```bash

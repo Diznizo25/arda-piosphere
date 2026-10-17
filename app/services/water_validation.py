@@ -33,7 +33,19 @@ WATER_TYPES = {
     "pan": {"swahili": "Kijito / bwawa (pan)", "english": "Pan / dam"},
     "river": {"swahili": "Mto (river)", "english": "River"},
     "spring": {"swahili": "Chemchemi (spring)", "english": "Spring"},
+    # Peri-urban water: in Isiolo town and Bulla Pesa many herders do not use a
+    # borehole or a pan at all - they buy from a tap, a kiosk or fill a tank.
+    # Without these two the pin flow had no honest answer for them ("tap" existed
+    # only as a label in map_renderer, a type no point could ever be given).
+    "tap": {"swahili": "Mfereji / krania ya maji (tap)", "english": "Tap / piped water"},
+    "tank": {"swahili": "Tanki la maji (tank)", "english": "Water tank / kiosk"},
 }
+
+# Which types the pin flow OFFERS as one-tap buttons. Rural herders recognise the
+# first three; in town the first three are taps, tanks and a borehole. Everything
+# else stays reachable by typing its name (see whatsapp._parse_water_type).
+PERI_URBAN_TYPE_BUTTONS = ("tap", "tank", "borehole")
+RURAL_TYPE_BUTTONS = ("borehole", "well", "river")
 
 NEAREST_SOURCE_SQL = """
 select ws.id, ws.source_type, ws.confidence,

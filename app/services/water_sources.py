@@ -42,11 +42,25 @@ values (%(water_source_id)s, %(species)s, %(radius_km)s,
 LIST_WATER_SOURCES_SQL = """
 select ws.id, st_x(ws.geom) as lon, st_y(ws.geom) as lat,
        ws.source_type, ws.source_ref, ws.name, ws.water_type, ws.ward, ws.county,
-       ws.confidence, ws.last_confirmed,
+       ws.confidence, ws.last_confirmed, ws.status,
        (select count(*) from piosphere_zones pz where pz.water_source_id = ws.id) as zone_count
 from water_sources ws
 order by ws.created_at desc
 """
+
+GET_WATER_SOURCE_SQL = """
+select ws.id, st_x(ws.geom) as lon, st_y(ws.geom) as lat,
+       ws.source_type, ws.source_ref, ws.name, ws.water_type, ws.ward, ws.county,
+       ws.confidence, ws.last_confirmed, ws.status,
+       (select count(*) from piosphere_zones pz where pz.water_source_id = ws.id) as zone_count
+from water_sources ws
+where ws.id = %(id)s
+"""
+
+# Only these columns may ever be edited from a conversation. Coordinates are NOT
+# here on purpose: moving a point also means moving its species rings and its
+# precomputed rasters, so a "move" is a new point (the pin flow), never an edit.
+_EDITABLE_COLUMNS = ("name", "water_type", "ward")
 
 ZONES_FOR_WATER_SOURCE_SQL = """
 select species, radius_km, st_asgeojson(geom) as geojson
@@ -70,6 +84,9 @@ class WaterSource:
     confidence: float = 0.5
     last_confirmed: object | None = None
     zone_count: int = 0
+    # Last reported state ('unknown' | 'flowing' | 'functional' | ...). Read-only
+    # here: status is written by the herder-report loop, never by an edit flow.
+    status: str | None = None
 
     @property
     def label(self) -> str:
@@ -151,23 +168,82 @@ def list_water_sources() -> list[WaterSource]:
         with conn.cursor() as cur:
             cur.execute(LIST_WATER_SOURCES_SQL)
             rows = cur.fetchall()
-    return [
-        WaterSource(
-            id=str(r["id"]),
-            lon=float(r["lon"]),
-            lat=float(r["lat"]),
-            source_type=r["source_type"],
-            source_ref=r["source_ref"],
-            name=r["name"],
-            water_type=r["water_type"],
-            ward=r["ward"],
-            county=r["county"],
-            confidence=float(r["confidence"]),
-            last_confirmed=r["last_confirmed"],
-            zone_count=int(r["zone_count"]),
-        )
-        for r in rows
-    ]
+    return [_from_row(r) for r in rows]
+
+
+def get_water_source(water_source_id: str) -> WaterSource | None:
+    """One water point by id (the point a herder is calling "mine" right now).
+
+    A single-row lookup on purpose: the change-water-point flow must not read the
+    whole table to label one point, and the profile only stores the id.
+    """
+    if not water_source_id:
+        return None
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(GET_WATER_SOURCE_SQL, {"id": water_source_id})
+            row = cur.fetchone()
+    return _from_row(row) if row else None
+
+
+def update_water_source(water_source_id: str, *,
+                        name: str | None = None,
+                        water_type: str | None = None,
+                        ward: str | None = None) -> WaterSource | None:
+    """Correct the NAME, TYPE or WARD of an existing point (herder-requested).
+
+    Why an update and not a new point: a herder who told us "Kisima cha Oldonyiro"
+    and meant "Kisima cha Kipsing", or who waters at a tap we filed as a borehole,
+    would otherwise have to create a duplicate -- and duplicates split the status
+    reports and the rasters that make the map trustworthy.
+
+    Coordinates are deliberately NOT editable here (see _EDITABLE_COLUMNS): moving
+    a point is a re-pin, because the rings and the precomputed COGs must move too.
+
+    Returns the updated row, or None when there is nothing to change.
+    """
+    values = {"id": water_source_id}
+    sets: list[str] = []
+    for column in _EDITABLE_COLUMNS:
+        value = {"name": name, "water_type": water_type, "ward": ward}[column]
+        if value is None:
+            continue
+        sets.append(f"{column} = %({column})s")
+        values[column] = value
+    if not sets:
+        return None
+
+    sql = (f"update water_sources set {', '.join(sets)}, updated_at = now() "
+           "where id = %(id)s returning id")
+    with get_pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, values)
+            row = cur.fetchone()
+        conn.commit()
+    if not row:
+        log.warning("update_water_source: no point with id %s", water_source_id)
+        return None
+    log.info("water source %s updated (%s)", water_source_id, ", ".join(sets))
+    return get_water_source(water_source_id)
+
+
+def _from_row(r) -> WaterSource:
+    """One place that maps a DB row to the dataclass, so list/get can never drift."""
+    return WaterSource(
+        id=str(r["id"]),
+        lon=float(r["lon"]),
+        lat=float(r["lat"]),
+        source_type=r["source_type"],
+        source_ref=r["source_ref"],
+        name=r["name"],
+        water_type=r["water_type"],
+        ward=r["ward"],
+        county=r["county"],
+        confidence=float(r["confidence"]),
+        last_confirmed=r["last_confirmed"],
+        zone_count=int(r["zone_count"]),
+        status=r.get("status") if hasattr(r, "get") else r["status"],
+    )
 
 
 def zones_for_water_source(water_source_id: str) -> list[dict]:
