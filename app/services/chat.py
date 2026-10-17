@@ -390,7 +390,11 @@ def _map_status(ws_id: str, species: str, interval: str) -> dict | None:
         value = None
     if len(_MAP_CACHE) >= MAP_CACHE_MAX:
         _MAP_CACHE.clear()
-    _MAP_CACHE[key] = (now, value)
+    # Cache SUCCESSES only: a transient raster/COG error must not hide the map facts
+    # for the whole TTL. A failure costs the herder this answer, not the next thirty
+    # minutes of answers.
+    if value is not None:
+        _MAP_CACHE[key] = (now, value)
     return value
 
 
@@ -562,9 +566,6 @@ def gather_facts(pastoralist, question: str, sections: list[str] | None = None,
     # Herder context explains an answer; it never manufactures one. With no facts at
     # all the caller must show the services menu (see answer()), so it is only added
     # when there is something to explain.
-    if facts:
-        facts["herder"] = _herder_facts(pastoralist)
-
     entries = match_knowledge(question)
     if entries:
         facts["guidance"] = [
@@ -575,6 +576,9 @@ def gather_facts(pastoralist, question: str, sections: list[str] | None = None,
             }
             for e in entries
         ]
+
+    if facts:
+        facts["herder"] = _herder_facts(pastoralist)
     return facts
 
 

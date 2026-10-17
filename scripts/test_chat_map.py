@@ -97,6 +97,21 @@ assert "suggested_reply" not in unreadable, \
     "with nothing readable there is no share to claim -- stay silent, not 'bare'"
 print("honesty: 100% unreadable produces no claim at all OK")
 
+
+# --- a FAILED read is retried, never cached for the whole TTL ---------------
+def _boom(*a, **k):
+    calls["n"] += 1
+    raise RuntimeError("raster missing")
+
+
+fake.pasture_overlay_status = _boom
+chat._MAP_CACHE.clear()
+assert chat._map_facts(Herder()) == {}
+before = calls["n"]
+chat._map_facts(Herder())
+assert calls["n"] == before + 1, "a failed raster read must not be cached"
+print("failure: a broken COG costs one answer, not thirty minutes OK")
+
 # --- routing: a pasture question is what carries the map facts --------------
 assert "pasture" in chat.intent_sections("malisho yapo wapi?"), \
     chat.intent_sections("malisho yapo wapi?")
