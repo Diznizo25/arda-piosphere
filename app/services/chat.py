@@ -399,22 +399,35 @@ def _map_status(ws_id: str, species: str, interval: str) -> dict | None:
 
 
 def _map_sentence(m: dict, sw: bool) -> str | None:
-    """A ready-made sentence the model may copy verbatim (units in words, no codes)."""
+    """A ready-made sentence the model may copy verbatim (units in words, no codes).
+
+    Both shares are stated against the part we could READ, and the unreadable part is
+    stated separately. Without that base a herder adds 17 + 83 + 31 and gets 131 --
+    percentages that do not add up are how a map loses a man's trust.
+    """
     usable = m.get("usable_pct")
     if usable is None:
         return None
+    blank = m.get("blank_pct")
+    readable = 100 - int(blank) if blank is not None else None
+    bare = m.get("bare_pct")
     if sw:
+        if readable is not None and bare is not None:
+            return (f"Kati ya sehemu tunazosoma (asilimia {readable} ya eneo lako), "
+                    f"asilimia {usable} ni malisho yanayoweza kulika na asilimia "
+                    f"{bare} ni ardhi tupu; asilimia {blank} haikusomeka kwa satellite "
+                    "(wingu, kivuli au picha haipo).")
         bits = [f"Asilimia {usable} ya eneo lako la malisho inaweza kulika"]
-        if m.get("bare_pct") is not None:
-            bits.append(f"asilimia {m['bare_pct']} ni ardhi tupu")
-        if m.get("blank_pct"):
-            bits.append(f"asilimia {m['blank_pct']} hatukuweza kuisoma kwa satellite")
+        if bare is not None:
+            bits.append(f"asilimia {bare} ni ardhi tupu")
         return "; ".join(bits) + "."
+    if readable is not None and bare is not None:
+        return (f"Of the part we can read ({readable}% of your ring), {usable}% is "
+                f"usable forage and {bare}% is bare ground; {blank}% could not be read "
+                "by satellite (cloud, shadow or no pass).")
     bits = [f"{usable}% of your grazing ring is usable"]
-    if m.get("bare_pct") is not None:
-        bits.append(f"{m['bare_pct']}% is bare ground")
-    if m.get("blank_pct"):
-        bits.append(f"{m['blank_pct']}% could not be read by satellite")
+    if bare is not None:
+        bits.append(f"{bare}% is bare ground")
     return "; ".join(bits) + "."
 
 
@@ -458,6 +471,10 @@ def _map_facts(pastoralist, lat: float | None = None, lon: float | None = None) 
             out[f"{cls}_pct"] = frac[cls]
     if status.get("blank_pct") is not None:
         out["blank_pct"] = status["blank_pct"]
+        # The share we COULD read. Stated explicitly because the green/dry/bare
+        # shares are percentages OF THIS, not of the whole ring -- and a model (or a
+        # herder) that adds them to the blank share gets 131%.
+        out["readable_pct"] = max(0, 100 - int(status["blank_pct"]))
         out["blank_means"] = (
             "sehemu ambazo picha ya satellite haikuweza kusomeka (wingu, kivuli au "
             "picha haipo) - sio lazima ni ardhi tupu" if sw else
@@ -771,10 +788,13 @@ SW_SYSTEM = (
     "ugonjwa hata kidogo; (5) usitumie maneno ya kiufundi wala majina ya ndani ya "
     "mfumo (kama dry_season, moderate) - sema kwa maneno ya mchungaji; (6) weka "
     "alama '(makadirio)' kwa mambo ya utabiri; (7) mstari 3 mafupi pekee, bila "
-    "markdown, bila URL; (8) kama FACTS zina 'services', mwambie huduma MOJA "
-    "inayofaa zaidi na neno lake la kutuma - usiorodheshe zote; (9) kama FACTS zina "
+    "markdown, bila URL; (8) kama FACTS zina 'services' zenye zaidi ya mbili, "
+    "mchungaji anauliza unafanya nini: orodhesha kwa ufupi huduma na neno lake la "
+    "kutuma; kama ni moja au mbili, mtaje anayefaa zaidi tu; (9) kama FACTS zina "
     "'map', tumia asilimia zake kama zilivyo, na usiseme 'ardhi tupu' pale data "
-    "inasema hatukuweza kusoma. Kama FACTS zina 'suggested_reply', fuata maneno yake."
+    "inasema hatukuweza kusoma; (10) usiombe taarifa mpya (idadi, umri, bei) na "
+    "usiongeze hatua isipokuwa 'next_step' iliyoandikwa kwenye FACTS. Kama FACTS zina "
+    "'suggested_reply', fuata maneno yake."
 )
 EN_SYSTEM = (
     "You are Arda Link, a WhatsApp assistant for pastoralists in Isiolo, Kenya. "
@@ -785,11 +805,13 @@ EN_SYSTEM = (
     "offer the services menu or ask for their location; (4) never give a disease "
     "diagnosis; (5) never use technical or internal field names (like dry_season "
     "or moderate) - speak in a herder's words; (6) mark forecast statements as "
-    "'(estimate)'; (7) at most 3 short lines, no markdown, no URLs; (8) if the "
-    "FACTS contain 'services', name the ONE service that fits best and the word to "
-    "send - do not list them all; (9) if the FACTS contain 'map', quote its "
-    "percentages exactly, and never call ground 'bare' when the data says it could "
-    "not be read. If the FACTS contain a 'suggested_reply', stay close to its wording."
+    "'(estimate)'; (7) at most 3 short lines, no markdown, no URLs; (8) if the FACTS "
+    "contain more than two 'services', the herder is asking what you do: list them "
+    "briefly with their trigger words; if there are one or two, name only the one that "
+    "fits; (9) if the FACTS contain 'map', quote its percentages exactly and never call "
+    "ground 'bare' when the data says it could not be read; (10) never ask for new "
+    "information (counts, ages, prices) and never add a step that is not the written "
+    "'next_step'. If the FACTS contain a 'suggested_reply', stay close to its wording."
 )
 
 

@@ -65,8 +65,9 @@ assert again["map"]["usable_pct"] == 12
 print("cache: the same point is not re-read for every question OK")
 
 allowed = chat.allowed_numbers(facts, "malisho yapo wapi?")
-for n in ("12", "31", "88", "5", "7"):
+for n in ("12", "31", "88", "5", "7", "69"):
     assert n in allowed, (n, sorted(allowed))
+assert "69" in m["suggested_reply"], "the readable base must be stated, not implied"
 print("validation: every share the model may quote is traceable to the facts OK")
 
 said = chat.deterministic_answer({"map": m}, "swahili")
