@@ -367,6 +367,13 @@ _MAP_CACHE: dict[tuple[str, str, str], tuple[float, dict | None]] = {}
 MAP_CACHE_SECONDS = 1800
 MAP_CACHE_MAX = 512
 
+# Advisory results, keyed by point (see _advisory_cached). 15 minutes is longer than
+# a conversation and far shorter than the weekly raster rebuild or the daily water
+# scrape that could change the answer.
+_ADVISORY_CACHE: dict[tuple, tuple[float, object]] = {}
+ADVISORY_CACHE_SECONDS = 900
+ADVISORY_CACHE_MAX = 512
+
 
 def _map_status(ws_id: str, species: str, interval: str) -> dict | None:
     """pasture_overlay_status with a short TTL cache.
@@ -615,6 +622,46 @@ def _herder_location(pastoralist, lat: float | None, lon: float | None):
     return None
 
 
+def _advisory_cached(pastoralist, plat: float, plon: float):
+    """get_advisory, cached per POINT (not per herder) for a few minutes.
+
+    get_advisory is the most expensive thing a chat turn touches: water lookup,
+    zone geometry and COG reads. A herder sends three questions about the same pin
+    in a row, and none of those inputs changes between messages -- the rasters are
+    rebuilt weekly and the water data daily. Recomputing per message is pure waiting
+    on a small instance, which is exactly what made replies feel dead.
+
+    Coordinates are rounded to ~100 m so re-pinning the same water point still hits
+    the entry. Only successes are cached, the same rule as the map cache: a
+    transient failure must not blank out the facts for the whole TTL.
+    """
+    key = (
+        round(float(plat), 3), round(float(plon), 3),
+        getattr(pastoralist, "primary_species", None) or "cattle",
+        getattr(pastoralist, "water_interval", None) or "daily",
+    )
+    now = time.monotonic()
+    hit = _ADVISORY_CACHE.get(key)
+    if hit is not None and now - hit[0] < ADVISORY_CACHE_SECONDS:
+        return hit[1]
+
+    from app.models.schemas import AdvisoryRequest
+    from app.services.advisory_service import get_advisory
+
+    value = get_advisory(AdvisoryRequest(
+        lat=plat, lon=plon,
+        species=pastoralist.primary_species or "cattle",
+        language=pastoralist.preferred_language,
+        water_interval=getattr(pastoralist, "water_interval", None) or "daily",
+    ))
+    if value is None:
+        return None
+    if len(_ADVISORY_CACHE) >= ADVISORY_CACHE_MAX:
+        _ADVISORY_CACHE.clear()
+    _ADVISORY_CACHE[key] = (now, value)
+    return value
+
+
 def _advisory_facts(pastoralist, lat: float | None, lon: float | None) -> dict:
     """Water + pasture + reach facts, from the same pipeline the advisory uses."""
     coords = _herder_location(pastoralist, lat, lon)
@@ -622,17 +669,11 @@ def _advisory_facts(pastoralist, lat: float | None, lon: float | None) -> dict:
         return {}
     plat, plon = coords
     try:
-        from app.models.schemas import AdvisoryRequest
-        from app.services.advisory_service import get_advisory
-
-        res = get_advisory(AdvisoryRequest(
-            lat=plat, lon=plon,
-            species=pastoralist.primary_species or "cattle",
-            language=pastoralist.preferred_language,
-            water_interval=getattr(pastoralist, "water_interval", None) or "daily",
-        ))
+        res = _advisory_cached(pastoralist, plat, plon)
     except Exception:  # noqa: BLE001
         log.exception("chat: advisory facts unavailable (non-fatal)")
+        return {}
+    if res is None:
         return {}
 
     if not res.found:

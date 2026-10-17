@@ -67,8 +67,14 @@ REPORT_TYPES = ("water_dry", "water_available", "pasture_good", "pasture_poor", 
 REAL_TYPES = REPORT_TYPES[:-1]
 
 
-def _chat(system: str, user: str) -> str | None:
+def _chat(system: str, user: str, effort: str = "low") -> str | None:
     """One chat-completions round trip against the Azure project endpoint.
+
+    `effort` is the reasoning budget. Measured on this endpoint (gpt-5-mini,
+    2026-10): "low" spends 1.7-4.3s and 64-128 reasoning tokens; "minimal" spends
+    1.7-2.5s and ZERO reasoning tokens. The grounded rephrase below already gets
+    every number in the prompt, so it asks for "minimal" -- the thinking pass buys
+    it nothing and the herder pays for it in seconds of waiting.
 
     Returns the trimmed content, or None on any failure (missing config,
     non-200, timeout, network error, empty reply). Never raises.
@@ -87,7 +93,7 @@ def _chat(system: str, user: str) -> str | None:
                     {"role": "user", "content": user},
                 ],
                 "max_completion_tokens": MAX_TOKENS,
-                "reasoning_effort": "low",
+                "reasoning_effort": effort,
             },
         )
         if resp.status_code != 200:
@@ -154,7 +160,7 @@ def grounded_answer(system: str, facts_json: str, question: str,
         parts.append(context)
     parts.append(f"FACTS={facts_json}")
     parts.append(f"SWALI LA MCHUNGAJI / HERDER'S QUESTION: {question}")
-    return _chat(system, "\n\n".join(parts))
+    return _chat(system, "\n\n".join(parts), effort="minimal")
 
 
 def _nums(text: str) -> set[str]:

@@ -120,4 +120,83 @@ assert "pasture" not in chat.intent_sections("bei ya ng'ombe ni ngapi?"), \
     "a market question must not drag the map into the prompt"
 print("routing: only pasture questions carry the map facts OK")
 
+
+# --- the ADVISORY (water lookup + zone geometry + COG) is cached per point ---
+# Same rule as the map, bigger stakes: get_advisory is the most expensive thing a
+# chat turn touches, and three questions from one pin are the normal way a herder
+# talks. Without this cache every one of them pays the full pipeline again.
+adv = {"n": 0}
+
+
+class FakeAdvisory:
+    found = True
+    distance_km = 2.1
+    water_reliability = "reliable"
+    grazing_zone = "comfortable"
+    forage_condition = "normal"
+    seasonally_normal = True
+    effective_radius_km = 7.0
+
+
+def fake_get_advisory(_req):
+    adv["n"] += 1
+    return FakeAdvisory()
+
+
+from app.services import advisory_service  # noqa: E402
+
+advisory_service.get_advisory = fake_get_advisory
+
+chat._ADVISORY_CACHE.clear()
+f1 = chat._advisory_facts(Herder(), 0.5666, 37.2402)
+assert f1["water"]["distance_km"] == 2.1, f1
+assert f1["reach"]["usual_reach_km"] == 7.0, f1
+assert adv["n"] == 1, adv
+
+# A re-pin a few metres away is the same point: same cache entry.
+chat._advisory_facts(Herder(), 0.56661, 37.2402)
+assert adv["n"] == 1, f"same point must not recompute: {adv}"
+
+# A different point is a different answer: recompute.
+chat._advisory_facts(Herder(), 1.1000, 36.9000)
+assert adv["n"] == 2, adv
+
+
+def broken_advisory(_req):
+    adv["n"] += 1
+    raise RuntimeError("water lookup down")
+
+
+advisory_service.get_advisory = broken_advisory
+chat._ADVISORY_CACHE.clear()
+assert chat._advisory_facts(Herder(), 0.5000, 37.3000) == {}
+before = adv["n"]
+chat._advisory_facts(Herder(), 0.5000, 37.3000)
+assert adv["n"] == before + 1, "a failed advisory must not be cached"
+print("advisory cache: one pipeline run per point, failures always retried OK")
+
+
+# --- the model is asked for the CHEAPEST reasoning budget -------------------
+# Measured on gpt-5-mini: "low" = 1.7-4.3s and 64-128 reasoning tokens, "minimal"
+# = 1.7-2.5s and zero. The rephrase already has every number in the prompt, so the
+# thinking pass is seconds of waiting for nothing.
+from app.services import ai  # noqa: E402
+
+seen = {}
+
+
+def capture(system, user, effort="low"):
+    seen["effort"] = effort
+    return "Sawa."
+
+
+_real_chat = ai._chat
+ai._chat = capture
+try:
+    ai.grounded_answer("sys", "{}", "swali")
+finally:
+    ai._chat = _real_chat
+assert seen.get("effort") == "minimal", seen
+print("model: the grounded rephrase asks for the minimal reasoning budget OK")
+
 print("\nCHAT MAP GROUNDING OK")
