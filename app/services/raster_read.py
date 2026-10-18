@@ -21,7 +21,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +64,11 @@ _NO_OVERVIEW_TTL_S = 60.0
 # request that started it.
 _OVERVIEW_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="overview-read")
 
+# Reads currently running, so a second request can wait for one already in flight
+# instead of starting a duplicate 8 MB download.
+_OVERVIEW_INFLIGHT: dict[tuple, Future] = {}
+_OVERVIEW_INFLIGHT_LOCK = threading.Lock()
+
 
 def _overview_cache_get(key: tuple):
     with _OVERVIEW_CACHE_LOCK:
@@ -94,6 +99,8 @@ def clear_overview_cache() -> None:
     """Drop cached overviews (tests, or after a point is rebuilt by hand)."""
     with _OVERVIEW_CACHE_LOCK:
         _OVERVIEW_CACHE.clear()
+    with _OVERVIEW_INFLIGHT_LOCK:
+        _OVERVIEW_INFLIGHT.clear()
     _NO_OVERVIEW_UNTIL.clear()
 
 
@@ -361,6 +368,12 @@ def read_overview_array_warm(water_source_id: str, bands: list[int] | None = Non
     cannot sit on that: the rings are ready in milliseconds and must be shown. The
     read carries on in a background thread and lands in both caches, so the next
     view (and /map/{id}/pasture.png) answers from memory.
+
+    The wait happens ONLY when there is something to wait for: a decoded copy in
+    memory (returned above), a copy already on this container's disk (~1 s to
+    decode), or a read another request started earlier. A genuinely cold download
+    returns None at once and finishes off-thread — the page never pays those 20 s,
+    not even 2 s of them.
     """
     key = (water_source_id, tuple(bands) if bands else None, int(max_dim))
     hit = _overview_cache_get(key)
@@ -368,13 +381,33 @@ def read_overview_array_warm(water_source_id: str, bands: list[int] | None = Non
         return hit
     if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
         return None
-    future = _OVERVIEW_POOL.submit(read_overview_array, water_source_id, bands, max_dim)
+    with _OVERVIEW_INFLIGHT_LOCK:
+        future = _OVERVIEW_INFLIGHT.get(key)
+        cold = future is None
+        if cold:
+            future = _OVERVIEW_POOL.submit(read_overview_array, water_source_id,
+                                           bands, max_dim)
+            _OVERVIEW_INFLIGHT[key] = future
+            future.add_done_callback(
+                lambda _f, k=key: _overview_inflight_done(k))
+    if cold and not overview_on_disk(water_source_id):
+        return None
     try:
         return future.result(timeout=timeout_s)
     except FutureTimeout:
         return None
     except Exception:  # noqa: BLE001
         return None
+
+
+def _overview_inflight_done(key: tuple) -> None:
+    with _OVERVIEW_INFLIGHT_LOCK:
+        _OVERVIEW_INFLIGHT.pop(key, None)
+
+
+def overview_on_disk(water_source_id: str) -> bool:
+    """Has this point's overview been downloaded to this container before?"""
+    return bool(_overview_disk_files(water_source_id))
 
 
 def overview_exists(water_source_id: str) -> bool:

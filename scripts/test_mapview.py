@@ -7,7 +7,6 @@ Covers:
 """
 from __future__ import annotations
 
-import io
 import sys
 
 import numpy as np
@@ -17,7 +16,10 @@ sys.path.insert(0, ".")
 
 from app.routers.mapview import mapview_page  # noqa: E402
 from app.services import map_renderer as m  # noqa: E402
+from app.services import raster_read  # noqa: E402
 from app.services import water_reach  # noqa: E402
+
+_REAL_OVERVIEW_ON_DISK = raster_read.overview_on_disk
 
 
 def test_mapview_pages() -> None:
@@ -237,11 +239,66 @@ def test_pasture_status_does_not_wait_for_the_satellite() -> None:
     print("map page never waits for the satellite OK (present + shares next time)")
 
 
+def test_warm_read_returns_at_once_on_a_cold_download() -> None:
+    """A page must not pay even the 2 s warm budget when nothing is cached yet.
+
+    Cold 8 MB download = 20-30 s on the deployed instance. The rings are ready in
+    milliseconds and have to be drawn; the raster read finishes off-thread and the
+    next view answers from the disk cache. If a copy IS already on this container's
+    disk, the page does wait for it — that decode takes ~1 s and puts the pasture
+    colours on the very first load after a deploy.
+    """
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path
+
+    from app.services import raster_read as rr
+
+    real_dir = rr._OVERVIEW_DISK_DIR
+    real_uncached = rr._read_overview_array_uncached
+    started = threading.Event()
+
+    def slow_uncached(wsid, bands=None, max_dim=512):
+        started.set()
+        time.sleep(3.0)
+        return None
+
+    try:
+        rr.clear_overview_cache()
+        rr._OVERVIEW_DISK_DIR = Path(tempfile.mkdtemp()) / "no-cache-on-disk"
+        rr._read_overview_array_uncached = slow_uncached
+        t0 = time.perf_counter()
+        got = rr.read_overview_array_warm("cold-point", bands=[1])
+        dt = time.perf_counter() - t0
+        assert got is None, got
+        assert dt < 0.4, f"warm read waited {dt:.2f}s on a cold download"
+        assert started.wait(1.0), "the download must carry on in the background"
+
+        # A copy on disk: waiting for the decode is allowed (and wanted).
+        rr.clear_overview_cache()
+        rr._read_overview_array_uncached = lambda *a, **k: (time.sleep(0.05)
+                                                          or (np.zeros((2, 2)), None))
+        rr.overview_on_disk = lambda wsid: True
+        t0 = time.perf_counter()
+        got = rr.read_overview_array_warm("warm-point", bands=[1])
+        dt = time.perf_counter() - t0
+        assert got is not None, "a disk-cached overview must be waited for"
+        assert dt < 1.0, f"disk decode took {dt:.2f}s"
+    finally:
+        rr._OVERVIEW_DISK_DIR = real_dir
+        rr._read_overview_array_uncached = real_uncached
+        rr.clear_overview_cache()
+        rr.overview_on_disk = _REAL_OVERVIEW_ON_DISK
+    print("warm read OK (cold download 0.0 s, disk-cached decode waited for)")
+
+
 if __name__ == "__main__":
     test_mapview_pages()
     test_autofocus_shows_rings_and_legend()
     test_overview_cache()
     test_overview_disk_cache()
+    test_warm_read_returns_at_once_on_a_cold_download()
     test_pasture_status_does_not_wait_for_the_satellite()
     test_fit_view_real()
     print("\nmapview + fit-overview tests OK.")

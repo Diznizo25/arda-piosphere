@@ -36,6 +36,7 @@ import json
 import logging
 import math
 import os
+import time
 import urllib.request
 from functools import lru_cache
 
@@ -1398,6 +1399,13 @@ def _overlay_bounds_deg(west: float, north: float, mpp: float):
     return [[float(south_), float(west_)], [float(north_), float(east_)]]
 
 
+# "Does this point have an orthophoto?" is a HEAD to R2 — ~1.5 s from the deployed
+# instance, on every page load. The answer changes only when we fly a new site, so
+# remember it for a while.
+_ORTHO_AVAILABLE_CACHE: dict[str, tuple[float, bool]] = {}
+_ORTHO_AVAILABLE_TTL_S = 900.0
+
+
 def ortho_available(water_source_id: str) -> bool:
     """Is there a close-up image for this water point? Fail-open False.
 
@@ -1406,6 +1414,18 @@ def ortho_available(water_source_id: str) -> bool:
     pasture layer), the map shows THAT instead: sharp pixels where we flew, honest blur
     where we did not. Nothing is invented when it is missing.
     """
+    now = time.monotonic()
+    hit = _ORTHO_AVAILABLE_CACHE.get(water_source_id)
+    if hit is not None and now - hit[0] < _ORTHO_AVAILABLE_TTL_S:
+        return hit[1]
+    found = _ortho_available_head(water_source_id)
+    if len(_ORTHO_AVAILABLE_CACHE) >= 512:
+        _ORTHO_AVAILABLE_CACHE.clear()
+    _ORTHO_AVAILABLE_CACHE[water_source_id] = (now, found)
+    return found
+
+
+def _ortho_available_head(water_source_id: str) -> bool:
     try:
         from app.config import get_settings
         from app.services.storage import get_s3_client, ortho_key

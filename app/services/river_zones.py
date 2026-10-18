@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 
 from shapely.geometry import LineString, Point, mapping
 from shapely.ops import transform as shp_transform
@@ -143,8 +144,38 @@ def nearby_rivers(lon: float, lat: float, radius_km: float,
 
 
 
+# Ribbons are a pure function of (anchor, reach) and the static river network, but
+# they are expensive Shapely work. Every page load for the same point would rebuild
+# them, so keep the last few results for a while (~11 m / 1 h tolerance).
+_RIBBON_CACHE: dict[tuple, tuple[float, dict | None]] = {}
+_RIBBON_TTL_S = 3600.0
+_RIBBON_CACHE_MAX = 128
+
+
+def clear_ribbon_cache() -> None:
+    """Forget cached ribbons (tests, or after the river network changes)."""
+    _RIBBON_CACHE.clear()
+
+
 def river_zone_ribbons(lon: float, lat: float, reach_km: float,
                        max_km: float | None = None) -> dict | None:
+    """Cached `_river_zone_ribbons` — see below for the geometry."""
+    key = (round(float(lon), 4), round(float(lat), 4),
+           round(float(reach_km), 2),
+           None if max_km is None else round(float(max_km), 2))
+    now = time.monotonic()
+    hit = _RIBBON_CACHE.get(key)
+    if hit is not None and now - hit[0] < _RIBBON_TTL_S:
+        return hit[1]
+    value = _river_zone_ribbons(lon, lat, reach_km, max_km)
+    if len(_RIBBON_CACHE) >= _RIBBON_CACHE_MAX:
+        _RIBBON_CACHE.clear()
+    _RIBBON_CACHE[key] = (now, value)
+    return value
+
+
+def _river_zone_ribbons(lon: float, lat: float, reach_km: float,
+                        max_km: float | None = None) -> dict | None:
     """Grazing-zone ribbons that follow the river line.
 
     Returns {"reach_km": R, "bands": [{level, km, geojson}, ...]}: each geojson
@@ -166,7 +197,13 @@ def river_zone_ribbons(lon: float, lat: float, reach_km: float,
         local = shp_transform(to_local, rv["line"])
         if local.distance(origin) / 1000.0 > max_km:
             continue
-        lines.append(local)
+        # CLIP BEFORE BUFFERING. Buffering a river that runs for tens of km outside
+        # the viewport is what made this call take ~20 s on the deployed instance —
+        # and the map page waits for it, so the herder saw a map with no rings.
+        # Inside the circle the ribbon is the same polygon either way.
+        local = local.intersection(clip_circle)
+        if not local.is_empty:
+            lines.append(local)
     if not lines:
         return None
     line_union = unary_union(lines)
@@ -174,9 +211,23 @@ def river_zone_ribbons(lon: float, lat: float, reach_km: float,
         return None
 
     r_m = reach_km * 1000.0
-    b_close = line_union.buffer(0.5 * r_m, quad_segs=32).intersection(clip_circle)
-    b_far = line_union.buffer(0.8 * r_m, quad_segs=32).intersection(clip_circle)
-    b_limit = line_union.buffer(r_m, quad_segs=32).intersection(clip_circle)
+    parts = list(getattr(line_union, "geoms", [line_union]))
+
+    def band(radius_m: float):
+        # Buffer each river piece on its own and union the pieces. buffer() on the
+        # whole MultiLineString costs ~1.4 s here (GEOS builds one giant offset with
+        # cascaded joins over 54 disjoint lines) while the same geometry built as
+        # "buffer of the union == union of the buffers" takes ~0.05 s. The map page
+        # cannot wait 3+ s for ribbons, so this is the difference between the herder
+        # seeing the zones and seeing an empty map.
+        # 16 segments per quarter circle: distance bands drawn at map zoom, later
+        # simplified to ~60 m — not survey geometry.
+        return unary_union([p.buffer(radius_m, quad_segs=16)
+                            for p in parts]).intersection(clip_circle)
+
+    b_close = band(0.5 * r_m)
+    b_far = band(0.8 * r_m)
+    b_limit = band(r_m)
 
     bands = []
     for level, km, geom in (
@@ -192,5 +243,6 @@ def river_zone_ribbons(lon: float, lat: float, reach_km: float,
     return {"reach_km": round(reach_km, 1), "bands": bands}
 
 
-__all__ = ["load_rivers", "nearby_rivers", "river_zone_ribbons", "_haversine_km"]
+__all__ = ["clear_ribbon_cache", "load_rivers", "nearby_rivers",
+           "river_zone_ribbons", "_haversine_km"]
 

@@ -25,6 +25,7 @@ ky = 110540.0
 coords = [[lon0 + (x / kx), lat0] for x in range(-15000, 15001, 500)]
 line = LineString(coords)
 rz._RIVERS_CACHE = [{"name": "Test River", "kind": "river", "line": line}]
+rz.clear_ribbon_cache()
 
 reach = 7.0
 rib = rz.river_zone_ribbons(lon0, lat0, reach, max_km=12.0)
