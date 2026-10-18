@@ -60,6 +60,12 @@ _OVERVIEW_CACHE_LOCK = threading.Lock()
 _NO_OVERVIEW_UNTIL: dict[str, float] = {}
 _NO_OVERVIEW_TTL_S = 60.0
 
+# ... and a positive answer is kept longer: the object is there, and it only
+# changes when a new weekly build lands. Without this, every page load paid an
+# R2 HEAD (~0.9 s on the deployed instance) just to redraw the same map.
+_OVERVIEW_EXISTS_UNTIL: dict[str, float] = {}
+_OVERVIEW_EXISTS_TTL_S = 600.0
+
 # Reads that a page must not wait for run here, so the download survives the
 # request that started it.
 _OVERVIEW_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="overview-read")
@@ -102,6 +108,7 @@ def clear_overview_cache() -> None:
     with _OVERVIEW_INFLIGHT_LOCK:
         _OVERVIEW_INFLIGHT.clear()
     _NO_OVERVIEW_UNTIL.clear()
+    _OVERVIEW_EXISTS_UNTIL.clear()
 
 
 # The download itself is also kept ON DISK, because the in-memory cache lives
@@ -415,14 +422,19 @@ def overview_exists(water_source_id: str) -> bool:
 
     Lets a map say "the satellite layer is here; its percentages are still being
     read" instead of either waiting ~28 s or claiming there is no pasture data.
+    A yes is remembered for 10 minutes, a no for 60 s.
     """
-    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
+    now = time.time()
+    if _OVERVIEW_EXISTS_UNTIL.get(water_source_id, 0.0) > now:
+        return True
+    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > now:
         return False
     try:
         from app.config import get_settings
 
         get_s3_client().head_object(Bucket=get_settings().r2_bucket_name,
                                     Key=cog_overview_key(water_source_id))
+        _OVERVIEW_EXISTS_UNTIL[water_source_id] = now + _OVERVIEW_EXISTS_TTL_S
         return True
     except Exception:  # noqa: BLE001
         return False

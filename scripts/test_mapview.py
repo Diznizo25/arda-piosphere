@@ -293,12 +293,38 @@ def test_warm_read_returns_at_once_on_a_cold_download() -> None:
     print("warm read OK (cold download 0.0 s, disk-cached decode waited for)")
 
 
+def test_overview_exists_head_is_cached() -> None:
+    """`overview_exists` answers the page's "is the satellite layer there?" with
+    an R2 HEAD — ~0.9 s live, on every single map load. Cache the yes."""
+    from app.services import raster_read as rr
+
+    real_client = rr.get_s3_client
+    calls = {"n": 0}
+
+    class _S3:
+        def head_object(self, **_kw):
+            calls["n"] += 1
+            return {"ContentLength": 1}
+
+    rr.get_s3_client = lambda *a, **k: _S3()
+    try:
+        rr.clear_overview_cache()
+        assert rr.overview_exists("exists-point") is True
+        assert rr.overview_exists("exists-point") is True
+        assert calls["n"] == 1, f"HEAD repeated ({calls['n']}x per two page loads)"
+    finally:
+        rr.get_s3_client = real_client
+        rr.clear_overview_cache()
+    print("overview_exists OK (one HEAD per point per 10 min)")
+
+
 if __name__ == "__main__":
     test_mapview_pages()
     test_autofocus_shows_rings_and_legend()
     test_overview_cache()
     test_overview_disk_cache()
     test_warm_read_returns_at_once_on_a_cold_download()
+    test_overview_exists_head_is_cached()
     test_pasture_status_does_not_wait_for_the_satellite()
     test_fit_view_real()
     print("\nmapview + fit-overview tests OK.")
