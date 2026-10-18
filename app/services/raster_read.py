@@ -73,7 +73,13 @@ _OVERVIEW_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="overview-
 # Reads currently running, so a second request can wait for one already in flight
 # instead of starting a duplicate 8 MB download.
 _OVERVIEW_INFLIGHT: dict[tuple, Future] = {}
-_OVERVIEW_INFLIGHT_LOCK = threading.Lock()
+# RE-ENTRANT on purpose. `add_done_callback` runs the callback INLINE when the
+# future has already finished — which it has, for a read that answers from memory
+# or from the disk cache. With a plain Lock that callback (`pop`) tried to take
+# the lock its own caller was holding and the worker thread hung forever: a map
+# request that never returns, on the fast path of all things. (Found by a test
+# whose fake read returns immediately.)
+_OVERVIEW_INFLIGHT_LOCK = threading.RLock()
 
 
 def _overview_cache_get(key: tuple):
@@ -398,7 +404,10 @@ def read_overview_array_warm(water_source_id: str, bands: list[int] | None = Non
             future.add_done_callback(
                 lambda _f, k=key: _overview_inflight_done(k))
     if cold and not overview_on_disk(water_source_id):
-        return None
+        # The read may already have finished — a cache hit, or an object small
+        # enough to arrive before we get here. Then the page gets its numbers on
+        # THIS view instead of the next one. None means it is still downloading.
+        return _overview_cache_get(key)
     try:
         return future.result(timeout=timeout_s)
     except FutureTimeout:

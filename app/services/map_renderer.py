@@ -1184,9 +1184,13 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
 
     Returns (overlay_image_or_None, best_pasture_(lon,lat,score), note).
     """
-    from app.services.raster_read import read_overview_array
+    from app.services.raster_read import read_overview_array_blocking
 
-    res = read_overview_array(water_source_id, bands=[1, 3, 4], max_dim=512)
+    # Join a read the map page already started (and any copy another worker has
+    # on disk) instead of pulling the same 8 MB a second time. This is the image
+    # the WhatsApp "map" answer sends, so for a point that was just built it is
+    # usually the FIRST request that touches the overview at all.
+    res = read_overview_array_blocking(water_source_id, bands=[1, 3, 4], max_dim=512)
     if res is None:
         return None, None, None
     arr, transform = res
