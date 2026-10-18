@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -159,9 +160,15 @@ def _scale_geojson_ring(geojson: dict, frac: float) -> dict:
 
 def _payload(lat: float, lon: float, species: str, interval: str,
              water_id: str | None, numbered: str | None, name: str | None,
-             lang: str, auto_focus: bool = True) -> dict:
+             lang: str, auto_focus: bool = True,
+             timings: dict | None = None) -> dict:
+    t_start = time.perf_counter()
     text = _t(lang)
     numbered_ids = [u for u in (numbered or "").split(",") if u]
+    def mark(name: str) -> None:
+        if timings is not None:
+            timings[name] = round(time.perf_counter() - t_start, 2)
+
     by_id: dict[str, water_sources.WaterSource] = {}
     try:
         by_id = {w.id: w for w in water_sources.list_water_sources()}
@@ -188,6 +195,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                             "status_label": n.get("status_label"),
                             "status_age_days": n.get("status_age_days"),
                             "needs_check": n.get("needs_check")})
+    mark("options")
 
     # Rings + pasture for ONE water point: the one asked for, otherwise the
     # nearest one — so the rings and the colour key are on the map the moment it
@@ -228,6 +236,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
         except Exception:  # noqa: BLE001
             _log.exception("mapview: species rings failed for %s", main_id)
             rings, eff_km = [], None
+        mark("rings")
         try:
             status = map_renderer.pasture_overlay_status(main_id, species, interval)
             if status:
@@ -257,6 +266,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
         except Exception:  # noqa: BLE001
             _log.exception("mapview: pasture summary failed for %s", main_id)
             overlay, ortho = None, None
+        mark("pasture")
 
     # Named places around the map (villages, markets, rivers, peaks) so the
     # pasture colours can be read against names a pastoralist actually uses.
@@ -271,6 +281,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                                                   radius_km=km * 1.25, limit=12)
     except Exception:  # noqa: BLE001
         landmarks = []
+    mark("landmarks")
 
     # Rivers are water too — and they are LINES, so their grazing zones are
     # distance ribbons along the river, not rings around one point.
@@ -288,8 +299,11 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 max_km=max(span, eff_km) * 1.05)
     except Exception:  # noqa: BLE001
         rivers, ribbons = [], None
+    mark("rivers")
 
     label = name or map_renderer._herder_place_label(lon, lat)
+    if timings is not None:
+        timings["total"] = round(time.perf_counter() - t_start, 2)
     return {
         "lang": lang,
         "title": text["title"], "tap": text["tap"],
@@ -358,11 +372,15 @@ def mapview_api(
     interval: str = Query(default="daily", pattern="^(daily|every_2_3_days)$"),
     id: str | None = Query(default=None),
     lang: str = Query(default="swa", pattern="^(swa|eng)$"),
+    timings: int = Query(default=0, description="timings=1: include step durations"),
 ) -> dict:
     """JSON payload (rings/overlay for one water point) — used when the herder
     taps a pin so the map can switch without reloading the page."""
-    data = _payload(lat, lon, species, interval, id, None, None, lang)
+    tl: dict | None = {} if timings else None
+    data = _payload(lat, lon, species, interval, id, None, None, lang, timings=tl)
     data["focus"] = 1 if id else 0
+    if tl is not None:
+        data["timings"] = tl
     return data
 
 
