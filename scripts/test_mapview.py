@@ -175,9 +175,40 @@ def test_overview_cache() -> None:
     print("overview cache OK (1 download per point+bands+size)")
 
 
+def test_overview_disk_cache() -> None:
+    """The 8 MB object is kept on disk too, so a FRESH worker does not refetch it.
+
+    The in-memory cache lives inside one worker process; without the disk copy a
+    second worker (or a restart) paid the full ~20-30 s download again.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from app.services import raster_read as rr
+
+    real_dir = rr._OVERVIEW_DISK_DIR
+    rr._OVERVIEW_DISK_DIR = Path(tempfile.mkdtemp()) / "overview-cache"
+    try:
+        rr._overview_disk_write("pt", "etag1234567890abcdef", b"abc")
+        assert rr._overview_disk_read("pt", "etag1234567890abcdef", 3) == b"abc"
+        assert rr._overview_disk_read("pt", "etag1234567890abcdef", 99) is None, \
+            "a truncated/partial copy must be refetched"
+        assert rr._overview_disk_read("pt", "a-different-etag", 3) is None, \
+            "a rebuilt object must not be served from the old copy"
+        assert rr._overview_disk_read("pt", None, None) == b"abc", \
+            "with R2 unreachable the last copy is better than no map"
+        rr._overview_disk_write("pt", "etagZZZZZZZZZZZZZZZZ", b"defg")
+        assert rr._overview_disk_read("pt", "etagZZZZZZZZZZZZZZZZ", 4) == b"defg"
+        assert len(rr._overview_disk_files("pt")) == 1, "old copies must be evicted"
+    finally:
+        rr._OVERVIEW_DISK_DIR = real_dir
+    print("overview disk cache OK (one file per point, ETag-checked)")
+
+
 if __name__ == "__main__":
     test_mapview_pages()
     test_autofocus_shows_rings_and_legend()
     test_overview_cache()
+    test_overview_disk_cache()
     test_fit_view_real()
     print("\nmapview + fit-overview tests OK.")

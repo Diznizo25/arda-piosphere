@@ -19,8 +19,10 @@ import math
 import os
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import rasterio
@@ -49,6 +51,12 @@ _OVERVIEW_CACHE: "OrderedDict[tuple, tuple[np.ndarray, object]]" = OrderedDict()
 _OVERVIEW_CACHE_MAX = 6
 _OVERVIEW_CACHE_MAX_ELEMS = 4_000_000  # ~16 MB of float32 per entry
 _OVERVIEW_CACHE_LOCK = threading.Lock()
+
+# Water points whose overview object does not exist yet (a freshly pinned point
+# waits for the weekly build). Remembered briefly so every map load does not pay
+# two R2 round trips to rediscover it.
+_NO_OVERVIEW_UNTIL: dict[str, float] = {}
+_NO_OVERVIEW_TTL_S = 60.0
 
 
 def _overview_cache_get(key: tuple):
@@ -80,6 +88,65 @@ def clear_overview_cache() -> None:
     """Drop cached overviews (tests, or after a point is rebuilt by hand)."""
     with _OVERVIEW_CACHE_LOCK:
         _OVERVIEW_CACHE.clear()
+    _NO_OVERVIEW_UNTIL.clear()
+
+
+# The download itself is also kept ON DISK, because the in-memory cache lives
+# inside one worker process: a fresh worker, or the second of several workers,
+# otherwise pays the full ~8 MB fetch again (measured: 20-30 s on the deployed
+# instance). The container filesystem is shared by its workers, and /tmp survives
+# requests, so the expensive part happens once per container, not once per worker.
+_OVERVIEW_DISK_DIR = Path(tempfile.gettempdir()) / "piosphere-overview-cache"
+_OVERVIEW_DISK_MAX_AGE_S = 7 * 24 * 3600
+
+
+def _overview_disk_files(water_source_id: str) -> list[Path]:
+    try:
+        return sorted(_OVERVIEW_DISK_DIR.glob(f"{water_source_id}-*.tif"))
+    except OSError:
+        return []
+
+
+def _overview_disk_read(water_source_id: str, etag: str | None,
+                        size: int | None) -> bytes | None:
+    """The object we already downloaded, if it is still THIS object.
+
+    With an ETag we accept only the exact copy (and the matching byte count);
+    without one (R2 unreachable for a moment) we fall back to the newest copy on
+    disk, which is at worst last week's picture — and the map stamps its own age.
+    """
+    paths = _overview_disk_files(water_source_id)
+    if not paths:
+        return None
+    if etag:
+        want = _OVERVIEW_DISK_DIR / f"{water_source_id}-{etag[:16]}.tif"
+        try:
+            if want.exists() and (size is None or want.stat().st_size == size):
+                return want.read_bytes()
+        except OSError:
+            return None
+        return None
+    try:
+        newest = max(paths, key=lambda p: p.stat().st_mtime)
+        if time.time() - newest.stat().st_mtime < _OVERVIEW_DISK_MAX_AGE_S:
+            return newest.read_bytes()
+    except OSError:
+        return None
+    return None
+
+
+def _overview_disk_write(water_source_id: str, etag: str, data: bytes) -> None:
+    try:
+        _OVERVIEW_DISK_DIR.mkdir(parents=True, exist_ok=True)
+        path = _OVERVIEW_DISK_DIR / f"{water_source_id}-{etag[:16]}.tif"
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+        for old in _overview_disk_files(water_source_id):
+            if old != path:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass  # read-only or full disk: the in-memory cache still works
 
 
 @dataclass
@@ -268,8 +335,13 @@ def read_overview_array(water_source_id: str, bands: list[int] | None = None,
     hit = _overview_cache_get(key)
     if hit is not None:
         return hit
+    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
+        return None  # asked again a moment ago: the object still is not there
     res = _read_overview_array_uncached(water_source_id, bands, max_dim)
-    if res is not None:
+    if res is None:
+        _NO_OVERVIEW_UNTIL[water_source_id] = time.time() + _NO_OVERVIEW_TTL_S
+    else:
+        _NO_OVERVIEW_UNTIL.pop(water_source_id, None)
         _overview_cache_put(key, res)
     return res
 
@@ -280,14 +352,31 @@ def _read_overview_array_uncached(water_source_id: str, bands: list[int] | None 
     from app.config import get_settings
 
     settings = get_settings()
+    bucket = settings.r2_bucket_name
+    key = cog_overview_key(water_source_id)
+    client = None
+    etag: str | None = None
+    size: int | None = None
+    # HEAD first: it tells us whether the copy already on disk IS this object, so
+    # a warm container answers from /tmp instead of moving 8 MB over the wire.
     try:
         client = get_s3_client()
-        obj = client.get_object(
-            Bucket=settings.r2_bucket_name, Key=cog_overview_key(water_source_id)
-        )
-        data = obj["Body"].read()
-    except Exception:  # noqa: BLE001
-        return None
+        head = client.head_object(Bucket=bucket, Key=key)
+        etag = (head.get("ETag") or "").strip('"') or None
+        size = head.get("ContentLength")
+    except Exception:  # noqa: BLE001  (keep going: R2 blip, or no object at all)
+        client = client or None
+    data = _overview_disk_read(water_source_id, etag, size)
+    if data is None:
+        if client is None:
+            return None
+        try:
+            obj = client.get_object(Bucket=bucket, Key=key)
+            data = obj["Body"].read()
+        except Exception:  # noqa: BLE001
+            return None
+        if etag:
+            _overview_disk_write(water_source_id, etag, data)
     try:
         with MemoryFile(data) as memfile:
             with memfile.open() as src:
