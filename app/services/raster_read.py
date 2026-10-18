@@ -407,6 +407,41 @@ def read_overview_array_warm(water_source_id: str, bands: list[int] | None = Non
         return None
 
 
+def read_overview_array_blocking(water_source_id: str, bands: list[int] | None = None,
+                                 max_dim: int = 512,
+                                 timeout_s: float = 90.0) -> tuple[np.ndarray, object] | None:
+    """Read the overview and WAIT for it — but join a download already running.
+
+    The map page and the pasture PNG it asks for a moment later are two requests
+    for the same 8 MB object. The page starts the read in the background (it must
+    not wait, see read_overview_array_warm); the PNG has to have the pixels, so it
+    must block — but not by starting a SECOND 20-30 s download of the same bytes
+    on the same small instance. Both share one future here.
+
+    Returns None on timeout/error; never negative-caches (the caller's request is
+    allowed to try again as soon as the object lands).
+    """
+    key = (water_source_id, tuple(bands) if bands else None, int(max_dim))
+    hit = _overview_cache_get(key)
+    if hit is not None:
+        return hit
+    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
+        return None
+    with _OVERVIEW_INFLIGHT_LOCK:
+        future = _OVERVIEW_INFLIGHT.get(key)
+        if future is None:
+            future = _OVERVIEW_POOL.submit(read_overview_array, water_source_id,
+                                           bands, max_dim)
+            _OVERVIEW_INFLIGHT[key] = future
+            future.add_done_callback(lambda _f, k=key: _overview_inflight_done(k))
+    try:
+        return future.result(timeout=timeout_s)
+    except FutureTimeout:
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _overview_inflight_done(key: tuple) -> None:
     with _OVERVIEW_INFLIGHT_LOCK:
         _OVERVIEW_INFLIGHT.pop(key, None)

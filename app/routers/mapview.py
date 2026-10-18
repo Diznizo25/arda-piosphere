@@ -46,6 +46,7 @@ def _t(lang: str) -> dict:
             "grass": "green = grass", "dry": "brown = dry forage",
             "bare": "red = bare", "on": "Hide pasture", "off": "Show pasture",
             "preparing": "Pasture layer being prepared",
+            "reading": "Pasture: reading the satellite… (it fills in by itself)",
             "places": "Named places", "cattle": "cattle", "shoat": "goats/sheep",
             "camel": "camels", "k_city": "town", "k_village": "village",
             "k_market": "market", "k_river": "river", "k_peak": "hill",
@@ -72,6 +73,7 @@ def _t(lang: str) -> dict:
         "grass": "kijani = nyasi", "dry": "kahawia = nyasi kavu",
         "bare": "nyekundu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
         "preparing": "Ramani ya malisho inaandaliwa",
+        "reading": "Malisho: tunasoma satelaiti… (yanajaa yenyewe)",
         "places": "Maeneo yenye majina", "cattle": "Ng'ombe", "shoat": "Mbuzi/Kondoo",
         "camel": "Ngamia", "k_city": "Mji", "k_village": "Kijiji",
         "k_market": "Soko", "k_river": "Mto", "k_peak": "Kilima",
@@ -511,13 +513,66 @@ let overlayForced = false;   // he tapped "show pasture" while zoomed right in
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
-// Satellite pasture overlay for the focused water point — framed to the water
-// point's full ring stack (all species rings shown). Semi-transparent so the
-// map underneath stays visible.
-if (D.overlay && D.overlay.url && D.overlay.available) {
+// --- pasture layer + its numbers -------------------------------------------
+// The layer's pixels and its percentages both come from ONE satellite read on
+// the server. A point that was just built (or a container that has not seen it
+// yet) is served before that read finishes: the page gets the layer's footprint
+// and "available", but no percentages, and the image itself may take a few
+// seconds to arrive. Leaving the legend empty in that window is how a herder
+// decides the map is broken ("it said done, but there is no pasture"). So:
+//   * the legend says what is happening while it waits,
+//   * the image loading proves the read finished -> ask once more for the
+//     numbers and fill them in,
+//   * a failed image is retried once instead of vanishing silently.
+let pastureTries = 0;
+let overlayRetried = false;
+
+function pasturePending() {
+  const p = D.overlay || {};
+  if (!p.url) return false;
+  return p.available ? !p.frac : true;
+}
+
+function addOverlayLayer() {
+  if (overlayLayer || !D.overlay || !D.overlay.url || !D.overlay.available) return;
   overlayLayer = L.imageOverlay(D.overlay.url, L.latLngBounds(D.overlay.bounds),
     { opacity: 0.55, interactive: false }).addTo(map);
+  overlayLayer.on('load', refreshPastureSummary);
+  overlayLayer.on('error', function () {
+    // A cold container can still be decoding the satellite when the browser
+    // asks for the PNG. One retry, a few seconds later, is the difference
+    // between "no pasture" and "pasture, a little late".
+    if (overlayRetried || !D.overlay) return;
+    overlayRetried = true;
+    setTimeout(function () {
+      if (overlayLayer) overlayLayer.setUrl(D.overlay.url + '&r=' + Date.now());
+    }, 6000);
+  });
+  applyOverlayStyle();
 }
+
+function refreshPastureSummary() {
+  if (!D.main_id || pastureTries >= 4 || !pasturePending()) return;
+  pastureTries += 1;
+  const u = '/mapview/api?lat=' + D.herder.lat + '&lon=' + D.herder.lon +
+    '&species=' + encodeURIComponent(D.species) +
+    '&interval=' + encodeURIComponent(D.interval) +
+    '&lang=' + encodeURIComponent(D.lang) +
+    '&id=' + encodeURIComponent(D.main_id);
+  fetch(u).then(r => (r.ok ? r.json() : null)).then(j => {
+    if (!j || !j.overlay) { setTimeout(refreshPastureSummary, 5000); return; }
+    D.overlay = j.overlay;
+    addOverlayLayer();          // it may only have BECOME available on this read
+    redrawLegend();
+    if (pasturePending()) setTimeout(refreshPastureSummary, 5000);
+  }).catch(() => setTimeout(refreshPastureSummary, 5000));
+}
+
+addOverlayLayer();
+// Nothing to hang the retry on when the layer was not added at all (the server
+// said "being prepared"): ask again shortly — the page already started the
+// server's read, so the answer is usually there by now.
+if (pasturePending()) setTimeout(refreshPastureSummary, 5000);
 
 // THE COLOUR STEPS ASIDE WHEN HE ZOOMS IN. The pasture layer is 10 m pixels: once he
 // is close enough to look for his own plot, one pixel fills the screen and the layer
@@ -659,96 +714,112 @@ function applyLabels() {
 });
 
 
-// Legend + pasture summary + pasture on/off toggle.
+// Legend + pasture summary + pasture on/off toggle. Rebuilt from D.overlay, so a
+// "still reading the satellite" panel can turn into real percentages without the
+// herder reloading the page (see refreshPastureSummary).
+let legendBox = null;
+function redrawLegend() {
+  if (legendBox) legendBox.innerHTML = legendHtml();
+}
+function legendHtml() {
+  const p = D.overlay || {};
+  const frac = p.frac || {};
+  let html = '<div style="background:#fff;border-radius:8px;padding:8px 10px;' +
+    'box-shadow:0 1px 5px rgba(0,0,0,.3);font-size:13px;max-width:255px">';
+  if (p.url && p.available) {
+    html += '<b>' + (TXT.pasture || 'Pasture') + '</b>' +
+      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
+      'background:' + pastureCols.green + ';margin-right:6px"></span>' + (TXT.grass||'green = grass') +
+      (frac.green != null ? ' <b>' + frac.green + '%</b>' : '') + '</div>' +
+      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
+      'background:' + pastureCols.dry + ';margin-right:6px"></span>' + (TXT.dry||'olive = dry forage') +
+      (frac.dry != null ? ' <b>' + frac.dry + '%</b>' : '') + '</div>' +
+      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
+      'background:' + pastureCols.bare + ';margin-right:6px"></span>' + (TXT.bare||'grey = bare') +
+      (frac.bare != null ? ' <b>' + frac.bare + '%</b>' : '') + '</div>';
+    if (p.usable_pct != null) {
+      html += '<div style="margin-top:3px;font-weight:700">' + (TXT.summary||'Pasture now') +
+        ': <b>' + p.usable_pct + '%</b></div>';
+    } else {
+      // The layer exists but its numbers are still being read from the
+      // satellite. Saying so — instead of showing a pasture panel with no
+      // numbers — is what stops a slow first look from reading as "there is
+      // no pasture for my new water point".
+      html += '<div style="margin-top:3px;color:#92400e">' +
+        (TXT.reading || 'Pasture: reading the satellite…') + '</div>';
+    }
+    // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
+    // satellite cannot be read there (cloud, shadow, no clean pass) or when it is
+    // outside his grazing reach. Left unexplained, holes read as "the map is broken";
+    // named — and numbered — they read as what they are. The share is of HIS ring, so
+    // a few gaps look like a few gaps and a clouded week looks like a clouded week.
+    let blankTxt = (TXT.no_read || 'Uncoloured patches');
+    if (p.blank_pct != null && p.blank_pct > 0) {
+      blankTxt += ': <b>' + p.blank_pct + '%</b> ' +
+        (TXT.no_read_why || 'of your reach we could not read');
+    }
+    html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' + blankTxt +
+      ' — ' + (TXT.no_guess || 'we do not guess (cloud, shadow, no clean pass)') +
+      '</div>' +
+      '<div style="color:#475569;line-height:1.35">' +
+      (TXT.ring_clip || 'Colour appears inside the dashed reach line only.') + '</div>';
+    html += '<div style="margin-top:3px"><button id="ptoggle" style="font-size:12px">' +
+      (TXT.on || 'Hide pasture') + '</button></div>';
+  } else if (p.url) {
+    html += '<div style="color:#92400e">' + (TXT.preparing || 'Pasture layer being prepared') + '</div>';
+  } else {
+    html += '<div style="color:#334155">' + (TXT.tap || 'Tap a water pin') + '</div>';
+  }
+  const wrows = Object.keys(seenTypes).map(k =>
+    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+    'border-radius:50%;background:' + WATER_HEX + ';margin-right:6px"></span>' +
+    (typeName[k] || k) + '</div>').join('');
+  if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
+  // Herder-reported water status — the most actionable line on the map.
+  const stRows = Object.keys(seenStatus).map(k =>
+    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+    'border-radius:50%;background:' + (statusCols[k] || '#6b7280') + ';margin-right:6px"></span>' +
+    (statusName[k] || k) + '</div>').join('');
+  if (stRows) html += '<b>' + (TXT.water_status || 'Water status (from herders)') + '</b>' + stRows;
+  // Named places drawn on the map (towns, villages, markets, rivers, hills).
+  const lmName = { city: TXT.k_city, town: TXT.k_city, village: TXT.k_village,
+    hamlet: TXT.k_village, market: TXT.k_market, river: TXT.k_river, peak: TXT.k_peak };
+  const lmRows = Object.keys(lmSeenKinds).map(k =>
+    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+    'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';margin-right:6px"></span>' +
+    (lmName[k] || k) + '</div>').join('');
+  if (lmRows) html += '<b>' + (TXT.places || 'Named places') + '</b>' + lmRows;
+  // Rivers + their distance ribbons (zones follow the river line).
+  if (D.rivers && D.rivers.length) {
+    let rv = '<b>' + (TXT.rivers || 'Rivers — zones follow the river') + '</b>' +
+      '<div style="line-height:1.5"><span style="display:inline-block;width:14px;height:3px;' +
+      'background:#1d4ed8;margin-right:6px;vertical-align:middle"></span>' +
+      (TXT.k_river || 'river') + ': ' +
+      D.rivers.slice(0, 3).map(r => r.name + ' ' + r.dist_km + ' km').join(', ') + '</div>';
+    if (D.ribbons && D.ribbons.bands) {
+      rv += D.ribbons.bands.map(b =>
+        '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
+        'border-radius:2px;background:' + (zoneCols[b.level] || '#64748b') +
+        ';margin-right:6px"></span>' + (ribbonNames[b.level] || b.level) +
+        ' <b>&lt; ' + b.km + ' km</b></div>').join('');
+    }
+    html += rv;
+  }
+  const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
+    camel: TXT.camel || 'camel' };
+  const rows = (D.rings || []).map(r =>
+    '<div style="line-height:1.5"><span style="display:inline-block;width:10px;height:10px;' +
+    'border:2px solid ' + (ringHex[r.species] || '#64748b') + ';margin-right:6px"></span>' +
+    (spName[r.species] || r.species) + ' ' + r.km + ' km</div>').join('');
+  if (rows) html += '<b>' + T.rings + '</b>' + rows;
+  html += '</div>';
+  return html;
+}
 const Legend = L.Control.extend({
   onAdd: function () {
-    const el = L.DomUtil.create('div', 'leaflet-control');
-    const p = D.overlay || {};
-    const frac = p.frac || {};
-    let html = '<div style="background:#fff;border-radius:8px;padding:8px 10px;' +
-      'box-shadow:0 1px 5px rgba(0,0,0,.3);font-size:13px;max-width:255px">';
-    if (p.url && p.available) {
-      html += '<b>' + (TXT.pasture || 'Pasture') + '</b>' +
-        '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-        'background:' + pastureCols.green + ';margin-right:6px"></span>' + (TXT.grass||'green = grass') +
-        (frac.green != null ? ' <b>' + frac.green + '%</b>' : '') + '</div>' +
-        '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-        'background:' + pastureCols.dry + ';margin-right:6px"></span>' + (TXT.dry||'olive = dry forage') +
-        (frac.dry != null ? ' <b>' + frac.dry + '%</b>' : '') + '</div>' +
-        '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-        'background:' + pastureCols.bare + ';margin-right:6px"></span>' + (TXT.bare||'grey = bare') +
-        (frac.bare != null ? ' <b>' + frac.bare + '%</b>' : '') + '</div>';
-      if (p.usable_pct != null) {
-        html += '<div style="margin-top:3px;font-weight:700">' + (TXT.summary||'Pasture now') +
-          ': <b>' + p.usable_pct + '%</b></div>';
-      }
-      // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
-      // satellite cannot be read there (cloud, shadow, no clean pass) or when it is
-      // outside his grazing reach. Left unexplained, holes read as "the map is broken";
-      // named — and numbered — they read as what they are. The share is of HIS ring, so
-      // a few gaps look like a few gaps and a clouded week looks like a clouded week.
-      let blankTxt = (TXT.no_read || 'Uncoloured patches');
-      if (p.blank_pct != null && p.blank_pct > 0) {
-        blankTxt += ': <b>' + p.blank_pct + '%</b> ' +
-          (TXT.no_read_why || 'of your reach we could not read');
-      }
-      html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' + blankTxt +
-        ' — ' + (TXT.no_guess || 'we do not guess (cloud, shadow, no clean pass)') +
-        '</div>' +
-        '<div style="color:#475569;line-height:1.35">' +
-        (TXT.ring_clip || 'Colour appears inside the dashed reach line only.') + '</div>';
-      html += '<div style="margin-top:3px"><button id="ptoggle" style="font-size:12px">' +
-        (TXT.on || 'Hide pasture') + '</button></div>';
-    } else if (p.url) {
-      html += '<div style="color:#92400e">' + (TXT.preparing || 'Pasture layer being prepared') + '</div>';
-    } else {
-      html += '<div style="color:#334155">' + (TXT.tap || 'Tap a water pin') + '</div>';
-    }
-    const wrows = Object.keys(seenTypes).map(k =>
-      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-      'border-radius:50%;background:' + WATER_HEX + ';margin-right:6px"></span>' +
-      (typeName[k] || k) + '</div>').join('');
-    if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
-    // Herder-reported water status — the most actionable line on the map.
-    const stRows = Object.keys(seenStatus).map(k =>
-      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-      'border-radius:50%;background:' + (statusCols[k] || '#6b7280') + ';margin-right:6px"></span>' +
-      (statusName[k] || k) + '</div>').join('');
-    if (stRows) html += '<b>' + (TXT.water_status || 'Water status (from herders)') + '</b>' + stRows;
-    // Named places drawn on the map (towns, villages, markets, rivers, hills).
-    const lmName = { city: TXT.k_city, town: TXT.k_city, village: TXT.k_village,
-      hamlet: TXT.k_village, market: TXT.k_market, river: TXT.k_river, peak: TXT.k_peak };
-    const lmRows = Object.keys(lmSeenKinds).map(k =>
-      '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-      'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';margin-right:6px"></span>' +
-      (lmName[k] || k) + '</div>').join('');
-    if (lmRows) html += '<b>' + (TXT.places || 'Named places') + '</b>' + lmRows;
-    // Rivers + their distance ribbons (zones follow the river line).
-    if (D.rivers && D.rivers.length) {
-      let rv = '<b>' + (TXT.rivers || 'Rivers — zones follow the river') + '</b>' +
-        '<div style="line-height:1.5"><span style="display:inline-block;width:14px;height:3px;' +
-        'background:#1d4ed8;margin-right:6px;vertical-align:middle"></span>' +
-        (TXT.k_river || 'river') + ': ' +
-        D.rivers.slice(0, 3).map(r => r.name + ' ' + r.dist_km + ' km').join(', ') + '</div>';
-      if (D.ribbons && D.ribbons.bands) {
-        rv += D.ribbons.bands.map(b =>
-          '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-          'border-radius:2px;background:' + (zoneCols[b.level] || '#64748b') +
-          ';margin-right:6px"></span>' + (ribbonNames[b.level] || b.level) +
-          ' <b>&lt; ' + b.km + ' km</b></div>').join('');
-      }
-      html += rv;
-    }
-    const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
-      camel: TXT.camel || 'camel' };
-    const rows = (D.rings || []).map(r =>
-      '<div style="line-height:1.5"><span style="display:inline-block;width:10px;height:10px;' +
-      'border:2px solid ' + (ringHex[r.species] || '#64748b') + ';margin-right:6px"></span>' +
-      (spName[r.species] || r.species) + ' ' + r.km + ' km</div>').join('');
-    if (rows) html += '<b>' + T.rings + '</b>' + rows;
-    html += '</div>';
-    el.innerHTML = html;
-    return el;
+    legendBox = L.DomUtil.create('div', 'leaflet-control');
+    redrawLegend();
+    return legendBox;
   }
 });
 map.addControl(new Legend({ position: 'bottomleft' }));

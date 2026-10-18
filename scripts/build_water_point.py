@@ -158,9 +158,12 @@ def build_one(water_source_id: str) -> bool:
                                    stage_index=3, stage_total=3, progress=90)
         notify(build, "transfer", 90)
 
-        # Final safety check: the COG must be readable in R2.
-        if not _cog_exists_in_r2(water_source_id):
-            raise RuntimeError("COG missing from R2 after transfer")
+        # Final safety check: BOTH raster objects must be in R2 — the full COG
+        # AND the 8x overview the map paints from (see _raster_missing_in_r2).
+        missing = _raster_missing_in_r2(water_source_id)
+        if missing:
+            raise RuntimeError("raster object(s) missing from R2 after transfer: "
+                               + ", ".join(missing))
     except Exception as e:  # noqa: BLE001
         log.exception(f"Build failed for {water_source_id}")
         build = build_tracker.get_build(water_source_id)
@@ -180,19 +183,34 @@ def build_one(water_source_id: str) -> bool:
     return True
 
 
-def _cog_exists_in_r2(water_source_id: str) -> bool:
-    """True if the COG object exists in R2 (used as the final build gate)."""
+def _raster_missing_in_r2(water_source_id: str) -> list[str]:
+    """Which raster objects the app needs are NOT in R2 (empty list = ready).
+
+    "Done" used to mean "the 500 MB indices.tif exists". But /mapview does not
+    paint from that file: it paints from the 8x overview
+    (cogs/<id>/indices_ov8.tif) — the only object small enough to read on the
+    deployed instance. The overview upload is best-effort in
+    transfer_assets_to_r2.py ("overview build/upload failed (non-fatal)"), so a
+    point could be marked Done with a perfect COG and a map that has no pasture
+    at all — and nothing would retry it until the next weekly refresh. On 18 Oct
+    'Hassan Plot' was signed off at 18:13 and its map showed no pasture.
+
+    Both objects are the deliverable, so both are gated here. A missing one
+    fails the build, and the 10-minute queue retries the whole point (the
+    transfer step rebuilds and re-uploads the overview each run).
+    """
     from app.config import get_settings
-    from app.services.storage import cog_key, get_s3_client
+    from app.services.storage import cog_key, cog_overview_key, get_s3_client
 
     settings = get_settings()
-    try:
-        get_s3_client().head_object(
-            Bucket=settings.r2_bucket_name, Key=cog_key(water_source_id)
-        )
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    client = get_s3_client()
+    missing: list[str] = []
+    for key in (cog_key(water_source_id), cog_overview_key(water_source_id)):
+        try:
+            client.head_object(Bucket=settings.r2_bucket_name, Key=key)
+        except Exception:  # noqa: BLE001
+            missing.append(key)
+    return missing
 
 
 def process_pending() -> int:

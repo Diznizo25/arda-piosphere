@@ -1314,6 +1314,10 @@ def _read_classes(water_source_id: str, warm: bool = False):
     `warm=True` asks the raster cache without letting a cold 8 MB download hold
     the caller for 20-30 s (see raster_read.read_overview_array_warm): the page
     gets None now and the pixels on its next view.
+
+    The blocking path (the pasture PNG, the advisory) joins a download the page
+    already started instead of fetching the same bytes a second time
+    (raster_read.read_overview_array_blocking).
     """
     from app.services import raster_read
 
@@ -1322,7 +1326,7 @@ def _read_classes(water_source_id: str, warm: bool = False):
             res = raster_read.read_overview_array_warm(
                 water_source_id, bands=[1, 3, 4], max_dim=512)
         else:
-            res = raster_read.read_overview_array(
+            res = raster_read.read_overview_array_blocking(
                 water_source_id, bands=[1, 3, 4], max_dim=512)
     except Exception:  # noqa: BLE001
         return None
