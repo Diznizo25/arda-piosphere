@@ -18,6 +18,8 @@ import json
 import math
 import os
 import tempfile
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -39,6 +41,45 @@ BAND_NAMES = ["NDVI", "NDRE", "SATVI", "BSI", "NDMI", "NDWI", "VCI", "GSW_MONTHL
 
 # Decimation for the full-COG fallback path (no overview object available).
 DECIMATE = 4
+
+# Decoded overviews, shared between requests (all callers treat them read-only).
+# A 512 px / 3-band read is ~3 MB; cap the count AND the size so a big multi-band
+# read is served fresh instead of pinning memory on a small instance.
+_OVERVIEW_CACHE: "OrderedDict[tuple, tuple[np.ndarray, object]]" = OrderedDict()
+_OVERVIEW_CACHE_MAX = 6
+_OVERVIEW_CACHE_MAX_ELEMS = 4_000_000  # ~16 MB of float32 per entry
+_OVERVIEW_CACHE_LOCK = threading.Lock()
+
+
+def _overview_cache_get(key: tuple):
+    with _OVERVIEW_CACHE_LOCK:
+        hit = _OVERVIEW_CACHE.get(key)
+        if hit is not None:
+            _OVERVIEW_CACHE.move_to_end(key)
+        return hit
+
+
+def _overview_cache_put(key: tuple, value: tuple[np.ndarray, object]) -> None:
+    arr = value[0]
+    if arr.size > _OVERVIEW_CACHE_MAX_ELEMS:
+        return
+    try:
+        # Shared between requests: a write must fail loudly, not corrupt every
+        # later map that reads the same buffer.
+        arr.setflags(write=False)
+    except ValueError:
+        return
+    with _OVERVIEW_CACHE_LOCK:
+        _OVERVIEW_CACHE[key] = value
+        _OVERVIEW_CACHE.move_to_end(key)
+        while len(_OVERVIEW_CACHE) > _OVERVIEW_CACHE_MAX:
+            _OVERVIEW_CACHE.popitem(last=False)
+
+
+def clear_overview_cache() -> None:
+    """Drop cached overviews (tests, or after a point is rebuilt by hand)."""
+    with _OVERVIEW_CACHE_LOCK:
+        _OVERVIEW_CACHE.clear()
 
 
 @dataclass
@@ -214,7 +255,28 @@ def read_overview_array(water_source_id: str, bands: list[int] | None = None,
     Memory-safe: the read is decimated so the largest dimension never exceeds
     `max_dim` (default 512), bounding RAM on small instances. The returned
     transform is adjusted for the decimation so geolocation stays correct.
+
+    CACHED per (water point, bands, max_dim). The object is ~12 MB and one page
+    needs the SAME window several times (ring statistics, pasture colours, the
+    legend percentages, then /map/{id}/pasture.png); re-downloading it for each
+    of those made a single /mapview request take ~14 s on the deployed instance
+    — long enough that a herder on a phone saw the map with no rings at all.
+    Missing overviews are never cached, so a freshly built point appears as soon
+    as its object lands.
     """
+    key = (water_source_id, tuple(bands) if bands else None, int(max_dim))
+    hit = _overview_cache_get(key)
+    if hit is not None:
+        return hit
+    res = _read_overview_array_uncached(water_source_id, bands, max_dim)
+    if res is not None:
+        _overview_cache_put(key, res)
+    return res
+
+
+def _read_overview_array_uncached(water_source_id: str, bands: list[int] | None = None,
+                                  max_dim: int = 512) -> tuple[np.ndarray, object] | None:
+    """One real download+decode of the overview COG (see read_overview_array)."""
     from app.config import get_settings
 
     settings = get_settings()

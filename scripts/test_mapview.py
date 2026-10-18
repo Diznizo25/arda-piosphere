@@ -87,7 +87,97 @@ def test_fit_view_real() -> None:
     print(f"fit-view real-DB OK (zoom {zoom}, {len(png)} bytes, all markers on-screen)")
 
 
+def test_autofocus_shows_rings_and_legend() -> None:
+    """Opening /mapview with NO id must still carry rings + the colour legend.
+
+    Rings used to appear only after a pin tap, so the page reached from the menu
+    was a handful of blue dots with no rings and no colour key — which reads as
+    missing data rather than as a missing tap. And the ring payload used to be a
+    bare geometry with no `geometry` member, so the page could not frame the
+    rings and the effective-reach scaling silently drew the full-size ring.
+    """
+    import json
+    import re
+
+    real_status = m.pasture_overlay_status
+    m.pasture_overlay_status = lambda *a, **k: {
+        "bounds": [[0.50, 37.20], [0.62, 37.29]], "available": True,
+        "usable_pct": 62, "frac": {"green": 20, "dry": 42, "bare": 12},
+        "blank_pct": 18,
+    }
+    try:
+        html = mapview_page(lat=0.3525, lon=37.583, species="cattle", lang="swa",
+                            id=None, numbered=None, name=None,
+                            interval="every_2_3_days", focus=0, graze=0, t=None)
+    finally:
+        m.pasture_overlay_status = real_status
+    body = html.body.decode("utf-8", errors="replace")
+    data = json.loads(re.search(r"const D = (\{.*?\});\n", body, re.S).group(1))
+
+    assert data["main_id"], "the nearest water point should be focused on load"
+    assert len(data["rings"]) == 3, data["rings"]
+    for ring in data["rings"]:
+        assert ring["geojson"]["type"] == "Feature", "rings must be Features"
+        assert ring["geojson"]["geometry"]["type"] in ("Polygon", "MultiPolygon")
+        assert ring["color"]
+    assert data["overlay"] and data["overlay"]["frac"], "legend needs the shares"
+    # 2-3 day watering makes the cattle ring 9.8 km; what is drawn must be that
+    # ring, not the 7 km stored one.
+    cattle = next(r for r in data["rings"] if r["species"] == "cattle")
+    coords = cattle["geojson"]["geometry"]["coordinates"][0]
+    width_km = (max(c[0] for c in coords) - min(c[0] for c in coords)) * 111.32
+    assert abs(cattle["km"] - 9.8) < 0.05, cattle["km"]
+    assert abs(width_km - 2 * cattle["km"]) / (2 * cattle["km"]) < 0.08, width_km
+
+    # Graze mode records where the herd grazed by tapping: it must not be
+    # auto-focused onto a water point.
+    html2 = mapview_page(lat=0.3525, lon=37.583, species="cattle", lang="swa",
+                         id=None, numbered=None, name=None, interval="daily",
+                         focus=0, graze=1, t="tok")
+    data2 = json.loads(re.search(r"const D = (\{.*?\});\n",
+                                 html2.body.decode("utf-8", errors="replace"),
+                                 re.S).group(1))
+    assert data2["main_id"] is None and not data2["rings"], "graze mode must not focus"
+    print(f"auto-focus OK (rings {len(data['rings'])}, overlays on load, "
+          f"cattle ring {cattle['km']} km drawn {width_km:.1f} km wide)")
+
+
+def test_overview_cache() -> None:
+    """The overview COG must be downloaded once, not once per call.
+
+    Every map surface reads the same ~12 MB object; re-fetching it per call made
+    /mapview take ~14 s, long enough that a phone showed a map with no rings.
+    """
+    from app.services import raster_read
+
+    calls = {"n": 0}
+
+    def fake(wsid, bands=None, max_dim=512):
+        calls["n"] += 1
+        if wsid == "nowhere":
+            return None
+        return np.zeros((3, 8, 8), dtype=np.float32), object()
+
+    real = raster_read._read_overview_array_uncached
+    raster_read._read_overview_array_uncached = fake
+    raster_read.clear_overview_cache()
+    try:
+        a1 = raster_read.read_overview_array("point-a", bands=[1, 3, 4])
+        a2 = raster_read.read_overview_array("point-a", bands=[1, 3, 4])
+        raster_read.read_overview_array("point-b", bands=[1, 3, 4])
+        assert raster_read.read_overview_array("nowhere", bands=[1]) is None
+        assert calls["n"] == 3, f"{calls['n']} loads for 4 reads"
+        assert a1 is a2, "the cached array must be reused"
+        assert not a1[0].flags.writeable, "cached arrays are shared: keep them read-only"
+    finally:
+        raster_read._read_overview_array_uncached = real
+        raster_read.clear_overview_cache()
+    print("overview cache OK (1 download per point+bands+size)")
+
+
 if __name__ == "__main__":
     test_mapview_pages()
+    test_autofocus_shows_rings_and_legend()
+    test_overview_cache()
     test_fit_view_real()
     print("\nmapview + fit-overview tests OK.")

@@ -170,6 +170,18 @@ assert "st_buffer(ws.geom::geography, %(radius_m)s, %(segments)s)" in gen, \
     "the buffer must pass the segment count through"
 print("generator: 128 segments per quarter (512 vertices)")
 
+# --- 3b) a water point created INSIDE the app gets the same circles --------
+# app/services/water_sources.py buffers the rings itself when a herder pins a
+# new point. It used PostGIS's default (32 segments = 33 vertices), so every
+# point created from the app had the faceted ring this whole file exists to
+# prevent — and the stored-ring check below only sees rows that already exist.
+ws_src = io.open("app/services/water_sources.py", encoding="utf-8").read()
+assert "ZONE_SEGMENTS_PER_QUARTER = 128" in ws_src, \
+    "the segment count for app-created rings was reduced"
+assert "%(radius_m)s, %(segments)s)" in ws_src, \
+    "INSERT_ZONE_SQL must pass the segment count (PostGIS defaults to 33 vertices)"
+print("app-created points: 128 segments per quarter (same as the generator)")
+
 # --- 4) every stored ring, not just the sampled one ----------------------
 try:
     from app.db import get_pg_connection

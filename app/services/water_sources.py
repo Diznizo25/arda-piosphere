@@ -31,11 +31,19 @@ values (
 returning id, st_x(geom) as lon, st_y(geom) as lat, source_type, source_ref, name, water_type, ward, county, confidence, last_confirmed
 """
 
+# A RING MUST LOOK LIKE A CIRCLE. PostGIS's default buffer (8 segments per
+# quarter = 33 vertices) sags up to ~113 m inside a true 25 km circle: on screen
+# that is a visible flat edge, and the shape reads as a rough polygon rather than
+# a grazing ring. 128 segments per quarter (512 vertices) is sub-pixel at every
+# zoom we draw — the same value scripts/generate_piosphere_zones.py uses, so a
+# point created HERE and a point created by that script produce the same rings.
+ZONE_SEGMENTS_PER_QUARTER = 128
+
 INSERT_ZONE_SQL = """
 insert into piosphere_zones (water_source_id, species, radius_km, geom, last_computed)
 values (%(water_source_id)s, %(species)s, %(radius_km)s,
         st_buffer(st_setsrid(st_makepoint(%(lon)s, %(lat)s), 4326)::geography,
-                  %(radius_m)s)::geometry(Polygon, 4326),
+                  %(radius_m)s, %(segments)s)::geometry(Polygon, 4326),
         null)
 """
 
@@ -143,6 +151,7 @@ def create_water_source(
                         "radius_km": radius_km,
                         "lon": lon, "lat": lat,
                         "radius_m": radius_km * 1000,
+                        "segments": ZONE_SEGMENTS_PER_QUARTER,
                     },
                 )
         conn.commit()

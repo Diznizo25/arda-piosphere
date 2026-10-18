@@ -6,15 +6,18 @@ showing:
   * every nearby water point as a type-coloured pin (numbered when a list was
     shared) — TAPPING a pin opens THAT water point's species rings + satellite
     pasture layer
-  * when `id=` is given (a reachable/confirmed water point), its species rings
-    are drawn immediately (scaled to the herder's watering interval) with the
-    transparent pasture layer + a quantity/quality summary in the legend
+  * the species rings of the water point in `id=`, or — when no id is given —
+    of the NEAREST point, so the rings and the colour key are on the map as soon
+    as it opens (graze mode and the numbered choice map excepted, where the tap
+    or the numbered list is the question being asked)
+  * the transparent pasture layer + a quantity/quality summary in the legend
 
 The link is shared from WhatsApp after maps/advisories.
 """
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -22,6 +25,7 @@ from fastapi.responses import HTMLResponse
 from app.services import map_renderer, water_reach, water_sources
 
 router = APIRouter(prefix="/mapview", tags=["mapview"])
+_log = logging.getLogger(__name__)
 
 # One hue = one meaning, matching app/services/map_renderer.py so the live map and
 # the WhatsApp map can never disagree: green is PASTURE only, blue is WATER only,
@@ -114,6 +118,25 @@ def _t(lang: str) -> dict:
     }
 
 
+def _as_feature(geojson: dict) -> dict:
+    """Normalise a stored ring (bare geometry) into a GeoJSON Feature.
+
+    `piosphere_zones.geojson` is `st_asgeojson(geom)` — a bare Polygon. The page
+    reads `ring.geojson.geometry` when it fits the rings on screen, so a bare
+    geometry left that undefined and the rings could not be framed; and
+    `_scale_geojson_ring` had no `geometry` to scale, so the effective-reach
+    scaling silently drew the full-size ring while the legend said otherwise.
+    """
+    kind = geojson.get("type")
+    if kind == "Feature":
+        return geojson
+    if kind == "FeatureCollection":
+        feats = geojson.get("features") or []
+        return feats[0] if feats else {"type": "Feature", "properties": {},
+                                       "geometry": None}
+    return {"type": "Feature", "properties": {}, "geometry": geojson}
+
+
 def _scale_geojson_ring(geojson: dict, frac: float) -> dict:
     """Scale a ring polygon toward its own centre (effective reach at draw time)."""
 
@@ -124,17 +147,19 @@ def _scale_geojson_ring(geojson: dict, frac: float) -> dict:
         cy = (min(ys) + max(ys)) / 2.0
         return [[cx + (x - cx) * frac, cy + (y - cy) * frac] for x, y in coords]
 
-    g = geojson.get("geometry", {})
+    feature = _as_feature(geojson)
+    g = feature.get("geometry") or {}
     if g.get("type") == "Polygon":
         g = {**g, "coordinates": [scale_coords(r) for r in g["coordinates"]]}
     elif g.get("type") == "MultiPolygon":
         g = {**g, "coordinates": [[scale_coords(r) for r in poly]
                                   for poly in g["coordinates"]]}
-    return {**geojson, "geometry": g}
+    return {**feature, "geometry": g}
+
 
 def _payload(lat: float, lon: float, species: str, interval: str,
              water_id: str | None, numbered: str | None, name: str | None,
-             lang: str) -> dict:
+             lang: str, auto_focus: bool = True) -> dict:
     text = _t(lang)
     numbered_ids = [u for u in (numbered or "").split(",") if u]
     by_id: dict[str, water_sources.WaterSource] = {}
@@ -164,15 +189,27 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                             "status_age_days": n.get("status_age_days"),
                             "needs_check": n.get("needs_check")})
 
-    # Rings + pasture ONLY for the specific water point requested (a reachable/
-    # confirmed point). The pin-based page (no id) shows options and lets the
-    # herder TAP a pin to load that point's rings/pasture.
+    # Rings + pasture for ONE water point: the one asked for, otherwise the
+    # nearest one — so the rings and the colour key are on the map the moment it
+    # opens.
+    #
+    # They used to appear only after a pin tap, which meant the page reached from
+    # the menu was a handful of blue dots with no rings and no colour legend: it
+    # looked like the data had gone missing. The numbered choice map is the one
+    # exception — there the NUMBERED markers are the question being asked, and
+    # focusing one of them would hide the choice.
     main_id = water_id if (water_id and water_id in by_id) else None
+    if main_id is None and auto_focus and not numbered_ids and options:
+        main_id = options[0]["id"]  # options are ordered nearest-first
     rings: list[dict] = []
     eff_km: float | None = None
     overlay: dict | None = None
     ortho: dict | None = None
     if main_id:
+        # Two separate blocks on purpose: the rings are cheap and come from the
+        # database, the pasture summary reads a satellite COG. Sharing one
+        # try/except meant a COG hiccup silently erased the rings as well, and
+        # the map lost both the rings and the colour key at once.
         try:
             from app.config import get_species_rings
 
@@ -180,7 +217,7 @@ def _payload(lat: float, lon: float, species: str, interval: str,
             eff_km = rings_cfg.effective_radius_km(species, interval)
             zones = water_sources.zones_for_water_source(main_id)
             for z in zones:
-                gj = json.loads(z["geojson"])
+                gj = _as_feature(json.loads(z["geojson"]))
                 km = float(z["radius_km"])
                 if z["species"] == species and km > 0:
                     gj = _scale_geojson_ring(gj, eff_km / km)
@@ -188,6 +225,10 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                 rings.append({"species": z["species"], "km": km,
                               "color": _RING_HEX.get(z["species"], "#64748b"),
                               "geojson": gj})
+        except Exception:  # noqa: BLE001
+            _log.exception("mapview: species rings failed for %s", main_id)
+            rings, eff_km = [], None
+        try:
             status = map_renderer.pasture_overlay_status(main_id, species, interval)
             if status:
                 from app.config import get_settings
@@ -214,7 +255,8 @@ def _payload(lat: float, lon: float, species: str, interval: str,
                         "bounds": status["bounds"],
                     }
         except Exception:  # noqa: BLE001
-            rings, overlay = [], None
+            _log.exception("mapview: pasture summary failed for %s", main_id)
+            overlay, ortho = None, None
 
     # Named places around the map (villages, markets, rivers, peaks) so the
     # pasture colours can be read against names a pastoralist actually uses.
@@ -287,8 +329,6 @@ def mapview_page(
     t: str | None = Query(default=None, description="graze token (see /grazing/pin)"),
 ) -> HTMLResponse:
     try:
-        data = _payload(lat, lon, species, interval, id, numbered, name, lang)
-        data["focus"] = 1 if focus else 0
         # Grazing-ledger mode. The token identifies the herder to /grazing/pin
         # WITHOUT a phone number ever appearing in a URL that gets forwarded.
         #
@@ -296,6 +336,11 @@ def mapview_page(
         # and any future caller) where FastAPI's Query defaults are still objects:
         # putting a Query into the payload explodes in json.dumps.
         graze_on = graze is True or (isinstance(graze, int) and graze > 0)
+        # In graze mode the tap is how the herder records where the herd grazed, so
+        # the page must not decide anything for him: no auto-focus there.
+        data = _payload(lat, lon, species, interval, id, numbered, name, lang,
+                        auto_focus=not graze_on)
+        data["focus"] = 1 if focus else 0
         data["graze"] = {"on": graze_on,
                          "token": t if isinstance(t, str) else "",
                          "endpoint": "/grazing/pin"}
