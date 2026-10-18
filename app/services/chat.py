@@ -391,7 +391,7 @@ def _map_status(ws_id: str, species: str, interval: str) -> dict | None:
     try:
         from app.services import map_renderer
 
-        value = map_renderer.pasture_overlay_status(ws_id, key[1], key[2])
+        value = map_renderer.pasture_overlay_status(ws_id, key[1], key[2], warm=False)
     except Exception:  # noqa: BLE001
         log.exception("chat: map status unavailable (non-fatal)")
         value = None

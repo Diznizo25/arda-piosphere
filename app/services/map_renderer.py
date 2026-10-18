@@ -1307,12 +1307,22 @@ def _overlay_view(water_source_id: str, species: str | None,
     return ws.lat, ws.lon, zoom, mpp, cx - half, cy + half, radius_km
 
 
-def _read_classes(water_source_id: str):
-    """(classes, transform) from the overview COG, or None when unavailable."""
-    from app.services.raster_read import read_overview_array
+def _read_classes(water_source_id: str, warm: bool = False):
+    """(classes, transform) from the overview COG, or None when unavailable.
+
+    `warm=True` asks the raster cache without letting a cold 8 MB download hold
+    the caller for 20-30 s (see raster_read.read_overview_array_warm): the page
+    gets None now and the pixels on its next view.
+    """
+    from app.services import raster_read
 
     try:
-        res = read_overview_array(water_source_id, bands=[1, 3, 4], max_dim=512)
+        if warm:
+            res = raster_read.read_overview_array_warm(
+                water_source_id, bands=[1, 3, 4], max_dim=512)
+        else:
+            res = raster_read.read_overview_array(
+                water_source_id, bands=[1, 3, 4], max_dim=512)
     except Exception:  # noqa: BLE001
         return None
     if res is None:
@@ -1411,11 +1421,17 @@ def ortho_available(water_source_id: str) -> bool:
 
 
 def pasture_overlay_status(water_source_id: str, species: str | None = None,
-                           water_interval: str = "daily") -> dict | None:
+                           water_interval: str = "daily",
+                           warm: bool = True) -> dict | None:
     """For the interactive map: geobounds of the pasture layer + a quantity/
     quality summary from the satellite indices (NO layer image — the browser
     fetches it from /map/{id}/pasture.png). Returns None when the water point
-    has no usable viewport (missing source/zones)."""
+    has no usable viewport (missing source/zones).
+
+    `warm=True` (the map page) never waits for a cold satellite download: the
+    layer is reported as present and the percentages arrive on the next view.
+    `warm=False` (the advisory, which quotes the percentages) blocks as before.
+    """
     view = _overlay_view(water_source_id, species, water_interval)
     if view is None:
         return None
@@ -1426,8 +1442,16 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
         "usable_pct": None,
         "frac": None,
     }
-    res = _read_classes(water_source_id)
+    res = _read_classes(water_source_id, warm=warm)
     if res is None:
+        if warm:
+            # THE RINGS MUST NOT WAIT FOR THE SATELLITE. A cold overview fetch
+            # takes 20-30 s on the deployed instance; holding the page that long
+            # is how a herder ends up looking at a map with no rings at all. If
+            # the layer exists, say so and leave the percentages for next time.
+            from app.services import raster_read
+
+            out["available"] = raster_read.overview_exists(water_source_id)
         return out
     classes, transform = res
     mask = _class_mask_within(classes, transform, lon, lat, radius_km)

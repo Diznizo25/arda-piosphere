@@ -205,10 +205,43 @@ def test_overview_disk_cache() -> None:
     print("overview disk cache OK (one file per point, ETag-checked)")
 
 
+def test_pasture_status_does_not_wait_for_the_satellite() -> None:
+    """The map page must not be held hostage by a cold 8 MB raster download.
+
+    Rings come from the database in milliseconds; the pasture percentages need the
+    satellite object, which takes 20-30 s cold on the deployed instance. The page
+    reports the layer as present (it exists) and leaves the shares for next time.
+    The advisory, which quotes the shares, still blocks.
+    """
+    from app.services import raster_read
+
+    real_warm = raster_read.read_overview_array_warm
+    real_blocking = raster_read.read_overview_array
+    real_exists = raster_read.overview_exists
+    raster_read.read_overview_array_warm = lambda *a, **k: None
+    raster_read.read_overview_array = lambda *a, **k: None
+    raster_read.overview_exists = lambda wid: True
+    ws_id = "88bc1e17-a5f6-4c4d-a410-e551e4af7e54"
+    try:
+        st = m.pasture_overlay_status(ws_id, "camel", "daily")
+        assert st and st["available"] is True, st
+        assert st["frac"] is None and st["usable_pct"] is None, "no invented percentages"
+        assert st["bounds"], "the layer still has to be placed on the map"
+        assert m.pasture_overlay_status(ws_id, "camel", "daily",
+                                        warm=False)["available"] is False, \
+            "the advisory path keeps its old, blocking behaviour"
+    finally:
+        raster_read.read_overview_array_warm = real_warm
+        raster_read.read_overview_array = real_blocking
+        raster_read.overview_exists = real_exists
+    print("map page never waits for the satellite OK (present + shares next time)")
+
+
 if __name__ == "__main__":
     test_mapview_pages()
     test_autofocus_shows_rings_and_legend()
     test_overview_cache()
     test_overview_disk_cache()
+    test_pasture_status_does_not_wait_for_the_satellite()
     test_fit_view_real()
     print("\nmapview + fit-overview tests OK.")

@@ -21,6 +21,8 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +59,10 @@ _OVERVIEW_CACHE_LOCK = threading.Lock()
 # two R2 round trips to rediscover it.
 _NO_OVERVIEW_UNTIL: dict[str, float] = {}
 _NO_OVERVIEW_TTL_S = 60.0
+
+# Reads that a page must not wait for run here, so the download survives the
+# request that started it.
+_OVERVIEW_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="overview-read")
 
 
 def _overview_cache_get(key: tuple):
@@ -344,6 +350,49 @@ def read_overview_array(water_source_id: str, bands: list[int] | None = None,
         _NO_OVERVIEW_UNTIL.pop(water_source_id, None)
         _overview_cache_put(key, res)
     return res
+
+
+def read_overview_array_warm(water_source_id: str, bands: list[int] | None = None,
+                             max_dim: int = 512,
+                             timeout_s: float = 2.0) -> tuple[np.ndarray, object] | None:
+    """read_overview_array, but never let a page wait for a cold download.
+
+    On the deployed instance the 8 MB overview takes 20-30 s to arrive. A map page
+    cannot sit on that: the rings are ready in milliseconds and must be shown. The
+    read carries on in a background thread and lands in both caches, so the next
+    view (and /map/{id}/pasture.png) answers from memory.
+    """
+    key = (water_source_id, tuple(bands) if bands else None, int(max_dim))
+    hit = _overview_cache_get(key)
+    if hit is not None:
+        return hit
+    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
+        return None
+    future = _OVERVIEW_POOL.submit(read_overview_array, water_source_id, bands, max_dim)
+    try:
+        return future.result(timeout=timeout_s)
+    except FutureTimeout:
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def overview_exists(water_source_id: str) -> bool:
+    """Is there an overview COG for this point at all? (HEAD only, no download.)
+
+    Lets a map say "the satellite layer is here; its percentages are still being
+    read" instead of either waiting ~28 s or claiming there is no pasture data.
+    """
+    if _NO_OVERVIEW_UNTIL.get(water_source_id, 0.0) > time.time():
+        return False
+    try:
+        from app.config import get_settings
+
+        get_s3_client().head_object(Bucket=get_settings().r2_bucket_name,
+                                    Key=cog_overview_key(water_source_id))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _read_overview_array_uncached(water_source_id: str, bands: list[int] | None = None,

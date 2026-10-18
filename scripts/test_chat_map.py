@@ -27,8 +27,9 @@ from app.services import chat  # noqa: E402
 calls = {"n": 0}
 
 
-def pasture_overlay_status(ws_id, species, interval):
+def pasture_overlay_status(ws_id, species, interval, warm=False):
     calls["n"] += 1
+    assert warm is False, "the advisory quotes the shares, so it must not read warm"
     return {"available": True, "usable_pct": 12, "blank_pct": 31,
             "frac": {"green": 5, "dry": 7, "bare": 88},
             "bounds": [[36.9, 0.1], [37.2, 0.4]]}
