@@ -58,10 +58,21 @@ class CreateWaterSourceRequest(BaseModel):
     ward: str | None = None
     county: str = "Isiolo"
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # WHAT KIND OF WATER IT IS (migration 007): river | dam | borehole | well |
+    # spring | pan | tap. Optional — but a herder tapping a river on the map is
+    # naming a river, and the map draws rivers as LINES with ribbon grazing zones,
+    # so dropping this field made every tap-to-register point look like a hole in
+    # the ground. Free text with a length cap rather than a Literal: the registry
+    # already holds imported types we did not invent (WPDx/OSM vocabulary).
+    water_type: str | None = Field(default=None, max_length=32)
+    # The name the herder said out loud ("Mto Bisanadi", "Kisima ya Hassan"). The
+    # label the map and every WhatsApp answer uses from then on.
+    name: str | None = Field(default=None, max_length=80)
     # Optional build-tracker info: who pinned it (E.164) + preferred language,
     # so the scheduled builder can notify them with progress.
     created_by: str | None = None
     language: Language = "swahili"
+
 
 
 class WaterSourceResponse(BaseModel):

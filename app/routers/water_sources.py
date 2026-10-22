@@ -25,6 +25,8 @@ def create_water_source(req: CreateWaterSourceRequest) -> WaterSourceResponse:
             lat=req.lat,
             source_type=req.source_type,
             source_ref=req.source_ref,
+            name=req.name,
+            water_type=req.water_type,
             ward=req.ward,
             county=req.county,
             confidence=req.confidence,
