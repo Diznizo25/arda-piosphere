@@ -18,6 +18,7 @@ import numpy as np  # noqa: E402
 import rasterio  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402
 
+import app.services.map_renderer as mr  # noqa: E402
 from app.services.map_renderer import (  # noqa: E402
     _mercator_x, _mercator_y, _mercator_x_inv, _mercator_y_inv,
     _rgba_classes, IMG_SIZE,
@@ -70,7 +71,8 @@ def main():
     classes = _make_classes()
     radius_km = 40.0  # no clip for the row-mapping check
     a, west, north, mpp = _render(classes, radius_km)
-    green = (a[..., 0] == 22) & (a[..., 1] == 163) & (a[..., 2] == 74) & (a[..., 3] > 60)
+    g = mr.PASTURE_GREEN
+    green = (a[..., 0] == g[0]) & (a[..., 1] == g[1]) & (a[..., 2] == g[2]) & (a[..., 3] > 60)
     py, _ = np.nonzero(green)
     assert green.sum() > 10_000, "no green stripe rendered"
     img_row_lats = _mercator_y_inv(north - (np.arange(IMG_SIZE) + 0.5) * mpp)
@@ -91,6 +93,20 @@ def main():
     assert alpha.sum() > 100
     assert dist.max() <= 21.0, f"colour escaped the ring (max {dist.max():.1f} km)"
     print(f"ring clip OK (coloured px {alpha.sum()}, max {dist.max():.1f} km inside the ring)")
+
+    # Bare ground must be GREY, never red. It was hard-coded (206,32,32) here while the
+    # legend swatch was grey: a mostly-bare point (Hassan Plot) painted red over 8.6% of
+    # the ring against 0.5% green and read as "no pasture / something is broken".
+    bare = _make_classes()
+    bare[bare == 1] = 3
+    a, _, _, _ = _render(bare, radius_km=40.0)
+    painted = a[..., 3] > 60
+    assert painted.sum() > 1000, "bare ground was not painted at all"
+    cols = {tuple(int(v) for v in c[:3]) for c in a[painted][:, :3]}
+    assert mr.PASTURE_BARE in cols, f"bare ground is not grey: {sorted(cols)}"
+    assert not any(c[0] > 150 and c[1] < 90 for c in cols), \
+        f"bare ground painted red ({sorted(cols)}) - red means water on this map"
+    print(f"bare palette OK (grey {mr.PASTURE_BARE}, no red)")
 
 
 if __name__ == "__main__":

@@ -1368,12 +1368,20 @@ def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
     georeferenced to the given viewport — the interactive pasture layer. The
     classes are drawn nearly-opaque but the LEAFET side keeps overlay opacity
     moderate so map labels/roads stay visible underneath."""
+    # SAME palette as the static map and the legend — one source of truth. This layer
+    # used to hard-code bare ground as (206,32,32) SOLID RED while the legend swatch
+    # two inches away was grey: on a point that is mostly bare (Hassan Plot: 8.6% of
+    # the ring red vs 0.5% green) the map read as a big red "no pasture / error" wash
+    # with a few invisible green specks, and the herder concluded the pasture data was
+    # missing. Green must mean grass, brown dry forage, grey bare ground — and red is
+    # reserved for water.
     color_map = {
         0: (0, 0, 0, 0),
-        1: (22, 163, 74, 255),    # grass (vivid green)
-        2: (138, 77, 23, 255),    # dry forage (rich brown)
-        3: (206, 32, 32, 255),    # bare (strong red)
-        4: (0, 0, 0, 0),          # unclear -> NOT painted (no guessing)
+        1: PASTURE_GREEN + (255,),    # grass
+        2: PASTURE_DRY + (255,),      # dry forage
+        3: PASTURE_BARE + (150,),     # bare ground: grey, and see-through, so the
+        #                               grass it is NOT hiding stays visible
+        4: (0, 0, 0, 0),              # unclear -> NOT painted (no guessing)
     }
     h, w = classes.shape
     c0, f0 = transform.c, transform.f
