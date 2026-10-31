@@ -44,6 +44,15 @@ print(f"page: HTTP {r.status_code}, {len(r.text)} chars")
 check("page served", r.status_code == 200)
 body = r.text
 
+
+def before(a: str, b: str) -> bool:
+    """True when BOTH markers are on the served page and `a` comes first.
+
+    Written as a helper rather than `body.index(a) < body.index(b)`: a missing marker
+    must read as a FAIL, not as a traceback that hides the rest of the report.
+    """
+    return a in body and b in body and body.index(a) < body.index(b)
+
 # 1) the real ground loads first: satellite, not the street drawing
 check("satellite layer is the one added to the map", "esriTiles.addTo(map)" in body)
 check("street map still offered in the switcher", "tile.openstreetmap.org" in body)
@@ -70,6 +79,22 @@ check("blank share is a real percentage of his ring",
 check("legend explains the reach-line clip", "ring_clip" in body)
 check("legend still names the pasture colours",
       "pastureCols.green" in body and "pastureCols.dry" in body and "pastureCols.bare" in body)
+
+# 3b) THE KEY ITSELF, as the herder met it: a panel that grew past the top of his phone
+# (colour codes pushed off-screen), whose lines were named only when a river was there.
+check("key is capped and compact (it covered the whole phone)",
+      "max-height:46vh" in body and ".lg{background:#fff" in body)
+check("colour codes are drawn before the overlay question (never missing)",
+      before("lg-codes", "const has = !!(p.url && p.available)"))
+check("bare ground is named the colour it is painted (grey, not red)",
+      '"bare": "kijivu = tupu"' in body and "nyekundu = tupu" not in body)
+check("key folds away behind one button",
+      'id="lmore"' in body and "moreOpen" in body)
+check("one edge per band, no translucent wash",
+      "drawnBands" in body and "fill: false" in body
+      and "fillOpacity: b.level" not in body)
+check("every drawn line is named, river or not",
+      before("if (drawnBands.length)", "if (D.rivers && D.rivers.length)"))
 
 # 4) no ortho uploaded yet -> a clean 404, never a 500 or a broken page
 o = httpx.get(f"{BASE}/map/{WS}/ortho.png", timeout=90, follow_redirects=True)

@@ -44,7 +44,8 @@ def _t(lang: str) -> dict:
             "pasture": "Satellite pasture",
             "summary": "Pasture now",
             "grass": "green = grass", "dry": "brown = dry forage",
-            "bare": "red = bare", "on": "Hide pasture", "off": "Show pasture",
+            "bare": "grey = bare", "on": "Hide pasture", "off": "Show pasture",
+            "more": "More", "less": "Fold",
             "preparing": "Pasture layer being prepared",
             "reading": "Pasture: reading the satellite… (it fills in by itself)",
             "places": "Named places", "cattle": "cattle", "shoat": "goats/sheep",
@@ -71,7 +72,8 @@ def _t(lang: str) -> dict:
         "pasture": "Malisho ya satelaiti",
         "summary": "Malisho sasa hivi",
         "grass": "kijani = nyasi", "dry": "kahawia = nyasi kavu",
-        "bare": "nyekundu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
+        "bare": "kijivu = tupu", "on": "Ficha malisho", "off": "Onyesha malisho",
+        "more": "Zaidi", "less": "Funga",
         "preparing": "Ramani ya malisho inaandaliwa",
         "reading": "Malisho: tunasoma satelaiti… (yanajaa yenyewe)",
         "places": "Maeneo yenye majina", "cattle": "Ng'ombe", "shoat": "Mbuzi/Kondoo",
@@ -398,6 +400,24 @@ _PAGE_TEMPLATE = r"""<!doctype html>
     border-radius:3px;font-size:11px;font-weight:700;color:#111;padding:0 3px;
     white-space:nowrap;text-shadow:0 1px 0 #fff}
   .lm-label:before{display:none !important}
+  /* THE KEY: compact, capped, and folded. A herder reads this on a 360 px phone. The
+     old key was a bottom-left control with no height cap: ~20 rows grew past the top of
+     the screen, so the pasture COLOUR CODES - the first rows, the thing the map is
+     about - were pushed out of sight, and the panel covered most of the ground. Now the
+     colour codes are always drawn, on one wrapped row, the whole panel is capped at
+     46vh with its own scroll, and everything explanatory folds behind one button. */
+  .lg{background:#fff;border-radius:8px;box-shadow:0 1px 5px rgba(0,0,0,.35);
+    font-size:12px;line-height:1.4;width:min(228px,60vw);max-height:46vh;overflow:auto;
+    padding:5px 8px;color:#0f172a}
+  .lg-codes{display:flex;flex-wrap:wrap;gap:1px 9px;font-weight:700}
+  .lg-sum{margin-top:2px;font-weight:700}
+  .lg-wait{margin-top:2px;color:#92400e}
+  .lg-row{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:1px}
+  .lg-note{color:#475569;margin-top:4px}
+  .lg-sec{font-weight:700;margin-top:5px}
+  .lg-btns{display:flex;gap:6px;margin-top:5px}
+  .lg-btn{font-size:11px;padding:2px 8px;border:1px solid #cbd5e1;background:#f8fafc;
+    border-radius:11px;color:#0f172a;line-height:1.3}
 </style>
 </head><body>
 <div id="map" style="position:fixed;top:0;bottom:0;left:0;right:0"></div>
@@ -602,14 +622,22 @@ function applyOverlayStyle() {
 const zoneCols = { comfortable: '#ffffff', far: '#ffffff', critical: '#ce2020' };
 const ribbonNames = { comfortable: TXT.z_near || 'near water', far: TXT.z_edge || 'edge',
   critical: TXT.z_limit || 'far limit — return to water' };
-if (D.ribbons && D.ribbons.bands) {
-  D.ribbons.bands.slice().reverse().forEach(b => {
-    const c = zoneCols[b.level] || '#64748b';
-    L.geoJSON(b.geojson, { style: { color: c, weight: b.level === 'critical' ? 2.5 : 1.5,
-      dashArray: b.level === 'comfortable' ? null : '6 5',
-      fillColor: c, fillOpacity: b.level === 'critical' ? 0.05 : 0.07 } }).addTo(map);
-  });
-}
+// ONE EDGE PER BAND, THIN AND QUIET. Every band used to be drawn: two nested white
+// circles plus the red critical one, each a closed ring on the map. The herder asked why
+// there were "a lot of lines, white solid and red" - three rings for one question. The
+// edge that answers it is the FAR one (beyond it: head back), so the near edge is drawn
+// only when there is no far edge. Nothing is filled: a translucent wash over a 20 km band
+// hides the satellite exactly where he is reading the colour.
+const drawnBands = (D.ribbons && D.ribbons.bands)
+  ? D.ribbons.bands.filter(b => b.level !== 'comfortable' ||
+      !D.ribbons.bands.some(o => o.level === 'far')) : [];
+drawnBands.slice().reverse().forEach(b => {
+  const c = zoneCols[b.level] || '#64748b';
+  L.geoJSON(b.geojson, { style: { color: c, weight: b.level === 'critical' ? 2 : 1.2,
+    opacity: b.level === 'critical' ? 0.9 : 0.55,
+    dashArray: b.level === 'comfortable' ? '2 4' : '6 5',
+    fill: false } }).addTo(map);
+});
 
 // The rivers themselves, named (they are water points a herd can drink from).
 (D.rivers || []).forEach(rv => {
@@ -718,101 +746,127 @@ function applyLabels() {
 // "still reading the satellite" panel can turn into real percentages without the
 // herder reloading the page (see refreshPastureSummary).
 let legendBox = null;
+// The explanatory half of the key folds away; remembering it across rebuilds means the
+// percentages arriving late cannot slam the panel shut on a herder who opened it.
+let moreOpen = false;
 function redrawLegend() {
   if (legendBox) legendBox.innerHTML = legendHtml();
+}
+function chipSw(col) {
+  return '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;' +
+    'background:' + col + ';flex:0 0 auto"></span>';
+}
+// A LINE needs a line sample, not a square: the rings are dashed on the map, so a
+// dashed sample is the only key that matches what he is looking at.
+function lineSw(col, dashed) {
+  return '<span style="display:inline-block;width:16px;height:0;flex:0 0 auto;' +
+    'border-top:2px ' + (dashed ? 'dashed ' : 'solid ') + col + '"></span>';
 }
 function legendHtml() {
   const p = D.overlay || {};
   const frac = p.frac || {};
-  let html = '<div style="background:#fff;border-radius:8px;padding:8px 10px;' +
-    'box-shadow:0 1px 5px rgba(0,0,0,.3);font-size:13px;max-width:255px">';
-  if (p.url && p.available) {
-    html += '<b>' + (TXT.pasture || 'Pasture') + '</b>' +
-      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-      'background:' + pastureCols.green + ';margin-right:6px"></span>' + (TXT.grass||'green = grass') +
-      (frac.green != null ? ' <b>' + frac.green + '%</b>' : '') + '</div>' +
-      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-      'background:' + pastureCols.dry + ';margin-right:6px"></span>' + (TXT.dry||'olive = dry forage') +
-      (frac.dry != null ? ' <b>' + frac.dry + '%</b>' : '') + '</div>' +
-      '<div><span style="display:inline-block;width:11px;height:11px;border-radius:2px;' +
-      'background:' + pastureCols.bare + ';margin-right:6px"></span>' + (TXT.bare||'grey = bare') +
-      (frac.bare != null ? ' <b>' + frac.bare + '%</b>' : '') + '</div>';
-    if (p.usable_pct != null) {
-      html += '<div style="margin-top:3px;font-weight:700">' + (TXT.summary||'Pasture now') +
-        ': <b>' + p.usable_pct + '%</b></div>';
-    } else {
-      // The layer exists but its numbers are still being read from the
-      // satellite. Saying so — instead of showing a pasture panel with no
-      // numbers — is what stops a slow first look from reading as "there is
-      // no pasture for my new water point".
-      html += '<div style="margin-top:3px;color:#92400e">' +
-        (TXT.reading || 'Pasture: reading the satellite…') + '</div>';
-    }
-    // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
-    // satellite cannot be read there (cloud, shadow, no clean pass) or when it is
-    // outside his grazing reach. Left unexplained, holes read as "the map is broken";
-    // named — and numbered — they read as what they are. The share is of HIS ring, so
-    // a few gaps look like a few gaps and a clouded week looks like a clouded week.
+  const has = !!(p.url && p.available);
+  let html = '<div class="lg">';
+  // THE COLOUR CODES COME FIRST, AND THEY ARE ALWAYS HERE. They used to be built only
+  // inside the "overlay is ready" branch, so a page opened before a pin was tapped, or
+  // while the satellite read was still running, showed a key with pins and rings but no
+  // pasture colours at all. The CODES and the PERCENTAGES are two different facts: the
+  // codes never wait for the numbers.
+  html += '<div class="lg-codes">' +
+    '<span>' + chipSw(pastureCols.green) + ' ' + (TXT.grass || 'green = grass') +
+    (frac.green != null ? ' <b>' + frac.green + '%</b>' : '') + '</span>' +
+    '<span>' + chipSw(pastureCols.dry) + ' ' + (TXT.dry || 'brown = dry forage') +
+    (frac.dry != null ? ' <b>' + frac.dry + '%</b>' : '') + '</span>' +
+    '<span>' + chipSw(pastureCols.bare) + ' ' + (TXT.bare || 'grey = bare') +
+    (frac.bare != null ? ' <b>' + frac.bare + '%</b>' : '') + '</span></div>';
+  if (p.usable_pct != null) {
+    html += '<div class="lg-sum">' + (TXT.summary || 'Pasture now') + ': <b>' +
+      p.usable_pct + '%</b></div>';
+  } else if (has) {
+    // The layer exists but its numbers are still being read. Saying so - instead of a
+    // panel with no numbers - is what stops a slow first look reading as "no pasture".
+    html += '<div class="lg-wait">' + (TXT.reading || 'Pasture: reading the satellite') +
+      '</div>';
+  } else if (p.url) {
+    html += '<div class="lg-wait">' + (TXT.preparing || 'Pasture layer being prepared') +
+      '</div>';
+  } else {
+    html += '<div class="lg-wait">' + (TXT.tap || 'Tap a water pin') + '</div>';
+  }
+  // Which dashed circle is whose, and how far it reaches - drawn with the same dash the
+  // ring is drawn with, so the key and the map cannot disagree about a colour.
+  const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
+    camel: TXT.camel || 'camel' };
+  (D.rings || []).forEach(r => {
+    html += '<div class="lg-row">' + lineSw(ringHex[r.species] || '#64748b', 1) +
+      (spName[r.species] || r.species) + ' <b>' + r.km + ' km</b></div>';
+  });
+  html += '<div class="lg-btns">';
+  if (has) {
+    html += '<button id="ptoggle" class="lg-btn">' + (TXT.on || 'Hide pasture') +
+      '</button>';
+  }
+  html += '<button id="lmore" class="lg-btn">' +
+    (moreOpen ? (TXT.less || 'Fold') : (TXT.more || 'More')) +
+    (moreOpen ? ' \u25b4' : ' \u25be') + '</button></div>';
+  html += '<div id="lmorebody" style="display:' + (moreOpen ? 'block' : 'none') + '">';
+  // BLANK PIXELS ARE A DECISION, NOT A FAULT. We leave a pixel uncoloured when the
+  // satellite cannot be read there (cloud, shadow, no clean pass) or when it is outside
+  // his grazing reach. Left unexplained, holes read as "the map is broken"; named - and
+  // numbered - they read as what they are.
+  if (has) {
     let blankTxt = (TXT.no_read || 'Uncoloured patches');
     if (p.blank_pct != null && p.blank_pct > 0) {
       blankTxt += ': <b>' + p.blank_pct + '%</b> ' +
         (TXT.no_read_why || 'of your reach we could not read');
     }
-    html += '<div style="margin-top:4px;color:#475569;line-height:1.35">' + blankTxt +
-      ' — ' + (TXT.no_guess || 'we do not guess (cloud, shadow, no clean pass)') +
-      '</div>' +
-      '<div style="color:#475569;line-height:1.35">' +
-      (TXT.ring_clip || 'Colour appears inside the dashed reach line only.') + '</div>';
-    html += '<div style="margin-top:3px"><button id="ptoggle" style="font-size:12px">' +
-      (TXT.on || 'Hide pasture') + '</button></div>';
-  } else if (p.url) {
-    html += '<div style="color:#92400e">' + (TXT.preparing || 'Pasture layer being prepared') + '</div>';
-  } else {
-    html += '<div style="color:#334155">' + (TXT.tap || 'Tap a water pin') + '</div>';
+    html += '<div class="lg-note">' + blankTxt + ' \u2014 ' +
+      (TXT.no_guess || 'we do not guess') + '</div>';
+    html += '<div class="lg-note">' + (TXT.ring_clip ||
+      'Colour appears inside the dashed reach line only.') + '</div>';
   }
+  // LINES, IN ONE PLACE. The white and red lines are DISTANCE LIMITS around the water
+  // (or along the river) - not roads, not danger. They used to be explained only when a
+  // river happened to be on the map, so on a point map the herder saw lines with no
+  // name. Each drawn line is named here, with the dash it is drawn with.
+  if (drawnBands.length) {
+    drawnBands.forEach(b => {
+      html += '<div class="lg-row">' +
+        lineSw(zoneCols[b.level] || '#64748b', b.level !== 'comfortable') +
+        (ribbonNames[b.level] || b.level) + ' <b>&lt; ' + b.km + ' km</b></div>';
+    });
+  }
+  if (D.rivers && D.rivers.length) {
+    html += '<div class="lg-row">' + lineSw('#1d4ed8', 0) + (TXT.k_river || 'river') +
+      ': ' + D.rivers.slice(0, 3).map(r => r.name + ' ' + r.dist_km + ' km').join(', ') +
+      '</div>';
+  }
+  // Water points: one blue for water, and the label on the pin names the type.
   const wrows = Object.keys(seenTypes).map(k =>
-    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-    'border-radius:50%;background:' + WATER_HEX + ';margin-right:6px"></span>' +
+    '<div class="lg-row"><span style="display:inline-block;width:10px;height:10px;' +
+    'border-radius:50%;background:' + WATER_HEX + ';flex:0 0 auto"></span>' +
     (typeName[k] || k) + '</div>').join('');
-  if (wrows) html += '<b>' + T.legend + '</b>' + wrows;
-  // Herder-reported water status — the most actionable line on the map.
+  if (wrows) html += '<div class="lg-sec">' + T.legend + '</div>' + wrows;
+  // Herder-reported water status - the most actionable line on the map.
   const stRows = Object.keys(seenStatus).map(k =>
-    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-    'border-radius:50%;background:' + (statusCols[k] || '#6b7280') + ';margin-right:6px"></span>' +
-    (statusName[k] || k) + '</div>').join('');
-  if (stRows) html += '<b>' + (TXT.water_status || 'Water status (from herders)') + '</b>' + stRows;
+    '<div class="lg-row"><span style="display:inline-block;width:10px;height:10px;' +
+    'border-radius:50%;background:' + (statusCols[k] || '#6b7280') +
+    ';flex:0 0 auto"></span>' + (statusName[k] || k) + '</div>').join('');
+  if (stRows) {
+    html += '<div class="lg-sec">' + (TXT.water_status || 'Water status (from herders)') +
+      '</div>' + stRows;
+  }
   // Named places drawn on the map (towns, villages, markets, rivers, hills).
   const lmName = { city: TXT.k_city, town: TXT.k_city, village: TXT.k_village,
     hamlet: TXT.k_village, market: TXT.k_market, river: TXT.k_river, peak: TXT.k_peak };
   const lmRows = Object.keys(lmSeenKinds).map(k =>
-    '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-    'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';margin-right:6px"></span>' +
+    '<div class="lg-row"><span style="display:inline-block;width:10px;height:10px;' +
+    'border-radius:50%;background:' + (lmKind[k] || '#374151') + ';flex:0 0 auto"></span>' +
     (lmName[k] || k) + '</div>').join('');
-  if (lmRows) html += '<b>' + (TXT.places || 'Named places') + '</b>' + lmRows;
-  // Rivers + their distance ribbons (zones follow the river line).
-  if (D.rivers && D.rivers.length) {
-    let rv = '<b>' + (TXT.rivers || 'Rivers — zones follow the river') + '</b>' +
-      '<div style="line-height:1.5"><span style="display:inline-block;width:14px;height:3px;' +
-      'background:#1d4ed8;margin-right:6px;vertical-align:middle"></span>' +
-      (TXT.k_river || 'river') + ': ' +
-      D.rivers.slice(0, 3).map(r => r.name + ' ' + r.dist_km + ' km').join(', ') + '</div>';
-    if (D.ribbons && D.ribbons.bands) {
-      rv += D.ribbons.bands.map(b =>
-        '<div style="line-height:1.5"><span style="display:inline-block;width:11px;height:11px;' +
-        'border-radius:2px;background:' + (zoneCols[b.level] || '#64748b') +
-        ';margin-right:6px"></span>' + (ribbonNames[b.level] || b.level) +
-        ' <b>&lt; ' + b.km + ' km</b></div>').join('');
-    }
-    html += rv;
+  if (lmRows) {
+    html += '<div class="lg-sec">' + (TXT.places || 'Named places') + '</div>' + lmRows;
   }
-  const spName = { cattle: TXT.cattle || 'cattle', shoat: TXT.shoat || 'shoat',
-    camel: TXT.camel || 'camel' };
-  const rows = (D.rings || []).map(r =>
-    '<div style="line-height:1.5"><span style="display:inline-block;width:10px;height:10px;' +
-    'border:2px solid ' + (ringHex[r.species] || '#64748b') + ';margin-right:6px"></span>' +
-    (spName[r.species] || r.species) + ' ' + r.km + ' km</div>').join('');
-  if (rows) html += '<b>' + T.rings + '</b>' + rows;
-  html += '</div>';
+  html += '</div></div>';
   return html;
 }
 const Legend = L.Control.extend({
@@ -826,6 +880,13 @@ map.addControl(new Legend({ position: 'bottomleft' }));
 
 // Toggle pasture layer on/off.
 document.body.addEventListener('click', function (ev) {
+  if (ev.target && ev.target.id === 'lmore') {
+    // The map is what he opened; the explanation is on demand. Rebuilding the key (not
+    // hiding a row) keeps the fold honest when the percentages arrive late.
+    moreOpen = !moreOpen;
+    redrawLegend();
+    return;
+  }
   if (ev.target && ev.target.id === 'ptoggle' && overlayLayer) {
     if (map.hasLayer(overlayLayer)) {
       map.removeLayer(overlayLayer);

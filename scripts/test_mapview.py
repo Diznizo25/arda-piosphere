@@ -57,6 +57,47 @@ def test_mapview_pages() -> None:
         m.pasture_overlay_status = real_status
 
 
+def test_key_is_compact_and_names_every_line() -> None:
+    """The herder's three complaints about the key, pinned so they cannot come back.
+
+    "I could not see the colour codes" - the pasture codes were built only inside the
+    "overlay is ready" branch, and the key had no height cap, so on a phone its first
+    rows were pushed off the top of the screen.
+    "the key is too large, I can't see the map" - same cause: ~20 rows, uncapped.
+    "a lot of lines, white solid and red, confusing" - two nested white bands plus the
+    red critical one, and the ribbon key lived INSIDE the river-only block, so a point
+    map showed lines with no name.
+    """
+    real_status = m.pasture_overlay_status
+    m.pasture_overlay_status = lambda *a, **k: {
+        "bounds": [[0.50, 37.20], [0.62, 37.29]], "available": True,
+        "usable_pct": None, "frac": None, "blank_pct": None,
+    }
+    try:
+        html = mapview_page(lat=0.3525, lon=37.583, species="camel", lang="swa",
+                            id="88bc1e17-a5f6-4c4d-a410-e551e4af7e54",
+                            numbered=None, name=None, interval="daily", focus=1)
+        body = html.body.decode("utf-8", errors="replace")
+    finally:
+        m.pasture_overlay_status = real_status
+
+    assert "max-height:46vh" in body, "the key must be capped (it covered the whole phone)"
+    assert "lg-codes" in body and "chipSw(pastureCols.bare)" in body
+    assert body.index("lg-codes") < body.index("const has = !!(p.url && p.available)"), \
+        "the colour codes must be drawn before the 'is the overlay ready' question"
+    assert '"bare": "kijivu = tupu"' in body, \
+        "the key must name the colour the bare swatch is painted in"
+    assert "nyekundu = tupu" not in body, "red is the far-limit warning, not bare ground"
+    assert 'id="lmore"' in body and "moreOpen" in body, "the key must fold away"
+    # One edge per band, thin and quiet, and named in the key wherever it is drawn.
+    assert "drawnBands" in body and "fill: false" in body
+    assert "fillOpacity: b.level" not in body, "the translucent band wash is back"
+    assert body.index("if (drawnBands.length)") < \
+        body.index("if (D.rivers && D.rivers.length)"), \
+        "the line key must not hide behind the river block"
+    print("key: compact + folded, colour codes always drawn, every line named")
+
+
 def test_fit_view_real() -> None:
     m._fetch_tile = lambda z, x, y: Image.new("RGB", (256, 256), (242, 239, 233))
     lat, lon = 0.3525, 37.583
@@ -320,6 +361,7 @@ def test_overview_exists_head_is_cached() -> None:
 
 if __name__ == "__main__":
     test_mapview_pages()
+    test_key_is_compact_and_names_every_line()
     test_autofocus_shows_rings_and_legend()
     test_overview_cache()
     test_overview_disk_cache()
