@@ -96,6 +96,22 @@ check("one edge per band, no translucent wash",
 check("every drawn line is named, river or not",
       before("if (drawnBands.length)", "if (D.rivers && D.rivers.length)"))
 
+# 3c) THE COLOUR ITSELF. Two reasons a herder says "I still don't see the pasture
+# colour": the layer used to be REMOVED above z15 (where he zooms to look at his own
+# ground), and the bare-ground alpha was so heavy that ~79% of the ring became a grey
+# veil that buried the dry forage. The layer must always be on the map, at a strength
+# that reads, and the tag must genuinely hide it.
+check("colour never leaves the map at deep zoom",
+      "z > 15 && !overlayForced" not in body and "pastureOff" in body)
+check("the hide button actually hides it (it used to add it right back)",
+      "if (pastureOff) map.removeLayer(overlayLayer);" in body
+      and body.count("map.addLayer(overlayLayer)") == 1)
+_m = re.search(r"setOpacity\((?:overlayForced \? [0-9.]+ : .*?)\)\)", body)
+_op = _m.group(0) if _m else ""
+check("pasture colour is painted strongly enough to see (0.85 mid-zoom)",
+      "sat ? 0.85" in _op and "? 0.55" in _op, _op or "no setOpacity found")
+
+
 # 4) no ortho uploaded yet -> a clean 404, never a 500 or a broken page
 o = httpx.get(f"{BASE}/map/{WS}/ortho.png", timeout=90, follow_redirects=True)
 print(f"ortho.png: HTTP {o.status_code}")

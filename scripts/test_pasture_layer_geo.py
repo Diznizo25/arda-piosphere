@@ -108,6 +108,23 @@ def main():
         f"bare ground painted red ({sorted(cols)}) - red means water on this map"
     print(f"bare palette OK (grey {mr.PASTURE_BARE}, no red)")
 
+    # THE COLOUR LADDER: green and brown must SHOUT, bare must whisper. The old bare
+    # alpha (150) x the browser's 0.70 laid a 41% grey veil over the ~79% of the ring
+    # that is bare: the ground bleached to fog, dry forage turned to mud, and the
+    # herder's report was "I still don't see the pasture colour".
+    def _alpha_of(cls: int) -> int:
+        grid = np.full((H, W), cls, dtype=np.uint8)
+        img, _, _, _ = _render(grid, radius_km=40.0)
+        return int(img[..., 3].max())
+
+    alphas = {1: _alpha_of(1), 2: _alpha_of(2), 3: _alpha_of(3)}
+    assert alphas[1] == 255, f"grass must be painted at full strength: {alphas}"
+    assert alphas[2] >= 140, f"dry forage must be strong enough to read: {alphas}"
+    assert alphas[3] <= 110, \
+        f"bare is a fog again ({alphas[3]}/255) - it covers ~79% of the ring"
+    assert alphas[3] >= 60, f"bare vanished ({alphas[3]}) - grey must still mean bare"
+    print(f"alpha ladder OK (green {alphas[1]}, dry {alphas[2]}, bare {alphas[3]})")
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -529,7 +529,8 @@ L.marker([D.herder.lat, D.herder.lon], { icon: youIcon })
  .addTo(map).bindPopup('<b>' + D.you + '</b>');
 
 let overlayLayer = null;
-let overlayForced = false;   // he tapped "show pasture" while zoomed right in
+let overlayForced = false;   // he asked for the colour at full strength, deep in
+let pastureOff = false;      // he tapped "hide pasture": the zoom must not undo that
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
@@ -594,23 +595,28 @@ addOverlayLayer();
 // server's read, so the answer is usually there by now.
 if (pasturePending()) setTimeout(refreshPastureSummary, 5000);
 
-// THE COLOUR STEPS ASIDE WHEN HE ZOOMS IN. The pasture layer is 10 m pixels: once he
-// is close enough to look for his own plot, one pixel fills the screen and the layer
-// hides exactly the ground he came to see. So it fades with depth and leaves above z16
-// — one tap on the toggle brings it straight back if he wants it.
+// THE COLOUR STEPS BACK WHEN HE ZOOMS IN — IT NO LONGER DISAPPEARS. It used to be
+// REMOVED above z15 ("the layer is 10 m pixels: one fills the screen"), which meant the
+// pasture colour vanished at exactly the depth where he looks at his own grazing ground —
+// and the herder's report was, word for word, "I still don't see the pasture colour".
+// The browser scales this one 1024 px image smoothly, so deep in it is soft, not blocky:
+// it fades to a wash that still says green/brown/grey, and the toggle hands him full
+// strength on demand.
 const DEEP_ZOOM = 16;
 function applyOverlayStyle() {
   if (!overlayLayer) return;
-  const z = map.getZoom();
-  const sat = map.hasLayer(esriTiles);
-  if (z > 15 && !overlayForced) {
+  if (pastureOff) {                       // his own choice; no zoom may override it
     if (map.hasLayer(overlayLayer)) map.removeLayer(overlayLayer);
-    const btn = document.getElementById('ptoggle');
-    if (btn) btn.textContent = TXT.off || 'Onyesha malisho';
     return;
   }
   if (!map.hasLayer(overlayLayer)) map.addLayer(overlayLayer);
-  overlayLayer.setOpacity(z >= 14 ? (sat ? 0.4 : 0.35) : (sat ? 0.7 : 0.55));
+  const z = map.getZoom();
+  const sat = map.hasLayer(esriTiles);
+  // Bare ground carries a light alpha (see map_renderer._rgba_classes), so 0.85 is a
+  // colour wash, not a grey veil: green and brown - the two answers he acts on - read at
+  // full strength while the satellite ground stays visible underneath.
+  overlayLayer.setOpacity(overlayForced ? 0.95
+    : (z > DEEP_ZOOM ? 0.55 : (z >= 14 ? 0.7 : (sat ? 0.85 : 0.75))));
 }
 
 // River grazing zones: distance RIBBONS along the river line (a river is long,
@@ -803,7 +809,10 @@ function legendHtml() {
   });
   html += '<div class="lg-btns">';
   if (has) {
-    html += '<button id="ptoggle" class="lg-btn">' + (TXT.on || 'Hide pasture') +
+    // The label follows the layer, not the other way round: a rebuilt key (percentages
+    // arriving late) must not relabel a hidden layer as if it were showing.
+    html += '<button id="ptoggle" class="lg-btn">' +
+      (pastureOff ? (TXT.off || 'Show pasture') : (TXT.on || 'Hide pasture')) +
       '</button>';
   }
   html += '<button id="lmore" class="lg-btn">' +
@@ -888,17 +897,15 @@ document.body.addEventListener('click', function (ev) {
     return;
   }
   if (ev.target && ev.target.id === 'ptoggle' && overlayLayer) {
-    if (map.hasLayer(overlayLayer)) {
-      map.removeLayer(overlayLayer);
-      overlayForced = false;
-      ev.target.textContent = TXT.off || 'Show pasture';
-    } else {
-      // He asked for the colour at a depth where it normally steps aside: respect him,
-      // and hand the decision back to the zoom as soon as he zooms out again.
-      map.addLayer(overlayLayer);
-      overlayForced = map.getZoom() > 15;
-      ev.target.textContent = TXT.on || 'Hide pasture';
-    }
+    // ONE flag, both directions. Removing the layer and then calling applyOverlayStyle
+    // used to ADD IT STRAIGHT BACK, so "Ficha malisho" flipped its own label and left the
+    // colour on the map — the herder taps it, nothing happens, and he stops trusting the
+    // button. Now the choice sticks until he taps again.
+    pastureOff = !pastureOff;
+    overlayForced = !pastureOff && map.getZoom() > DEEP_ZOOM;
+    if (pastureOff) map.removeLayer(overlayLayer);
+    ev.target.textContent = pastureOff ? (TXT.off || 'Show pasture')
+                                       : (TXT.on || 'Hide pasture');
     applyOverlayStyle();
   }
 });

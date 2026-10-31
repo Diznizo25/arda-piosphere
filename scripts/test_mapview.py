@@ -98,6 +98,45 @@ def test_key_is_compact_and_names_every_line() -> None:
     print("key: compact + folded, colour codes always drawn, every line named")
 
 
+def test_colour_layer_stays_and_can_be_hidden() -> None:
+    """The pasture colour must not vanish when he zooms in, and hiding it must stick.
+
+    Two herder-facing bugs, both reproduced from the served page:
+
+    * the layer was REMOVED above z15 ("one 10 m pixel fills the screen"), so the
+      colour disappeared at exactly the depth where he looks at his own grazing
+      ground - reported as "I still don't see the pasture colour";
+    * "Ficha malisho" removed the layer and then applyOverlayStyle() added it straight
+      back, so the toggle only flipped its own label and the colour stayed on the map.
+
+    Both are now pinned: the layer is faded (never removed), one `pastureOff` flag
+    survives zooms, and the mid-zoom opacity is strong enough to read on a phone.
+    """
+    real_status = m.pasture_overlay_status
+    m.pasture_overlay_status = lambda *a, **k: {
+        "bounds": [[0.50, 37.20], [0.62, 37.29]], "available": True,
+        "usable_pct": 21, "frac": {"green": 6, "dry": 15, "bare": 79}, "blank_pct": 28,
+    }
+    try:
+        html = mapview_page(lat=0.3525, lon=37.583, species="camel", lang="swa",
+                            id="88bc1e17-a5f6-4c4d-a410-e551e4af7e54",
+                            numbered=None, name=None, interval="daily", focus=1)
+        body = html.body.decode("utf-8", errors="replace")
+    finally:
+        m.pasture_overlay_status = real_status
+
+    assert "z > 15 && !overlayForced" not in body, \
+        "the colour is being removed at depth again - it must only fade"
+    assert "pastureOff" in body, "the hide choice must be a flag the zoom cannot undo"
+    assert "if (pastureOff) map.removeLayer(overlayLayer);" in body
+    assert body.count("map.addLayer(overlayLayer)") == 1, \
+        "only applyOverlayStyle may add the layer, or hiding it undoes itself"
+    assert "setOpacity(overlayForced ? 0.95" in body, "he can ask for full strength"
+    assert "z > DEEP_ZOOM ? 0.55" in body, "deep in, the colour steps back but stays"
+    assert "sat ? 0.85" in body, "mid-zoom opacity must be a colour wash, not a hint"
+    print("pasture colour: stays visible at every zoom, fades with depth, hides on tap")
+
+
 def test_fit_view_real() -> None:
     m._fetch_tile = lambda z, x, y: Image.new("RGB", (256, 256), (242, 239, 233))
     lat, lon = 0.3525, 37.583

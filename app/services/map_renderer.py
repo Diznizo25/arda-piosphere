@@ -1047,7 +1047,7 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
                 ("Rangi ya malisho (ndani ya duara):", None),
                 ("  kijani = nyasi", PASTURE_GREEN),
                 ("  kahawia = nyasi kavu", PASTURE_DRY),
-                ("  kijivu = ntupo (wazi halipakwi rangi)", PASTURE_BARE),
+                ("  kijivu = tupu (wazi halipakwi rangi)", PASTURE_BARE),
                 (f"  {pasture_note}", None),
             ]
         else:
@@ -1212,11 +1212,14 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
     # Kept memory-slim: only a pair of 1-D coordinate vectors + two clipped
     # int32 index arrays (no full-size float64 lattice).
+    # Same lesson as the live layer (see _rgba_classes): a mostly-bare ring painted at a
+    # heavy grey alpha turns the whole map into fog and buries the dry forage in it. Green
+    # and brown are the answers, so they are painted strongly; bare stays a light grey.
     color_map = {
         0: (0, 0, 0, 0),
-        1: (21, 128, 61, 110),
-        2: (138, 77, 23, 105),     # dry forage brown
-        3: PASTURE_BARE + (105,),
+        1: (21, 128, 61, 150),
+        2: (138, 77, 23, 145),     # dry forage brown
+        3: PASTURE_BARE + (80,),
         4: (0, 0, 0, 0),           # unclear -> transparent on maps too
     }
     h, w = classes.shape
@@ -1375,11 +1378,21 @@ def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
     # with a few invisible green specks, and the herder concluded the pasture data was
     # missing. Green must mean grass, brown dry forage, grey bare ground — and red is
     # reserved for water.
+    #
+    # BARE IS A WHISPER, NOT A FOG. Measured on the live layer (composited over the
+    # real Esri tiles at the browser's opacity): bare ground is ~79% of a typical ring,
+    # so at alpha 150 x opacity 0.70 it laid a 41% grey veil over four fifths of the
+    # map — the pixels moved only ~14/255, which is below what a phone in the sun
+    # shows, but the veil bleached the ground and turned dry forage into mud. The
+    # herder's report was exactly that: "I still don't see the pasture colour". At
+    # alpha 95 bare still reads as a flat, colourless patch (the ground you see IS
+    # bare), while green moves ~44/255 and brown ~23/255 — the two classes he acts on
+    # now stand out on their own.
     color_map = {
         0: (0, 0, 0, 0),
         1: PASTURE_GREEN + (255,),    # grass
         2: PASTURE_DRY + (255,),      # dry forage
-        3: PASTURE_BARE + (150,),     # bare ground: grey, and see-through, so the
+        3: PASTURE_BARE + (95,),      # bare ground: grey, and see-through, so the
         #                               grass it is NOT hiding stays visible
         4: (0, 0, 0, 0),              # unclear -> NOT painted (no guessing)
     }
