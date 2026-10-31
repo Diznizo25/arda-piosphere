@@ -545,6 +545,13 @@ async def depletion_probe(request: Request, x_debug_key: str = Header(default=""
         return {"ok": False, "error": "no water point: send water_source_id or lat/lon"}
 
     dep = pasture_history.forecast_for(point_id, species, interval=interval)
+    if dep is None:
+        # Not "no history" — we could not READ the ring at all (unknown point, no
+        # geometry, or no satellite coverage). Saying ok:true with an empty line
+        # would let a reviewer believe the forecast simply had nothing to add.
+        return {"ok": False, "water_source_id": point_id, "species": species,
+                "error": "no pasture reading for that point "
+                         "(unknown point, or no satellite coverage)"}
     return {
         "ok": True,
         "water_source_id": point_id,
