@@ -531,6 +531,10 @@ L.marker([D.herder.lat, D.herder.lon], { icon: youIcon })
 let overlayLayer = null;
 let overlayForced = false;   // he asked for the colour at full strength, deep in
 let pastureOff = false;      // he tapped "hide pasture": the zoom must not undo that
+// Declared BEFORE the layer is added: applyOverlayStyle() runs from addOverlayLayer(),
+// and a `const` declared further down is in its temporal dead zone there — the page threw
+// "Cannot access 'DEEP_ZOOM' before initialization" and drew no rings and no key at all.
+const DEEP_ZOOM = 16;
 let ringLayers = [];
 const fitTargets = [L.latLng(D.herder.lat, D.herder.lon)];
 
@@ -602,7 +606,6 @@ if (pasturePending()) setTimeout(refreshPastureSummary, 5000);
 // The browser scales this one 1024 px image smoothly, so deep in it is soft, not blocky:
 // it fades to a wash that still says green/brown/grey, and the toggle hands him full
 // strength on demand.
-const DEEP_ZOOM = 16;
 function applyOverlayStyle() {
   if (!overlayLayer) return;
   if (pastureOff) {                       // his own choice; no zoom may override it

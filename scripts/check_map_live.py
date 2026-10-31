@@ -110,6 +110,8 @@ _m = re.search(r"setOpacity\((?:overlayForced \? [0-9.]+ : .*?)\)\)", body)
 _op = _m.group(0) if _m else ""
 check("pasture colour is painted strongly enough to see (0.85 mid-zoom)",
       "sat ? 0.85" in _op and "? 0.55" in _op, _op or "no setOpacity found")
+check("no constant is used before it is declared (that kills the whole script)",
+      before("const DEEP_ZOOM = 16;", "addOverlayLayer();"))
 
 
 # 4) no ortho uploaded yet -> a clean 404, never a 500 or a broken page

@@ -134,6 +134,11 @@ def test_colour_layer_stays_and_can_be_hidden() -> None:
     assert "setOpacity(overlayForced ? 0.95" in body, "he can ask for full strength"
     assert "z > DEEP_ZOOM ? 0.55" in body, "deep in, the colour steps back but stays"
     assert "sat ? 0.85" in body, "mid-zoom opacity must be a colour wash, not a hint"
+    # ...and the constant it asks about must exist by then: a `const` declared below the
+    # first addOverlayLayer() call is in its temporal dead zone, which kills the whole
+    # script (no rings, no key) instead of merely throwing one line.
+    assert body.index("const DEEP_ZOOM = 16;") < body.index("addOverlayLayer();"), \
+        "DEEP_ZOOM is declared after it is used - the page dies on load"
     print("pasture colour: stays visible at every zoom, fades with depth, hides on tap")
 
 
