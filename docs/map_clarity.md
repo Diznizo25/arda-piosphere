@@ -57,6 +57,34 @@ the patches that are not. A few gaps look like a few gaps; a clouded week looks 
 clouded week. The rule behind it: **we do not guess**, we do not colour a pixel we cannot
 read.
 
+## How strongly the pasture colour is painted (and why bare is a whisper)
+
+The palette is fixed — green = grass, brown = dry forage, grey = bare, red = water —
+but *how opaque* each class is decides whether a herder can see the answer at all. It
+was measured, not guessed, by compositing the served layer over the real Esri tiles at
+the browser's own opacity:
+
+| Class | What it covers | Alpha x opacity | Pixels move by |
+|---|---|---|---|
+| grass | ~6% of a ring | 255 x 0.85 | **~44/255** |
+| dry forage | ~15% | 255 x 0.85 | **~23/255** |
+| bare (now) | ~79% | 95 x 0.85 | ~6/255 (a flat, colourless patch) |
+| bare (before) | ~79% | 150 x 0.70 | ~14/255 — which is *below* what a phone in the sun shows, while still bleaching the ground and turning dry forage into mud |
+
+Two rules follow:
+
+* **The classes he acts on shout; bare is a whisper.** Bare is 79% of a typical ring, so
+  a heavy grey there is not a colour code, it is fog over four fifths of the map — and it
+  buries the 15% of dry forage he is actually looking for.
+* **The colour never leaves the map.** It used to be *removed* above z15 ("one 10 m pixel
+  fills the screen"), i.e. exactly when he zooms in to look at his own grazing ground —
+  the moment he most wants it. Now it fades with depth (0.85 → 0.7 → 0.55) and the
+  "Ficha malisho / Onyesha malisho" button owns the only on/off decision.
+
+Both are pinned by `scripts/test_pasture_layer_geo.py` (the alpha ladder),
+`scripts/test_mapview.py` (no removal at depth, one `addLayer`) and
+`scripts/check_map_live.py` (the served page).
+
 ## What we will not do
 
 * **Scrape Google's tiles.** Better imagery exists behind their terms; using it would put
