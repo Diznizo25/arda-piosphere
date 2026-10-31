@@ -106,10 +106,11 @@ check("colour never leaves the map at deep zoom",
 check("the hide button actually hides it (it used to add it right back)",
       "if (pastureOff) map.removeLayer(overlayLayer);" in body
       and body.count("map.addLayer(overlayLayer)") == 1)
-_m = re.search(r"setOpacity\((?:overlayForced \? [0-9.]+ : .*?)\)\)", body)
-_op = _m.group(0) if _m else ""
+_m = re.search(r"setOpacity\(.*?\)\)", body, re.S)
+_op = " ".join(_m.group(0).split()) if _m else ""
 check("pasture colour is painted strongly enough to see (0.85 mid-zoom)",
-      "sat ? 0.85" in _op and "? 0.55" in _op, _op or "no setOpacity found")
+      "overlayForced ? 0.95" in _op and "sat ? 0.85" in _op and "? 0.55" in _op,
+      _op or "no setOpacity found")
 check("no constant is used before it is declared (that kills the whole script)",
       before("const DEEP_ZOOM = 16;", "addOverlayLayer();"))
 
