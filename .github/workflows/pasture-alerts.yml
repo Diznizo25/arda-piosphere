@@ -1,0 +1,93 @@
+name: pasture-alerts
+
+# When will the grass in a herder's ring run out — and has it already?
+#
+# Weekly, one day before the weekly note, this job does two things in one pass:
+#   1. records this week's pasture reading for every water point a herder uses
+#      (ring_pasture_samples) — the history a depletion date is fitted from;
+#   2. messages the herders whose ring is projected to run out inside ~8 weeks, or
+#      is already spent.
+#
+# Why weekly and not daily: the satellite COGs themselves are refreshed every 14
+# days (refresh-indices.yml), so a daily sample would just repeat yesterday's pixels
+# while costing an 8 MB overview read per point. Weekly gives two readings per
+# satellite pass — enough for the trend, cheap enough to run on a free instance.
+#
+# Two honest constraints, both encoded in scripts/snapshot_pasture.py:
+#   * WhatsApp allows a free-form business message only inside the 24 hours that
+#     start with the herder's own last message; everyone else is counted as
+#     'outside_24h_window' (reaching them needs ONE approved utility template).
+#   * One warning per divergence: depletion_alerts is keyed on (point, species, the
+#     week the run-out starts), so a retry and the schedule cannot double-message.
+#
+# Manual runs default to a DRY RUN: dispatch it, read the messages in the log, then
+# re-run with send=true. Only the Sunday schedule sends on its own.
+#
+# Setup: DATABASE_URL plus the WhatsApp credentials the app already uses and the R2
+# keys the overview reader needs (the cohort the app runs with on Render).
+
+on:
+  schedule:
+    # Sundays 05:00 UTC = 08:00 in Nairobi. The weekly note is Monday, so a herder
+    # gets the grass warning and then the note — never two messages in one hour.
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+    inputs:
+      send:
+        description: "Actually send (leave false for a dry run that only logs)"
+        type: boolean
+        default: false
+      limit:
+        description: "Cap the number of herders (0 = all)"
+        type: string
+        default: "0"
+      all:
+        description: "Report every ring, not only the ones inside the horizon"
+        type: boolean
+        default: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Keep in sync with .python-version and the other workflows (3.11).
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Snapshot the pasture and warn the herders whose grass is going
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="--send"
+          elif [ "${{ inputs.send }}" = "true" ]; then
+            ARGS="--send"
+          fi
+          if [ "${{ inputs.all }}" = "true" ]; then
+            ARGS="$ARGS --all"
+          fi
+          LIMIT="${{ inputs.limit }}"
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "0" ]; then
+            ARGS="$ARGS --limit $LIMIT"
+          fi
+          echo "running: python scripts/snapshot_pasture.py $ARGS"
+          python scripts/snapshot_pasture.py $ARGS
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          APP_PUBLIC_BASE_URL: ${{ vars.APP_PUBLIC_BASE_URL }}

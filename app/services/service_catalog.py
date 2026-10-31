@@ -63,7 +63,18 @@ SERVICES: tuple[Service, ...] = (
         say_sw="MVUA", say_en="RAIN",
         what_sw="mvua na ukame karibu nawe",
         what_en="rain and drought near you",
-        answers="rain drought forecast weather dry spell",
+        answers="rain drought forecast weather dry spell mvua ukame",
+    ),
+    Service(
+        # The forecast that answers the question a dry week actually asks. Kept as
+        # its own service (not a line inside MVUA) because it is a different
+        # measurement with its own confidence, and because it can be the ONLY thing
+        # a herder needs that morning.
+        id="depletion", menu_ids=("svc:depletion",),
+        say_sw="MALISHO YATAISHA", say_en="WHEN GRASS RUNS OUT",
+        what_sw="siku ambazo malisho ya ring yako yanaweza kuisha",
+        what_en="how many days before the pasture in your ring runs out",
+        answers="days grass finish run out pasture deplete when last malisho yataisha itaisha kuisha siku",
     ),
     Service(
         id="graze", menu_ids=("svc:graze",),
@@ -94,7 +105,7 @@ SERVICES: tuple[Service, ...] = (
         answers="herd whole group estimate total weight",
     ),
     Service(
-        id="map", menu_ids=(),
+        id="map", menu_ids=("svc:map",),
         say_sw="MAP", say_en="MAP",
         what_sw="ramani ya maeneo ya malisho karibu na maji yako",
         what_en="the map of grazing zones around your water",
@@ -139,6 +150,23 @@ SERVICES: tuple[Service, ...] = (
 
 BY_ID: dict[str, Service] = {s.id: s for s in SERVICES}
 
+
+def servable() -> tuple[Service, ...]:
+    """The services a pastoralist may actually be offered right now.
+
+    app/services/features.py owns the switch: it is what the menu filters on and
+    what the router refuses on, so the catalogue the model may quote can never
+    advertise a capability the router would turn down. It fails OPEN (a broken
+    import must not empty the description of the product).
+    """
+    try:
+        from app.services import features
+    except Exception:  # noqa: BLE001
+        return SERVICES
+    enabled = tuple(s for s in SERVICES if features.is_enabled(s.id))
+    return enabled or SERVICES
+
+
 # Router ids that are STEPS, not capabilities: "animals" is the one-tap chooser
 # between weighing one animal and estimating the herd, "weigh"/"herd_est" are its
 # two buttons, and "menu" is the menu itself. Describing them as services would hand
@@ -164,8 +192,20 @@ def _text(service: Service, lang: str, which: str) -> str:
 
 
 def describe(lang: str = "swahili", ids: list[str] | tuple[str, ...] | None = None) -> list[dict]:
-    """Catalogue rows for a prompt/fact bundle: [{service, say, what}]."""
-    chosen = [BY_ID[i] for i in ids if i in BY_ID] if ids else list(SERVICES)
+    """Catalogue rows for a prompt/fact bundle: [{service, say, what}].
+
+    With no ids this is the ADVERTISED list (what the menu offers); with ids it is
+    whatever the caller asked for, as long as the service may run at all. That is
+    the difference between "what can you do?" and "you asked about the thing you
+    just named".
+    """
+    from app.services import features
+
+    allowed = {s.id for s in servable()}
+    if ids:
+        chosen = [BY_ID[i] for i in ids if i in BY_ID and i in allowed]
+    else:
+        chosen = [s for s in SERVICES if s.id in allowed and features.is_listed(s.id)]
     return [{"service": s.id, "say": _text(s, lang, "say"),
              "what": _text(s, lang, "what")} for s in chosen]
 
@@ -185,9 +225,10 @@ def for_question(question: str, lang: str = "swahili", limit: int = 3,
     bag of words.
     """
     q = (question or "").lower()
-    ordered: list[Service] = [BY_ID[i] for i in prefer if i in BY_ID]
+    allowed = [s for s in SERVICES if s.id in {x.id for x in servable()}]
+    ordered: list[Service] = [BY_ID[i] for i in prefer if i in BY_ID and i in {s.id for s in allowed}]
     scored = sorted(
-        (s for s in SERVICES if s.id not in {o.id for o in ordered}),
+        (s for s in allowed if s.id not in {o.id for o in ordered}),
         key=lambda s: (-_rank(s, q), SERVICES.index(s)),
     )
     ordered.extend(scored)
@@ -197,11 +238,12 @@ def for_question(question: str, lang: str = "swahili", limit: int = 3,
 def names(lang: str = "swahili") -> str:
     """One-line list of the everyday services, for a capability answer.
 
-    Six entries on purpose: a WhatsApp reply is read in a pasture, and the two
-    settings (voice, language) are already in 'menu'. The rest are reachable by
-    their word and by the menu.
+    Built from the services this pilot actually offers (features.py), so a herder
+    who asks "what can you do?" is never read a list of things we have hidden.
     """
-    everyday = ("location", "rain", "graze", "pest", "weight", "pin")
+    allowed = {s.id for s in servable()}
+    everyday = tuple(i for i in ("depletion", "rain", "map", "location", "pin")
+                     if i in allowed) or tuple(s.id for s in servable())
     parts = []
     for sid in everyday:
         s = BY_ID[sid]

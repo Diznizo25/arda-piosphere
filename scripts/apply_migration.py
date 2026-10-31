@@ -47,6 +47,10 @@ CHECKS = {
         ("table", "grazing_events", None),
         ("table", "graze_tokens", None),
     ],
+    "015": [
+        ("table", "ring_pasture_samples", None),
+        ("table", "depletion_alerts", None),
+    ],
 }
 
 

@@ -37,7 +37,9 @@ sys.path.insert(0, ".")
 from app.db import get_pg_connection  # noqa: E402
 from app.services import (  # noqa: E402
     environment,
+    features,
     forecast as forecast_service,
+    pasture_history,
     pests,
     water_loop,
     water_status,
@@ -124,22 +126,37 @@ def build_for(recipient: dict, lang: str) -> str:
     except Exception:  # noqa: BLE001
         log.debug("place-rain line failed (non-fatal)", exc_info=True)
 
-    # 3. The queue at his point, while it is still fresh.
-    try:
-        level, updated = water_loop.queue_for_advisory(point_id)
-        if water_loop.queue_is_fresh(updated):
-            lines.append(water_loop.queue_sentence(level, lang))
-    except Exception:  # noqa: BLE001
-        log.debug("queue line failed (non-fatal)", exc_info=True)
+    # 3. The queue at his point, while it is still fresh. Water status is not part
+    #    of this pilot's offer, so it is read only when that service is enabled.
+    if features.is_enabled("status"):
+        try:
+            level, updated = water_loop.queue_for_advisory(point_id)
+            if water_loop.queue_is_fresh(updated):
+                lines.append(water_loop.queue_sentence(level, lang))
+        except Exception:  # noqa: BLE001
+            log.debug("queue line failed (non-fatal)", exc_info=True)
 
     # 4. The pest check, only when a window is up (silence is a feature).
-    try:
-        o = pests.outlook_for_point(point_id)
-        line = pests.weekly_line(o, lang) if o else None
-        if line:
-            lines.append(line)
-    except Exception:  # noqa: BLE001
-        log.debug("pest line failed (non-fatal)", exc_info=True)
+    if features.is_enabled("pest"):
+        try:
+            o = pests.outlook_for_point(point_id)
+            line = pests.weekly_line(o, lang) if o else None
+            if line:
+                lines.append(line)
+        except Exception:  # noqa: BLE001
+            log.debug("pest line failed (non-fatal)", exc_info=True)
+
+    # 5. The grass: how long the pasture in HIS ring lasts at the measured rate.
+    #    Stored history only — a note must never wait on a satellite download.
+    if features.is_enabled("depletion"):
+        try:
+            grass = pasture_history.line_from_history(
+                point_id, recipient.get("species") or "cattle",
+                interval=recipient.get("water_interval") or "daily", lang=sw_lang)
+            if grass:
+                lines.append(grass)
+        except Exception:  # noqa: BLE001
+            log.debug("depletion line failed (non-fatal)", exc_info=True)
 
     map_url = None
     if recipient.get("lat") is not None and recipient.get("lon") is not None:
@@ -158,9 +175,9 @@ def build_for(recipient: dict, lang: str) -> str:
     return weekly_note.build_note(
         lang=lang,
         place=recipient.get("point_name") or recipient.get("ward"),
-        water_line=_water_line(recipient, lang),
+        water_line=_water_line(recipient, lang) if features.is_enabled("status") else "",
         lines=lines,
-        question=water_status.check_question(lang),
+        question=water_status.check_question(lang) if features.is_enabled("status") else None,
         map_url=map_url,
     )
 

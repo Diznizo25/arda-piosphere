@@ -25,12 +25,15 @@ _MAP_LABEL = {"swa": "Ramani", "eng": "Map"}
 
 
 def build_note(*, lang: str = "swa", place: str | None = None,
-               water_line: str, lines: Iterable[str] = (),
+               water_line: str | None = None, lines: Iterable[str] = (),
                question: str | None = None, map_url: str | None = None) -> str:
     """Assemble the weekly note.
 
-    `water_line` is always present (the note is anchored on the herder's own water
-    point); everything else is optional and simply left out when unavailable.
+    Every part is optional except the title: the note is anchored on whatever we
+    actually know about HIS place, and a part we do not have is simply absent. (In
+    this pilot the water-point line and its question are absent while that service
+    is switched off — see app/services/features.py — so the note is the rain, the
+    grass and the map, not a template with blanks in it.)
     """
     i = "swa" if lang in ("swa", "swahili") else "eng"
     head = f"🐐 {_TITLE[i]}"
@@ -41,7 +44,8 @@ def build_note(*, lang: str = "swa", place: str | None = None,
     for line in lines:
         if line:
             parts.append(str(line).strip())
-    parts.append(water_line.strip())
+    if water_line and water_line.strip():
+        parts.append(water_line.strip())
     if map_url:
         parts.append(f"{_MAP_LABEL[i]}: {map_url}")
     if question:

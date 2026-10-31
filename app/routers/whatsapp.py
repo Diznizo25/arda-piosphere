@@ -26,11 +26,14 @@ from app.services import (
     ai,
     build_tracker,
     conversation,
+    depletion,
+    features,
     forage,
     grazing_flow,
     map_renderer,
     manyattas,
     mentor,
+    pasture_history,
     pests,
     registration,
     speech,
@@ -309,6 +312,20 @@ STATUS_KEYWORDS = ["status", "hali", "progress", "maendeleo", "uko wapi"]
 RAIN_KEYWORDS = ["mvua", "rain", "ukame", "drought", "kausha", "dry spell",
                  "forecast", "utabiri", "weather", "hali ya hewa"]
 
+# "When will the grass run out?" — the question the depletion forecast exists for.
+# Deliberately built out of the PHRASES herders use ("malisho yataisha", "grass run
+# out") and not a bare "itaisha", which could be about water, money or a phone
+# battery. Matched BEFORE the rain branch: these sentences contain no rain word,
+# but they are the same conversation and the answer belongs together.
+DEPLETION_KEYWORDS = [
+    "malisho yataisha", "malisho itaisha", "malisho yatakwisha", "malisho yamekwisha",
+    "malisho kupungua", "malisho yanapungua", "malisho yanaisha",
+    "ukame wa malisho", "lini malisho", "siku ngapi za malisho", "siku ngapi malisho",
+    "when will the grass", "when will pasture", "when will my grass",
+    "grass run out", "grass runs out", "grass finish", "pasture run out",
+    "pasture runs out", "pasture deplet", "days of grass",
+]
+
 WEIGHT_KEYWORDS = ["weight", "uzito", "pima", "measure"]
 MENU_KEYWORDS = ["menu", "huduma", "services", "msaada", "help", "home",
                  "chagua", "options", "vitendo", "orodha", "help"]
@@ -361,45 +378,57 @@ WEIGHT_MSG = {
 }
 
 # --- the services menu -------------------------------------------------------
-# Design rule: the CLICKABLE list carries the daily habit loops first and settings
-# last. Nine rows, two sections, one message a herder reads in two seconds.
+# THIS IS THE MASTER CATALOGUE, NOT WHAT A HERDER SEES.
 #
-# Why: the old menu was a flat ten items of equal weight (location, pin, weight, herd,
-# map, status, voice, language, rain, pests), which asked a herder to know what he
-# wanted before he could want anything. Three entries collapsed into "Maji" (status,
-# queue and map answer one question: "is my water okay?").
+# The pilot serves one job — "when will the grass run out and where do I take the
+# herd" — plus the one-minute registration that makes the answer personal. So the
+# menu a herder actually receives is built by `_menu_sections()`, which keeps only
+# the rows whose feature is enabled (app/services/features.py). Rows below that are
+# hidden today (ticks, weight, herd, ledgers, build status, settings) are kept here
+# on purpose: the code still runs, a herder who learned number 3 or the word UZITO
+# is not punished, and ops can bring a row back with ARDA_FEATURES and no deploy.
 #
-# Ids are prefixed "svc:" so an interactive reply can never be mistaken for a
-# water-status digit or a menu number. The numbered TEXT menu below is the fallback for
-# phones that cannot render a list — and it keeps the ORIGINAL numbers (1 location,
-# 2 pin, 8 rain, 9 language, 10 pests) so nobody's muscle memory breaks.
+# Why the menu shrank: the old flat ten-item menu asked a herder to know what he
+# wanted before he could want anything, and in a dry week the one thing he needs
+# was row four of six.
 MENU_SECTIONS = [
-    ("Huduma za kila siku", [
-        ("svc:water", "💧 Maji", "Hali ya chanzo chako, foleni na ramani"),
+    ("Ukame na malisho", [
+        ("svc:rain", "🌧 Ukame na mvua", "Utabiri wa mvua na ukame karibu nawe"),
+        ("svc:depletion", "⏳ Malisho yataisha lini", "Siku malisho yatakapoisha (kadirio)"),
+        ("svc:map", "🗺 Malisho na ramani", "Ramani ya malisho na mwelekeo wa kulisha"),
+        ("svc:place", "📍 Eneo langu", "Tuma eneo upate malisho ya pale ulipo"),
+    ]),
+    ("Kuanza", [
+        ("svc:pin", "➕ Andikisha chanzo", "Andikisha chanzo chako cha maji"),
+    ]),
+    # --- hidden today (kept so the words/numbers keep working) ---------------
+    ("Mifugo", [
         ("svc:pest", "🔍 Kupe na minyoo", "Angalia mifugo yako, hasa mvua ianzapo"),
-        ("svc:rain", "🌧 Mvua", "Hali ya mvua na ukame karibu nawe"),
         ("svc:animals", "🐄 Wanyama", "Pima uzito wa mnyama au kadiria kundi"),
-        ("svc:place", "📍 Eneo langu", "Tuma eneo upate taarifa za malisho"),
         ("svc:graze", "🌿 Malisho ya leo", "Pin mlipopanda — nyongeza na gharama"),
     ]),
     ("Mipangilio", [
-        ("svc:pin", "➕ Chanzo cha maji", "Andikisha au badilisha chanzo chako"),
         ("svc:status", "📊 Ujenzi", "Hali ya ujenzi wa chanzo chako"),
         ("svc:voice", "🗣 Sauti", "Majibu kwa sauti au kwa maandishi"),
         ("svc:lang", "🌍 Lugha", "Swahili au English"),
     ]),
 ]
 MENU_SECTIONS_EN = [
-    ("Daily services", [
-        ("svc:water", "💧 Water", "Your point's status, queue and map"),
-        ("svc:pest", "🔍 Ticks and worms", "Check your animals, especially with rain"),
-        ("svc:rain", "🌧 Rain", "Rain and drought outlook near you"),
-        ("svc:animals", "🐄 Animals", "Weigh one animal or estimate the herd"),
+    ("Drought and pasture", [
+        ("svc:rain", "🌧 Drought and rain", "Rain and drought outlook near you"),
+        ("svc:depletion", "⏳ When grass runs out", "Days left before the pasture ends"),
+        ("svc:map", "🗺 Pasture and maps", "The grazing map and where to take the herd"),
         ("svc:place", "📍 My area", "Share a location for pasture info"),
+    ]),
+    ("Get started", [
+        ("svc:pin", "➕ Register a point", "Register your water point"),
+    ]),
+    ("Livestock", [
+        ("svc:pest", "🔍 Ticks and worms", "Check your animals, especially with rain"),
+        ("svc:animals", "🐄 Animals", "Weigh one animal or estimate the herd"),
         ("svc:graze", "🌿 Grazing today", "Pin where you grazed — feed and cost"),
     ]),
     ("Settings", [
-        ("svc:pin", "➕ Water point", "Register or change your water point"),
         ("svc:status", "📊 Build status", "Progress of your water point"),
         ("svc:voice", "🗣 Voice", "Voice replies or text replies"),
         ("svc:lang", "🌍 Language", "Swahili or English"),
@@ -407,17 +436,24 @@ MENU_SECTIONS_EN = [
 ]
 MENU_BUTTON = {"swahili": "Huduma", "english": "Services"}
 MENU_HINT = {
-    "swahili": "Unaweza pia kuandika swali lolote.",
-    "english": "You can also just ask a question.",
+    "swahili": "Tuma eneo lako (location) upate malisho ya pale ulipo.",
+    "english": "Send your location to get the pasture where you are.",
 }
 MENU_BODY = {
-    "swahili": "Chagua huduma, au andika swali lolote.",
-    "english": "Pick a service, or just ask a question.",
+    "swahili": "Utabiri wa ukame na malisho, na kuandikisha chanzo chako.",
+    "english": "Drought and pasture outlook, and registering your water point.",
 }
 
 
 def _menu_sections(lang: str):
-    return MENU_SECTIONS_EN if lang == "english" else MENU_SECTIONS
+    """The rows a herder may actually see, in the order above.
+
+    Filtered by app/services/features.py, which is also what gates the dispatcher,
+    so the menu can never offer a service the router would refuse (or hide one it
+    would happily run).
+    """
+    sections = MENU_SECTIONS_EN if lang == "english" else MENU_SECTIONS
+    return features.filter_sections(sections, SERVICE_ALIASES)
 
 
 # Interactive id -> the service name the numbered menu dispatches to, so both paths
@@ -430,6 +466,11 @@ SERVICE_ALIASES = {
     "svc:place": "location",
     "svc:graze": "graze",
     "svc:pin": "pin",
+    # The three rows the pilot menu actually shows (drought, depletion, maps) plus
+    # registration. `svc:map` had no id before because the row was removed for
+    # space; the dispatcher already had the branch.
+    "svc:map": "map",
+    "svc:depletion": "depletion",
     # No menu row yet (WhatsApp caps a list at 10 rows and the menu is full), but the
     # id exists so a future row, a quick-reply button or a deep link can reach the
     # change flow without touching the dispatcher.
@@ -444,38 +485,30 @@ SERVICE_ALIASES = {
     "svc:menu": "menu",
 }
 
+# The numbered TEXT fallback. It lists exactly what the clickable list shows, and
+# keeps the ORIGINAL numbers (1 location, 2 pin, 5 map, 8 rain) so a herder who
+# learned them is never wrong — the depletion question has no legacy number, so it
+# is offered by its words.
 MENU_MSG = {
     "swahili": "🌿 ARDA LINK — HUDUMA ZETU\n\n"
-               "Kila siku:\n"
-               "1. 💧 MAJI — hali ya chanzo chako, foleni na ramani\n"
-               "3. ⚖️ UZITO — pima uzito wa mnyama\n"
-               "4. 🐄 HERD — kadiria uzito wa kundi\n"
-               "8. 🌧 MVUA — hali ya mvua na ukame karibu nawe\n"
-               "10. 🔍 KUPE NA MINYOO — angalia mifugo yako\n"
-               "11. 🌿 MALISHO YA LEO — pin mlipopanda; nyongeza na gharama\n\n"
-               "Mipangilio:\n"
-               "2. 📍 PIN — andikisha au badilisha chanzo cha maji\n"
-               "5. 🗺 MAP — ramani ya maeneo ya malisho\n"
-               "6. 📊 STATUS — hali ya ujenzi wa chanzo chako\n"
-               "7. 🗣 SAUTI — jibu kwa sauti / MAANDISHI kwa maandishi\n"
-               "9. 🌍 SWAHILI / ENGLISH — badilisha lugha\n\n"
-               "Tuma namba au neno la huduma, au uliza swali lolote.\n"
+               "Ukame na malisho:\n"
+               "8. 🌧 UKAME NA MVUA — mvua na ukame karibu nawe\n"
+               "· 🌾 MALISHO YATAISHA — tuma 'MALISHO YATAISHA'\n"
+               "5. 🗺 MAP — ramani ya malisho na mwelekeo wa kulisha\n"
+               "1. 📍 ENEO LANGU — tuma eneo upate malisho ya pale ulipo\n\n"
+               "Kuanza:\n"
+               "2. ➕ PIN — andikisha chanzo chako cha maji\n\n"
+               "Tuma namba au neno la huduma, au tuma eneo lako (location).\n"
                "Au niambie mahali ulipo kwa jina — k.m. 'niko karibu na Kipsing'.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
-               "Daily:\n"
-               "1. 💧 WATER — your point's status, queue and map\n"
-               "3. ⚖️ WEIGHT — measure one animal\n"
-               "4. 🐄 HERD — estimate the whole herd\n"
-               "8. 🌧 RAIN — rain and drought outlook near you\n"
-               "10. 🔍 TICKS AND WORMS — check your animals\n"
-               "11. 🌿 GRAZING TODAY — pin where they grazed; feed and cost\n\n"
-               "Settings:\n"
-               "2. 📍 PIN — register or change your water point\n"
-               "5. 🗺 MAP — map of the grazing zones\n"
-               "6. 📊 STATUS — your water point build progress\n"
-               "7. 🗣 VOICE — voice replies / TEXT for text\n"
-               "9. 🌍 SWAHILI / ENGLISH — change language\n\n"
-               "Send the number or the service word, or ask any question.\n"
+               "Drought and pasture:\n"
+               "8. 🌧 DROUGHT AND RAIN — rain and drought near you\n"
+               "· 🌾 WHEN GRASS RUNS OUT — send 'WHEN GRASS RUNS OUT'\n"
+               "5. 🗺 MAP — the grazing map and where to take the herd\n"
+               "1. 📍 MY AREA — send your location for the pasture where you are\n\n"
+               "Get started:\n"
+               "2. ➕ PIN — register your water point\n\n"
+               "Send the number or the service word, or send your location.\n"
                "Or tell me where you are using a name you know.",
 }
 
@@ -820,8 +853,10 @@ def _advisory_extras(result, pastoralist, lang_key: str) -> str:
         except Exception:  # noqa: BLE001
             log.debug("place-rain line unavailable (non-fatal)", exc_info=True)
 
-    # What the last herder at his point said about the waiting line.
-    if point_id:
+    # What the last herder at his point said about the waiting line. Part of the
+    # water-status service, which this pilot does not advertise (features.py) — so
+    # it is read only when that service is enabled.
+    if point_id and features.is_enabled("status"):
         try:
             level, updated = water_loop.queue_for_advisory(point_id)
             if water_loop.queue_is_fresh(updated):
@@ -831,7 +866,7 @@ def _advisory_extras(result, pastoralist, lang_key: str) -> str:
 
     # The pest/parasite window. Silence when nothing is up — a warning every week
     # is a warning nobody reads.
-    if point_id:
+    if point_id and features.is_enabled("pest"):
         try:
             o = pests.outlook_for_point(point_id)
             line = pests.weekly_line(o, lang_key) if o else None
@@ -1336,8 +1371,18 @@ def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> 
 
     The clickable list and the legacy numbers both resolve to a service name and call
     this, so a service can never behave differently depending on how it was reached.
+
+    This is also the ONE gate: a service whose feature is switched off
+    (app/services/features.py) is refused here, so an old number, an old quick-reply
+    button or a deep link cannot reach a capability we no longer put in front of a
+    pastoralist. The reply is never silence — he asked, so he gets the two things we
+    do today and a way to reach them.
     """
     lang = pastoralist.preferred_language
+    if not features.is_enabled(service):
+        _send_reply(phone, pastoralist, features.hidden_service_reply(lang), voice=voice)
+        _show_menu(phone, pastoralist)
+        return
     if service == "location":
         _service_note(phone, pastoralist, "location")
     elif service == "pin":
@@ -1368,6 +1413,8 @@ def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> 
         _run_service(phone, pastoralist, "herd", voice=voice)
     elif service == "map":
         _handle_map_request(phone, pastoralist)
+    elif service == "depletion":
+        _handle_depletion_request(phone, pastoralist)
     elif service == "status":
         _handle_status_request(phone, pastoralist)
     elif service == "voice":
@@ -1532,16 +1579,27 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             return
 
     # MALISHO YA LEO: where did they graze, what was the grass worth, and what
-    # closes the gap. Inbound-triggered on purpose — he asks, at the moment he
-    # knows the answer (he has just come back), so it costs us nothing to serve.
+    # closes the gap. Hidden in this pilot (features.py) — the keyword is still
+    # recognised so the herder gets a real answer instead of the mystery silence of
+    # a bot that pretends not to hear him.
     if any(k in text_lower for k in GRAZE_KEYWORDS):
-        _handle_graze_request(phone, pastoralist)
+        if features.is_enabled("graze"):
+            _handle_graze_request(phone, pastoralist)
+        else:
+            _send_reply(phone, pastoralist, features.hidden_service_reply(
+                pastoralist.preferred_language), voice=voice)
+            _show_menu(phone, pastoralist)
         return
 
     # Pest & parasite check: the environmental conditions, where to look on the
     # animal, and one tap back. Never a diagnosis, never a treatment.
     if any(k in text_lower for k in PEST_KEYWORDS):
-        _handle_pest_request(phone, pastoralist, voice=voice)
+        if features.is_enabled("pest"):
+            _handle_pest_request(phone, pastoralist, voice=voice)
+        else:
+            _send_reply(phone, pastoralist, features.hidden_service_reply(
+                pastoralist.preferred_language), voice=voice)
+            _show_menu(phone, pastoralist)
         return
 
     # Changing the point he already has. BEFORE the water branch on purpose: "chanzo"
@@ -1564,9 +1622,16 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _handle_map_request(phone, pastoralist)
         return
 
-    # Build-status request: current progress of the herder's pinned point.
+    # Build-status request: current progress of the herder's pinned point. Hidden in
+    # this pilot — see features.py; a herder whose point is still building is told
+    # what we do now instead of getting a progress bar he never asked to track.
     if any(k in text_lower for k in STATUS_KEYWORDS):
-        _handle_status_request(phone, pastoralist)
+        if features.is_enabled("status"):
+            _handle_status_request(phone, pastoralist)
+        else:
+            _send_reply(phone, pastoralist, features.hidden_service_reply(
+                pastoralist.preferred_language), voice=voice)
+            _show_menu(phone, pastoralist)
         return
 
     # Pin request: register a new water point at the herder's last shared location.
@@ -1574,9 +1639,21 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
         _handle_pin_request(phone, pastoralist)
         return
 
-    # Weight request: start the heart-girth weight flow.
+    # Weight request: start the heart-girth weight flow. Hidden in this pilot.
     if any(k in text_lower for k in WEIGHT_KEYWORDS):
-        _start_weight_flow(phone, pastoralist)
+        if features.is_enabled("weight"):
+            _start_weight_flow(phone, pastoralist)
+        else:
+            _send_reply(phone, pastoralist, features.hidden_service_reply(
+                pastoralist.preferred_language), voice=voice)
+            _show_menu(phone, pastoralist)
+        return
+
+    # "Malisho yataisha lini?" — the depletion forecast. Placed BEFORE the rain
+    # branch: it is the same dry-season conversation, and the rain answer alone
+    # ("no rain for 30 days") never says when the grass in HIS ring runs out.
+    if any(k in text_lower for k in DEPLETION_KEYWORDS):
+        _handle_depletion_request(phone, pastoralist)
         return
 
     # Rain / drought request: outlook for the herder's water point (or nearest).
@@ -1832,6 +1909,87 @@ def _handle_map_request(phone: str, pastoralist) -> None:
     except Exception:  # noqa: BLE001
         log.exception("live-map link send failed (non-fatal)")
 
+    # "And when does this run out?" — the map shows where the grass is; this says
+    # how long it lasts at the measured rate. Read from STORED samples only: a
+    # fresh satellite read here would make the herder wait another half minute for
+    # a sentence, and the weekly snapshot already stores one reading a week.
+    # Fail-open: no history, no line, and the map above still stands.
+    try:
+        line = pasture_history.line_from_history(
+            water_source_id, species, interval=water_interval,
+            lang=pastoralist.preferred_language)
+        if line:
+            whatsapp_client.send_text(phone, line)
+    except Exception:  # noqa: BLE001
+        log.debug("depletion line unavailable (non-fatal)", exc_info=True)
+
+
+def _pasture_point_for(phone: str, pastoralist) -> tuple[str | None, str, str | None]:
+    """(water point, species, place name) for a pasture/rain question.
+
+    The herder's CONFIRMED point first — that is where his animals drink and it is
+    the ring he cares about. With no confirmation, the nearest known point to his
+    last shared location (his rain and his grass are that place's, within a few km).
+    Shared by the rain and depletion answers so the two can never disagree about
+    which ring they are describing.
+    """
+    ws_id = pastoralist.water_source_id
+    place: str | None = None
+    if ws_id:
+        try:
+            ws = get_water_source(phone)
+        except Exception:  # noqa: BLE001
+            ws = None
+        if ws:
+            place = ws.get("name") or ws.get("ward")
+    if not ws_id:
+        loc = get_last_location(phone)
+        if loc:
+            lon, lat = loc
+            candidates = water_reach.find_nearest_reachable_water(
+                lon, lat, pastoralist.primary_species or "cattle", limit=1)
+            if candidates:
+                ws_id = candidates[0].water_source_id
+    return ws_id, (pastoralist.primary_species or "cattle"), place
+
+
+def _handle_depletion_request(phone: str, pastoralist) -> None:
+    """The depletion forecast: "when will the grass in my ring run out?"
+
+    Reads the stored satellite status (blocking: we are about to quote a number),
+    stores today's sample, then fits the stored history. The answer is allowed to
+    be "I am still measuring" — see app/services/depletion.py for the rules.
+    """
+    lang = pastoralist.preferred_language
+    ws_id, species, place = _pasture_point_for(phone, pastoralist)
+    if not ws_id:
+        whatsapp_client.send_text(
+            phone,
+            {
+                "swahili": "Ili nikupe utabiri wa malisho, tuma eneo lako (location) "
+                           "kwanza — au andikisha chanzo chako kwa 'PIN'.",
+                "english": "To give you the pasture forecast, send your location "
+                           "first — or register your water point with 'PIN'.",
+            }[lang],
+        )
+        return
+    interval = getattr(pastoralist, "water_interval", None) or "daily"
+    try:
+        dep = pasture_history.forecast_for(ws_id, species, interval=interval)
+    except Exception:  # noqa: BLE001
+        log.exception("depletion forecast failed for %s", ws_id)
+        dep = None
+    text = (depletion.alert_message(dep, lang=lang, place=place)
+            or depletion.line(dep, lang))
+    if not text:
+        text = {
+            "swahili": "Bado hatuna kipimo cha malisho kwa eneo hili. Tuma eneo lako "
+                       "tena baadaye, au fungua ramani kupata malisho ya pale ulipo.",
+            "english": "We have no pasture reading for this area yet. Send your "
+                       "location again later, or open the map for the pasture near you.",
+        }[lang]
+    _send_reply(phone, pastoralist, text, voice=pastoralist.voice_replies)
+
 
 def _handle_rain_request(phone: str, pastoralist) -> None:
     """'mvua'/'rain': the honest rain + drought outlook for the herder's area.
@@ -1841,32 +1999,13 @@ def _handle_rain_request(phone: str, pastoralist) -> None:
     waits. Everything it says is labelled as an estimate where it is one, and the
     fallback when we have no data is to say so plainly.
     """
-    from app.services import environment, water_reach
+    from app.services import environment
     from app.services.forecast import mvua_message
 
     lang = pastoralist.preferred_language
-    ws_id = pastoralist.water_source_id
-    place: str | None = None
-
-    if ws_id:
-        try:
-            ws = get_water_source(phone)
-        except Exception:  # noqa: BLE001
-            ws = None
-        if ws:
-            place = ws.get("name") or ws.get("ward")
-
-    if not ws_id:
-        # No confirmed water point yet: fall back to the nearest known water point
-        # to their last shared location (their rain is that rain, within a few km).
-        loc = get_last_location(phone)
-        if loc:
-            lon, lat = loc
-            candidates = water_reach.find_nearest_reachable_water(
-                lon, lat, pastoralist.primary_species or "cattle", limit=1)
-            if candidates:
-                ws_id = candidates[0].water_source_id
-
+    # Same resolution as the pasture/depletion answer, so the rain line and the
+    # grass line can never describe two different rings.
+    ws_id, species, place = _pasture_point_for(phone, pastoralist)
     if not ws_id:
         whatsapp_client.send_text(
             phone,
@@ -1883,6 +2022,19 @@ def _handle_rain_request(phone: str, pastoralist) -> None:
         outlook = None
 
     message = mvua_message(outlook, place=place, lang=lang)
+    # The drought answer is only half the decision: rain says what may come, the
+    # depletion line says how long the grass he is standing on lasts. Appended, not
+    # merged — two measurements, two confidences — and fail-open (no history, no line).
+    try:
+        line = depletion.line(
+            pasture_history.forecast_for(
+                ws_id, species,
+                interval=getattr(pastoralist, "water_interval", None) or "daily"),
+            lang)
+        if line:
+            message = f"{message}\n\n{line}"
+    except Exception:  # noqa: BLE001
+        log.debug("depletion line unavailable (non-fatal)", exc_info=True)
     _send_reply(phone, pastoralist, message,
                 voice=pastoralist.voice_replies)
 
@@ -2290,7 +2442,8 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
     # If the herder names another service mid-flow, jump to it (don't trap them).
     if state.startswith("weight.") or state.startswith("pin.") or state.startswith("onboarding.") \
             or state.startswith("change."):
-        if any(k in t for k in WEIGHT_KEYWORDS) and not state.startswith("weight.species"):
+        if any(k in t for k in WEIGHT_KEYWORDS) and not state.startswith("weight.species") \
+                and features.is_enabled("weight"):
             conversation.clear_state(phone)
             _start_weight_flow(phone, pastoralist)
             return True
@@ -2298,7 +2451,7 @@ def _handle_active_flow(phone: str, pastoralist, text: str | None) -> bool:
             conversation.clear_state(phone)
             _handle_map_request(phone, pastoralist)
             return True
-        if any(k in t for k in STATUS_KEYWORDS):
+        if any(k in t for k in STATUS_KEYWORDS) and features.is_enabled("status"):
             conversation.clear_state(phone)
             _handle_status_request(phone, pastoralist)
             return True
@@ -2335,7 +2488,7 @@ def menu_payload(phone: str, lang: str = "swahili") -> dict:
     structure. Keeping it separate from the send makes the menu inspectable via
     POST /dev/menu, in both languages, without messaging anybody.
     """
-    sections = MENU_SECTIONS_EN if (lang or "").startswith("en") else MENU_SECTIONS
+    sections = _menu_sections("english" if (lang or "").startswith("en") else "swahili")
     en = (lang or "").startswith("en")
     return {
         "messaging_product": "whatsapp",
@@ -2391,6 +2544,19 @@ def _while_you_were_away(pastoralist, lang: str) -> list[str]:
         point = None
     if not point:
         return out
+    # The one thing that changed that he can act on: how his ring is doing. Read
+    # from STORED samples only (no satellite read in a greeting) and shown only
+    # while the pasture service is the one we offer.
+    if features.is_enabled("depletion") and pastoralist.primary_species:
+        try:
+            line = pasture_history.line_from_history(
+                point["id"], pastoralist.primary_species,
+                interval=getattr(pastoralist, "water_interval", None) or "daily",
+                lang="swahili" if sw else "english")
+            if line:
+                out.append(line)
+        except Exception:  # noqa: BLE001
+            log.debug("pasture line for welcome-back failed (non-fatal)", exc_info=True)
     try:
         from app.services.ground_truth import water_status_for
 
@@ -2399,7 +2565,8 @@ def _while_you_were_away(pastoralist, lang: str) -> list[str]:
         # Only report a status we ACTUALLY have. A herder greeted the system and got a
         # list of "we do not know" lines — his water, the queue, the report age, the
         # pests — which reads as the system having nothing to say. Silence is better.
-        if status and status != "unknown":
+        # And only while water status is part of what we offer (features.py).
+        if features.is_enabled("status") and status and status != "unknown":
             sentence = water_status.status_sentence(status, "swa" if sw else "eng")
             age = water_status.age_days(info.get("status_updated_at"))
             n = round(age) if age is not None else 0
@@ -2411,13 +2578,14 @@ def _while_you_were_away(pastoralist, lang: str) -> list[str]:
             out.append(sentence)
     except Exception:  # noqa: BLE001
         log.debug("water line for welcome-back failed (non-fatal)", exc_info=True)
-    try:
-        o = pests.outlook_for_point(point["id"])
-        line = pests.weekly_line(o, "swa" if sw else "eng") if o else None
-        if line:
-            out.append(line)
-    except Exception:  # noqa: BLE001
-        log.debug("pest line for welcome-back failed (non-fatal)", exc_info=True)
+    if features.is_enabled("pest"):
+        try:
+            o = pests.outlook_for_point(point["id"])
+            line = pests.weekly_line(o, "swa" if sw else "eng") if o else None
+            if line:
+                out.append(line)
+        except Exception:  # noqa: BLE001
+            log.debug("pest line for welcome-back failed (non-fatal)", exc_info=True)
     return out
 
 

@@ -506,6 +506,66 @@ async def menu_probe(request: Request, x_debug_key: str = Header(default="")) ->
     }
 
 
+@router.post("/depletion")
+async def depletion_probe(request: Request, x_debug_key: str = Header(default="")) -> dict:
+    """What a herder would be told about his ring running out — without WhatsApp.
+
+    Guarded by X-Debug-Key == WHATSAPP_VERIFY_TOKEN. Body:
+        {water_source_id?, lat?, lon?, species?, interval?, language?}
+
+    Why it exists: this answer depends on a COG read plus weeks of stored samples,
+    so the only honest way to review it is to ask the real path and read what comes
+    back. It also records today's sample (the same call the reply makes), which is
+    how the history starts when a point has none.
+    """
+    settings = get_settings()
+    if not x_debug_key or x_debug_key != settings.whatsapp_verify_token:
+        raise HTTPException(status_code=401, detail="Invalid debug key")
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+
+    from app.services import depletion as depletion_service
+    from app.services import pasture_history, water_reach
+
+    species = payload.get("species") or "cattle"
+    interval = payload.get("interval") or "daily"
+    lang = (payload.get("language") or "swahili").lower()
+    point_id = payload.get("water_source_id")
+    if not point_id and payload.get("lat") is not None and payload.get("lon") is not None:
+        try:
+            found = water_reach.find_nearest_reachable_water(
+                float(payload["lon"]), float(payload["lat"]), species, limit=1)
+        except Exception:  # noqa: BLE001
+            found = []
+        point_id = found[0].water_source_id if found else None
+    if not point_id:
+        return {"ok": False, "error": "no water point: send water_source_id or lat/lon"}
+
+    dep = pasture_history.forecast_for(point_id, species, interval=interval)
+    return {
+        "ok": True,
+        "water_source_id": point_id,
+        "species": species,
+        "interval": interval,
+        "status": getattr(dep, "status", None),
+        "usable_pct": getattr(dep, "usable_pct", None),
+        "days_left": getattr(dep, "days_left", None),
+        "days_left_range": [getattr(dep, "days_left_lo", None),
+                            getattr(dep, "days_left_hi", None)],
+        "confidence": getattr(dep, "confidence", None),
+        "samples": getattr(dep, "samples", None),
+        "span_days": getattr(dep, "span_days", None),
+        "rain_may_recover": getattr(dep, "rain_may_recover", None),
+        "line": depletion_service.line(dep, lang),
+        "alert": depletion_service.alert_message(dep, lang),
+        "stored_samples": [{"day": str(s.day), "usable_pct": s.usable_pct}
+                           for s in pasture_history.samples_for(point_id, species)],
+    }
+
+
 class _StubHerder:
     """Minimal stand-in for an anonymous probe (matches the Pastoralist fields the
     chat layer reads, so no database row is needed)."""

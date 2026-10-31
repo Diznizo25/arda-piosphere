@@ -301,6 +301,7 @@ def list_note_recipients() -> list[dict]:
             cur.execute(
                 """select p.phone_number, p.preferred_language,
                           p.primary_species as species,
+                          coalesce(p.water_interval, 'daily') as water_interval,
                           p.water_source_id, ws.name as point_name, ws.ward,
                           st_x(ws.geom) as lon, st_y(ws.geom) as lat,
                           case when p.last_inbound_at is null then null

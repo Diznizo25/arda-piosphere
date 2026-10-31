@@ -92,9 +92,11 @@ print("menu payload: rows, titles, descriptions and footer inside WhatsApp limit
 try:
     from app.routers import whatsapp as wa
 
+    # The MASTER catalogue may hold every row we have ever shipped (hidden rows stay
+    # so an old number or word still resolves). What WhatsApp's 10-row limit applies
+    # to is the list a herder receives, so that is what is measured here.
     for sections in (wa.MENU_SECTIONS, wa.MENU_SECTIONS_EN):
         rows = [row for _, rs in sections for row in rs]
-        assert len(rows) <= 10, f"{len(rows)} rows is over WhatsApp's list limit"
         assert len({row[0] for row in rows}) == len(rows), "duplicate row id in the menu"
         for sid, title, desc in rows:
             assert sid.startswith("svc:"), sid
@@ -115,10 +117,23 @@ try:
     assert wa.MENU_NUMBERS == {"1": "location", "2": "pin", "3": "weight", "4": "herd",
                                "5": "map", "6": "status", "7": "voice", "8": "rain",
                                "9": "language", "10": "pest", "11": "graze"}, wa.MENU_NUMBERS
-    # The text fallback must still list every number.
-    for num in wa.MENU_NUMBERS:
-        for lang in ("swahili", "english"):
+
+    # THE PILOT CONTRACT (app/services/features.py): the visible menu is drought,
+    # depletion, maps and registration — nothing else — and the text fallback
+    # advertises exactly those, never a hidden row.
+    visible_services = {wa.SERVICE_ALIASES[rid]
+                        for _t, rows in wa._menu_sections("swahili")
+                        for rid, _label, _desc in rows}
+    assert visible_services <= {"rain", "depletion", "map", "location", "pin"}, visible_services
+    listed_numbers = {num for num, svc in wa.MENU_NUMBERS.items() if svc in visible_services}
+    for lang in ("swahili", "english"):
+        for num in listed_numbers:
             assert f"{num}." in wa.MENU_MSG[lang], f"{num} missing from the {lang} menu"
+        for num in set(wa.MENU_NUMBERS) - listed_numbers:
+            assert f"{num}." not in wa.MENU_MSG[lang], \
+                f"hidden service number {num} is advertised in the {lang} text menu"
+        for word in ("UZITO", "KUPE", "WEIGHT", "TICKS", "Herd", "HERD", "UJENZI"):
+            assert word not in wa.MENU_MSG[lang], f"hidden service {word} advertised in {lang}"
 
     # Clickable first, numbered text only as the fallback.
     menu_src = inspect.getsource(wa._show_menu)
@@ -137,15 +152,16 @@ try:
         assert all(len(row["title"]) <= 24 for row in rows), rows
         assert all(len(row.get("description", "")) <= 72 for row in rows), rows
         assert len(payload["interactive"]["action"]["button"]) <= 20
-    # The same nine ids in both languages, so a service can never exist in one only.
+    # The same ids in both languages, so a service can never exist in one only.
     sw_ids = [r["id"] for s in wa.menu_payload("x", "swahili")["interactive"]["action"]["sections"]
               for r in s["rows"]]
     en_ids = [r["id"] for s in wa.menu_payload("x", "english")["interactive"]["action"]["sections"]
               for r in s["rows"]]
     assert sw_ids == en_ids, (sw_ids, en_ids)
-    rows_n = len(wa.MENU_SECTIONS[0][1]) + len(wa.MENU_SECTIONS[1][1])
-    print(f"menu: {rows_n} rows in {len(wa.MENU_SECTIONS)} sections, legacy numbers "
-          f"intact, both languages identical OK")
+    hidden = {"svc:pest", "svc:animals", "svc:graze", "svc:status", "svc:voice", "svc:lang"}
+    assert not hidden & set(sw_ids), f"hidden rows are still offered: {hidden & set(sw_ids)}"
+    print(f"menu: {len(sw_ids)} visible rows, legacy numbers intact, hidden rows hidden, "
+          f"both languages identical OK")
 
     # --- 5) what a greeting sends ----------------------------------------
     src = inspect.getsource(wa._handle_greeting)
