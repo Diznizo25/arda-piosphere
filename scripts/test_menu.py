@@ -124,7 +124,8 @@ try:
     visible_services = {wa.SERVICE_ALIASES[rid]
                         for _t, rows in wa._menu_sections("swahili")
                         for rid, _label, _desc in rows}
-    assert visible_services <= {"rain", "depletion", "map", "location", "pin"}, visible_services
+    assert visible_services <= {"rain", "depletion", "map", "location", "pin",
+                                "language"}, visible_services
     listed_numbers = {num for num, svc in wa.MENU_NUMBERS.items() if svc in visible_services}
     for lang in ("swahili", "english"):
         for num in listed_numbers:
@@ -158,8 +159,15 @@ try:
     en_ids = [r["id"] for s in wa.menu_payload("x", "english")["interactive"]["action"]["sections"]
               for r in s["rows"]]
     assert sw_ids == en_ids, (sw_ids, en_ids)
-    hidden = {"svc:pest", "svc:animals", "svc:graze", "svc:status", "svc:voice", "svc:lang"}
+    hidden = {"svc:pest", "svc:animals", "svc:graze", "svc:status", "svc:voice"}
     assert not hidden & set(sw_ids), f"hidden rows are still offered: {hidden & set(sw_ids)}"
+
+    # The language row is ALWAYS offered (features.ALWAYS_LISTED) — a herder who
+    # cannot read our replies has no other way to say so — and it sits last, in its
+    # own section, so it never competes with the one job the menu serves.
+    assert sw_ids[-1] == "svc:lang", sw_ids
+    last_section = wa.menu_payload("x", "swahili")["interactive"]["action"]["sections"][-1]
+    assert [r["id"] for r in last_section["rows"]] == ["svc:lang"], last_section
     print(f"menu: {len(sw_ids)} visible rows, legacy numbers intact, hidden rows hidden, "
           f"both languages identical OK")
 

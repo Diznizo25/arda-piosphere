@@ -16,10 +16,15 @@ Two questions, deliberately kept apart
     is_enabled(service)  may this run at all?   (keyword, deep link, old habit)
     is_listed(service)   does it appear in the menu?
 
-'voice' and 'language' are ENABLED but not LISTED: a herder who learned 'SAUTI'
-or 'english' keeps it, and nobody new is asked to choose. Hiding a capability
-from a menu is a product decision; deleting a word someone already uses would be
-a silent break.
+'voice' and 'language' are ENABLED but not listed as services: a herder who
+learned 'SAUTI' or 'english' keeps it, and nobody new is asked to choose. Hiding
+a capability from a menu is a product decision; deleting a word someone already
+uses would be a silent break.
+
+The ONE exception is the language row itself (ALWAYS_LISTED, below). It is not a
+capability we are piloting — it is how he hears us — so the row stays on the menu
+even when the settings section is hidden, and ARDA_FEATURES cannot take it away.
+A herder who cannot read the language we answer in has no other way to say so.
 
 Overridable without a deploy: ARDA_FEATURES="drought,pasture,register" (or any
 comma list of the feature ids below). Unknown ids are ignored, and an empty or
@@ -72,6 +77,12 @@ DEFAULT_FEATURES: tuple[str, ...] = ("drought", "pasture", "register")
 # Enabled but never advertised (see the module docstring).
 UNLISTED_FEATURES: frozenset[str] = frozenset({"settings"})
 
+# Services that are ALWAYS offered, whatever ARDA_FEATURES says: they are not a
+# capability we are piloting, they are how the herder hears us. Exactly one today —
+# the language switch — and it is deliberately the last row of the menu, in its own
+# section, so it is reachable without competing with the one job the menu serves.
+ALWAYS_LISTED: frozenset[str] = frozenset({"language"})
+
 ENV_VAR = "ARDA_FEATURES"
 
 
@@ -106,6 +117,9 @@ def is_enabled(service: str | None) -> bool:
 
 def is_listed(service: str | None) -> bool:
     """Does this service appear in the menu?"""
+    if (service or "") in ALWAYS_LISTED:
+        # How he hears us is not a pilot feature (see ALWAYS_LISTED).
+        return True
     feature = SERVICE_FEATURE.get(service or "")
     if feature is None:
         return False  # only rows tied to a feature are offered
@@ -170,6 +184,8 @@ __all__ = [
     "FEATURE_LABEL",
     "SERVICE_FEATURE",
     "DEFAULT_FEATURES",
+    "UNLISTED_FEATURES",
+    "ALWAYS_LISTED",
     "ENV_VAR",
     "enabled_features",
     "is_enabled",

@@ -112,6 +112,23 @@ LANGUAGE_KEYWORDS = {
     "english": ["english", "kiingereza", "ingereza"],
 }
 
+# THE LANGUAGE SWITCH — two one-tap answers, and the reason this exists at all.
+# The old flow answered "🌍 Lugha" with "Tuma 'english' kwa Kiingereza" and left
+# the herder to type it: a dead end for a man who cannot spell English, which is
+# exactly the man who needs the switch. Now the chooser is a pair of buttons, so
+# changing language is ONE tap, and it is reachable from any step of any flow.
+LANG_BUTTONS = [("lang:swa", "Kiswahili"), ("lang:eng", "English")]
+LANG_TARGETS = {"lang:swa": "swahili", "lang:eng": "english"}
+
+# What a herder can TYPE to reach the same chooser. "lugha" is the word he
+# actually uses; "language" is whatever his keyboard makes easy. Matched before
+# the guided flows (see _handle_text) so no flow can swallow it as an answer.
+LANGUAGE_MENU_KEYWORDS = [
+    "lugha", "badilisha lugha", "badili lugha", "lugha nyingine", "lugha gani",
+    "language", "change language", "switch language", "another language",
+    "which language",
+]
+
 MAP_KEYWORDS = ["map", "ramani", "picha", "diagram", "chati"]
 
 WATER_KEYWORDS = ["maji", "water", "chanzo", "source"]
@@ -410,7 +427,13 @@ MENU_SECTIONS = [
     ("Mipangilio", [
         ("svc:status", "📊 Ujenzi", "Hali ya ujenzi wa chanzo chako"),
         ("svc:voice", "🗣 Sauti", "Majibu kwa sauti au kwa maandishi"),
-        ("svc:lang", "🌍 Lugha", "Swahili au English"),
+    ]),
+    # Lugha has its own section at the very bottom ON PURPOSE. It is not a service
+    # (nothing to run), it is how he hears us — and a herder who cannot read the
+    # language we answer in has no other way to say so. features.ALWAYS_LISTED keeps
+    # this one row on the menu whatever ARDA_FEATURES hides.
+    ("Lugha", [
+        ("svc:lang", "🌍 Lugha", "Kiswahili au English — badilisha"),
     ]),
 ]
 MENU_SECTIONS_EN = [
@@ -431,7 +454,9 @@ MENU_SECTIONS_EN = [
     ("Settings", [
         ("svc:status", "📊 Build status", "Progress of your water point"),
         ("svc:voice", "🗣 Voice", "Voice replies or text replies"),
-        ("svc:lang", "🌍 Language", "Swahili or English"),
+    ]),
+    ("Language", [
+        ("svc:lang", "🌍 Language", "Swahili or English — change it"),
     ]),
 ]
 MENU_BUTTON = {"swahili": "Huduma", "english": "Services"}
@@ -498,6 +523,8 @@ MENU_MSG = {
                "1. 📍 ENEO LANGU — tuma eneo upate malisho ya pale ulipo\n\n"
                "Kuanza:\n"
                "2. ➕ PIN — andikisha chanzo chako cha maji\n\n"
+               "Lugha:\n"
+               "9. 🌍 LUGHA — Kiswahili au English\n\n"
                "Tuma namba au neno la huduma, au tuma eneo lako (location).\n"
                "Au niambie mahali ulipo kwa jina — k.m. 'niko karibu na Kipsing'.",
     "english": "🌿 ARDA LINK — OUR SERVICES\n\n"
@@ -508,6 +535,8 @@ MENU_MSG = {
                "1. 📍 MY AREA — send your location for the pasture where you are\n\n"
                "Get started:\n"
                "2. ➕ PIN — register your water point\n\n"
+               "Language:\n"
+               "9. 🌍 LANGUAGE — Swahili or English\n\n"
                "Send the number or the service word, or send your location.\n"
                "Or tell me where you are using a name you know.",
 }
@@ -1349,6 +1378,70 @@ def _handle_graze_quality(phone: str, pastoralist, text: str, voice: bool = Fals
     return True
 
 
+# --- the language switch ------------------------------------------------------
+# ONE place decides how a herder changes the language we answer in, so the menu
+# row, the typed word and the legacy number 9 can never diverge.
+
+
+def _lang_chooser_body(lang: str) -> str:
+    """The language question, written twice.
+
+    Bilingual on purpose: a herder who cannot read the language we answer in must
+    still recognise the switch, and the buttons carry the language names in their
+    own spelling — nothing has to be translated to be usable.
+    """
+    now = "English" if lang == "english" else "Kiswahili"
+    return ("🌍 Lugha / Language\n\n"
+            f"Sasa ninakujibu kwa {now} — I reply in {now}.\n"
+            "Chagua / choose: Kiswahili · English")
+
+
+def _send_lang_chooser(phone: str, pastoralist) -> None:
+    """Two buttons, one tap — the whole point of the switch.
+
+    Before this, "🌍 Lugha" answered "send 'english'", which is a dead end for the
+    man who needs it most: he cannot spell English, that is why he is asking. The
+    typed instruction stays as the FALLBACK, only for when buttons cannot be sent.
+    """
+    body = _lang_chooser_body(pastoralist.preferred_language)
+    try:
+        whatsapp_client.send_quick_reply_buttons(phone, body, LANG_BUTTONS)
+        return
+    except Exception:  # noqa: BLE001
+        log.exception("language buttons failed — sending the typed instruction")
+    whatsapp_client.send_text(phone, {
+        "swahili": "Tuma 'english' kwa Kiingereza, au 'swahili' kwa Kiswahili.",
+        "english": "Send 'swahili' for Swahili, or 'english' for English.",
+    }[pastoralist.preferred_language])
+
+
+def _switch_language(phone: str, pastoralist, language: str, voice: bool = False) -> None:
+    """Change his language, then PROVE it.
+
+    Three things happen and all three matter:
+      * the preference is stored with ONE column write (registration owns the
+        statement, so his species, water point and everything else are untouched);
+      * the in-memory row is updated, so the rest of THIS turn — a voice reply
+        included — already speaks the new language;
+      * the confirmation and the menu that follows come in the new language,
+        which is how he can tell the switch worked without asking again.
+    """
+    language = language if language in ("swahili", "english") else "swahili"
+    if language != pastoralist.preferred_language:
+        try:
+            registration.set_language(phone, language)
+        except Exception:  # noqa: BLE001
+            # Fail-open, like every other write on this hot path: the switch still
+            # holds for this conversation, and the next message re-reads the row.
+            log.exception("could not store the language for %s", phone)
+    pastoralist.preferred_language = language
+    _send_reply(phone, pastoralist, {
+        "swahili": "✅ Sawa! Kuanzia sasa nitakujibu kwa Kiswahili.",
+        "english": "✅ Done! I will reply in English from now on.",
+    }[language], voice=voice)
+    _show_menu(phone, pastoralist)
+
+
 def _service_note(phone: str, pastoralist, kind: str, **kwargs) -> None:
     """One-turn service answers that need no flow state (kept tiny on purpose)."""
     lang = pastoralist.preferred_language
@@ -1360,10 +1453,9 @@ def _service_note(phone: str, pastoralist, kind: str, **kwargs) -> None:
                        "e.g. 'I am near Kipsing'.",
         }[lang])
     elif kind == "language":
-        whatsapp_client.send_text(phone, {
-            "swahili": "Tuma 'english' kwa Kiingereza, au 'swahili' kwa Kiswahili.",
-            "english": "Send 'swahili' for Swahili, or 'english' for English.",
-        }[lang])
+        # The menu row and the legacy number 9 both land here: two buttons, not an
+        # instruction to type a word he may not be able to spell.
+        _send_lang_chooser(phone, pastoralist)
 
 
 def _run_service(phone: str, pastoralist, service: str, voice: bool = False) -> None:
@@ -1462,6 +1554,19 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
             }[pastoralist.preferred_language],
             voice=voice,
         )
+        return
+
+    # THE LANGUAGE SWITCH — reachable from ANY step of ANY flow, like 'cancel'.
+    # Both spellings of the same wish land here: the tapped button ids ("lang:eng")
+    # and the words a herder types ("lugha", "change language"). Deliberately ahead
+    # of the guided flows — a man being asked for his name in a language he cannot
+    # read must be able to stop and fix that first, and 'onboarding.name' would
+    # otherwise store "lugha" as his name.
+    if text_lower in LANG_TARGETS:
+        _switch_language(phone, pastoralist, LANG_TARGETS[text_lower], voice=voice)
+        return
+    if any(k in text_lower for k in LANGUAGE_MENU_KEYWORDS):
+        _send_lang_chooser(phone, pastoralist)
         return
 
     # The water loop asks two one-tap questions of its own (the waiting queue, and
@@ -1569,13 +1674,10 @@ def _handle_text(phone: str, pastoralist, text: str, voice: bool = False) -> Non
 
     for language, keywords in LANGUAGE_KEYWORDS.items():
         if any(k in text_lower for k in keywords):
-            upsert_pastoralist(phone, language=language)
-            _send_reply(
-                phone,
-                pastoralist,
-                "Sawa, nitatumia Kiswahili." if language == "swahili" else "Okay, I will reply in English.",
-                voice=voice,
-            )
+            # A herder who types the language instead of tapping the button gets
+            # exactly the same switch: stored, confirmed, and proved by the menu
+            # that follows in the new language.
+            _switch_language(phone, pastoralist, language, voice=voice)
             return
 
     # MALISHO YA LEO: where did they graze, what was the grass worth, and what

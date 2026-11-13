@@ -10,7 +10,10 @@ What this pins (all of it product decisions, so all of it belongs in a test):
      menu: an old quick-reply button, an old number or a deep link must not reach
      it. The refusal is a real answer (what we do now), never silence.
   3. Settings stay ENABLED but UNLISTED: 'sauti'/'english' still work for a herder
-     who learned them, and nobody new is asked to choose.
+     who learned them, and nobody new is asked to choose. The ONE exception is the
+     language row (features.ALWAYS_LISTED): a herder who cannot read the language we
+     answer in must always be able to change it, so that row is on every menu and
+     ARDA_FEATURES cannot hide it.
   4. The switch is overridable with ARDA_FEATURES and a bad value fails safe (the
      default menu, never an empty one).
   5. The service catalogue the AI may quote is filtered by the same switch, so the
@@ -30,22 +33,24 @@ from app.services import features, service_catalog  # noqa: E402
 assert features.DEFAULT_FEATURES == ("drought", "pasture", "register")
 visible = {s for s in features.SERVICE_FEATURE if features.is_listed(s)}
 # 'change' belongs to registration (fix the point you registered) and has no row of
-# its own; the five with rows are asserted in scripts/test_menu.py.
-assert visible == {"rain", "depletion", "map", "location", "pin", "change"}, visible
+# its own; the rows with real ids are asserted in scripts/test_menu.py. 'language'
+# is the always-listed switch (how he hears us), never a pilot feature.
+assert visible == {"rain", "depletion", "map", "location", "pin", "change", "language"}, visible
 for hidden in ("pest", "weight", "herd", "animals", "graze", "status"):
     assert not features.is_enabled(hidden), f"{hidden} must not run in this pilot"
     assert not features.is_listed(hidden), hidden
-# Settings: reachable, never advertised.
-for setting in ("voice", "language"):
-    assert features.is_enabled(setting), setting
-    assert not features.is_listed(setting), setting
+# Settings: reachable. 'voice' is never advertised; the language row always is.
+assert features.is_enabled("voice") and not features.is_listed("voice")
+assert features.is_enabled("language") and features.is_listed("language")
 # A row that is not a service at all (navigation, menu) is left to the router.
 assert features.is_enabled("menu") and not features.is_listed("menu")
-print("default: 5 listed rows (rain, depletion, map, location, pin); settings on but unlisted")
+print("default: 6 listed rows (rain, depletion, map, location, pin, language); "
+      "voice on but unlisted")
 
 # --- 2) the catalogue the AI may quote is filtered the same way -------------
 quoted = {row["service"] for row in service_catalog.describe("swahili")}
-assert quoted == {"rain", "depletion", "map", "location", "pin", "change"}, quoted
+assert quoted == {"rain", "depletion", "map", "location", "pin", "change",
+                  "language"}, quoted
 listed_line = service_catalog.names("swahili")
 for word in ("UZITO", "KUPE", "MALISHO YA LEO", "UJENZI"):
     assert word not in listed_line, f"hidden service advertised to the model: {word}"
@@ -61,8 +66,11 @@ try:
     assert features.enabled_features() == ("livestock",)
     assert features.is_listed("pest") and not features.is_listed("rain")
     assert features.is_enabled("weight") and not features.is_enabled("depletion")
-    # Settings are still reachable, still unlisted.
-    assert features.is_enabled("language") and not features.is_listed("language")
+    # 'voice' is still reachable and still unlisted...
+    assert features.is_enabled("voice") and not features.is_listed("voice")
+    # ...while the language switch cannot be taken away by a feature flag: it is
+    # how he hears us, not a capability we are piloting.
+    assert features.is_enabled("language") and features.is_listed("language")
 finally:
     os.environ.pop(features.ENV_VAR, None)
 
@@ -84,8 +92,10 @@ def _router_checks() -> None:
     from app.routers import whatsapp as wa
 
     sent: list[str] = []
+    buttons: list[list[tuple[str, str]]] = []
     menu_calls = {"n": 0}
     original_text = wa.whatsapp_client.send_text
+    original_buttons = wa.whatsapp_client.send_quick_reply_buttons
     original_menu = wa._show_menu
     original_weight = wa._start_weight_flow
 
@@ -101,6 +111,8 @@ def _router_checks() -> None:
         voice_replies = False
 
     wa.whatsapp_client.send_text = lambda phone, text, **k: sent.append(text)
+    wa.whatsapp_client.send_quick_reply_buttons = \
+        lambda phone, body, btns, **k: buttons.append(list(btns))
     wa._show_menu = lambda phone, p: menu_calls.__setitem__("n", menu_calls["n"] + 1)
     wa._start_weight_flow = _no_weight
     try:
@@ -113,10 +125,13 @@ def _router_checks() -> None:
             assert menu_calls["n"] == 1, f"{service}: the menu must be offered after a refusal"
         # ... and an ENABLED service is not refused. 'language' is used here because
         # it answers from a constant: no database, no raster, nothing to wait for.
+        # It answers with the two one-tap buttons (see scripts/test_language_switch.py).
         sent.clear()
+        buttons.clear()
         wa._run_service("254700000009", _Herder(), "language")
         assert not any("mambo mawili" in t for t in sent), sent
-        assert any("english" in t for t in sent), sent
+        assert buttons, "the language service must offer the two one-tap answers"
+        assert [b[0] for b in buttons[-1]] == ["lang:swa", "lang:eng"], buttons[-1]
 
         # The refusal names four things a herder can send. Every one of them must be
         # a word the router actually recognises: an answer that points at a dead end
@@ -141,6 +156,7 @@ def _router_checks() -> None:
                         or any(k in lower for k in wa.PIN_KEYWORDS)), (lang, word)
     finally:
         wa.whatsapp_client.send_text = original_text
+        wa.whatsapp_client.send_quick_reply_buttons = original_buttons
         wa._show_menu = original_menu
         wa._start_weight_flow = original_weight
 

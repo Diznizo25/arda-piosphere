@@ -80,8 +80,10 @@ point by its local name, not a ward. If their water point isn't in the list,
 they're guided to **PIN** it (validated, then auto-built).
 After that, the message flow handles:
 
-**The menu** is a clickable WhatsApp list — nine rows in two sections, daily services
-first and settings last — with a numbered text menu as the fallback. The numbers are
+**The menu** is a clickable WhatsApp list, with a numbered text menu as the fallback.
+`app/services/features.py` decides which rows a herder sees: the pilot offers six —
+drought, when the grass runs out, the map, "my area", registration, and the language
+switch last — and `ARDA_FEATURES` can bring the rest back without a deploy. The numbers are
 unchanged from the original menu so nobody's muscle memory breaks, and ids are prefixed
 `svc:` so a tap can never be mistaken for a water-status digit:
 
@@ -95,12 +97,27 @@ unchanged from the original menu so nobody's muscle memory breaks, and ids are p
 | Settings | Chanzo kipya | Register a new water point (validated, auto-built) |
 | Settings | Ujenzi | Build status of his water point |
 | Settings | Sauti | Voice replies on |
-| Settings | Lugha | Swahili / English |
+| Lugha | Lugha | Swahili / English — **one tap**, always offered (see below) |
 
 Both entry points resolve to a service name and run the same code, so a service cannot
 behave differently depending on how it was reached. `POST /dev/menu` returns the exact
 payload plus the text fallback in both languages, so the front door can be reviewed
 without messaging a herder.
+
+**Changing the language is one tap.** `🌍 Lugha` is the last row, in its own section, and
+it answers with two quick-reply buttons (`Kiswahili` / `English`, ids `lang:swa` /
+`lang:eng`) instead of the old instruction to type the word — a herder who cannot spell
+English is exactly the man who needs the switch. Tapping one writes the preference once
+(one column), confirms in the **new** language and re-sends the menu in it, so the switch
+proves itself without another question. It is reachable from any step of any flow — the
+tapped id *and* the typed words `lugha` / `change language` — so a man halfway through
+registration in a language he cannot read can stop and fix it rather than having "lugha"
+stored as his name. The row is exempt from `ARDA_FEATURES` (`features.ALWAYS_LISTED`): how
+he hears us is not a capability we are piloting. The old habits still work — typing
+`english` / `kiingereza` / `swahili`, or the legacy number 9, reaches the same switch.
+If the buttons cannot be sent he gets the typed instruction; if the write fails the switch
+still holds for that conversation (fail-open, like every write on this path).
+`scripts/test_language_switch.py` pins all of it.
 
 **A greeting is not a question.** `hello` / `habari` gets a welcome and the menu — never a
 data dump — and a herder returning after 7+ days also gets one or two lines about what
@@ -130,8 +147,10 @@ suppress guidance to points reported dry/broken/gone for 60 days, then return wi
 a re-check nudge. Points nobody has confirmed are labelled *haijathibitishwa* in
 the advisory and grey on the map, instead of implying the water is fine.
 
-Every guided flow has escape hatches (`cancel`, `menu`, `start`), and
-`conversation_state` keeps multi-step flows resumable. The water-point
+Every guided flow has escape hatches (`cancel`, `menu`, `start`); `lugha` /
+`change language` works from any step as well (it opens the language switch instead
+of being stored as an answer, so a flow can never trap a herder in a language he
+cannot read); and `conversation_state` keeps multi-step flows resumable. The water-point
 confirmation can be re-shown anytime (`orodha`/`list` re-sends a fresh list +
 numbered map), `hakuna`/`none` clears it and guides to PIN registration, and
 flow states older than 24h **self-heal** (a stale list never traps the herder —
