@@ -1,9 +1,11 @@
-"""Live ops dashboard: KPIs, water-point map, query monitor, COG explorer.
+"""Live ops dashboard: KPIs, water-point map, query monitor, COG explorer, the
+WhatsApp conversation and the forecast receipts.
 
-Access is protected when DASHBOARD_TOKEN is set (pass ?key=<token> or
-Authorization: Bearer <token>). Every data endpoint is fail-open (returns
-partial JSON rather than 500ing) so the dashboard stays up even when a
-dependency is degraded.
+The HTML shell is public (it contains no data, only the code that asks for it), so
+the link can be shared and the key typed in once; every data endpoint is behind
+DASHBOARD_TOKEN (pass ?key=<token> or Authorization: Bearer <token>). Every data
+endpoint is fail-open (returns partial JSON rather than 500ing) so the dashboard
+stays up even when a dependency is degraded.
 """
 from __future__ import annotations
 
@@ -42,12 +44,14 @@ def _json(obj, status: int = 200):
     return JSONResponse(status_code=status, content=obj)
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+@router.get("", response_class=HTMLResponse)
 def dashboard_page() -> HTMLResponse:
+    """The shell. No data in it, so it needs no key; the key is asked for once and
+    kept in localStorage, and every /api/* call below still checks it."""
     if not TEMPLATE.exists():
         raise HTTPException(status_code=500, detail="dashboard template missing")
     html = TEMPLATE.read_text(encoding="utf-8")
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/api/health", dependencies=[Depends(require_auth)])
@@ -102,3 +106,15 @@ def api_cog_preview(water_source_id: str, band: int = 0):
         raise HTTPException(status_code=404, detail="COG preview not available")
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=300"})
+
+
+@router.get("/api/whatsapp", dependencies=[Depends(require_auth)])
+def api_whatsapp(limit: int = Query(default=20, ge=1, le=100)):
+    """Who is talking to us, what they last said, and the exact menu they see."""
+    return _json(dashboard_service.whatsapp_overview(limit))
+
+
+@router.get("/api/forecasts", dependencies=[Depends(require_auth)])
+def api_forecasts(limit: int = Query(default=25, ge=1, le=200)):
+    """Forecast receipts, the backtest scoreboard and the latest ring readings."""
+    return _json(dashboard_service.forecast_board(limit))

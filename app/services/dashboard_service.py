@@ -635,6 +635,287 @@ def _pipeline_runs() -> list[dict]:
 
 
 
+# --- the questions a reader actually asks -------------------------------------
+# "Is what we shipped live, and who is it reaching?" and "was the forecast right?"
+# Neither was answerable from this page before. The menu a herder receives is
+# decided by ARDA_FEATURES and by WhatsApp's 10-row cap, so a row can go missing
+# without anything failing; and every projection used to be thrown away the moment
+# its message went out, which made "18-25 days" impossible to score. Migration 016
+# keeps the projection (depletion_forecasts) with the clues behind it. Both reads
+# below stay fail-open, like the rest of this module.
+
+
+def _menu_now() -> dict:
+    """Exactly what a herder is offered right now, and which switch decided it.
+
+    The router is imported lazily: it pulls in the whole chat stack, and a
+    dashboard import error must never be the reason the bot stops answering.
+    """
+    try:
+        from app.routers import whatsapp as wa
+        from app.services import features
+    except Exception:  # noqa: BLE001
+        log.exception("menu introspection failed")
+        return {"available": False}
+
+    raw = (os.getenv(features.ENV_VAR) or "").strip()
+    out: dict = {
+        "available": True,
+        "env_var": features.ENV_VAR,
+        "from_env": bool(raw),
+        "features": list(features.enabled_features()),
+        "default": list(features.DEFAULT_FEATURES),
+        "always_listed": sorted(features.ALWAYS_LISTED),
+        "row_limit": features.MENU_ROW_LIMIT,
+        "languages": {},
+    }
+    for lang in ("swahili", "english"):
+        try:
+            sections = wa._menu_sections(lang)
+            rows = [
+                {"id": rid, "label": label,
+                 "service": wa.SERVICE_ALIASES.get(rid, rid.replace("svc:", ""))}
+                for _title, section_rows in sections
+                for rid, label, _desc in section_rows
+            ]
+            out["languages"][lang] = {"sections": [t for t, _ in sections],
+                                      "rows": rows, "count": len(rows)}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("menu introspection failed for %s", lang)
+            out["languages"][lang] = {"error": f"{type(exc).__name__}: {exc}"}
+    return out
+
+
+def whatsapp_overview(limit: int = 20) -> dict:
+    """Who is talking to us, what they said, and where their conversation sits.
+
+    One row per registered herder (language, water point, flow state, last words,
+    messages in 24h), plus the raw inbound feed. A table of states alone cannot
+    show the herder who typed nothing but tapped the wrong row.
+    """
+    out: dict = {"generated_at": _now_iso(), "degraded": False, "menu": _menu_now(),
+                 "herders": [], "messages": [], "totals": {}}
+    try:
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select p.phone_number, p.full_name, p.preferred_language,
+                           p.primary_species, p.water_interval, p.onboarded_at,
+                           p.last_inbound_at, p.last_advisory_at,
+                           ws.ward, coalesce(ws.name, ws.ward) as water_name,
+                           cs.state, cs.updated_at as state_since,
+                           (select count(*)::int from query_log q
+                             where q.phone = p.phone_number
+                               and q.created_at > now() - interval '24 hours') as msgs_24h,
+                           (select left(coalesce(q.detail->>'text', ''), 160)
+                              from query_log q
+                             where q.phone = p.phone_number
+                               and q.detail->>'event' = 'inbound'
+                             order by q.created_at desc limit 1) as last_text
+                      from pastoralists p
+                      left join water_sources ws on ws.id = p.water_source_id
+                      left join conversation_state cs on cs.phone_number = p.phone_number
+                     order by coalesce(p.last_inbound_at, p.updated_at) desc nulls last
+                     limit %s
+                    """,
+                    (limit,),
+                )
+                for r in cur.fetchall():
+                    out["herders"].append({
+                        "phone": r["phone_number"],
+                        "name": r["full_name"],
+                        "language": r["preferred_language"],
+                        "species": r["primary_species"],
+                        "interval": r["water_interval"],
+                        "water_point": r["water_name"],
+                        "ward": r["ward"],
+                        "state": r["state"],
+                        "state_since": _iso(r["state_since"]),
+                        "onboarded_at": _iso(r["onboarded_at"]),
+                        "last_inbound_at": _iso(r["last_inbound_at"]),
+                        "last_advisory_at": _iso(r["last_advisory_at"]),
+                        "last_text": r["last_text"],
+                        "msgs_24h": r["msgs_24h"],
+                    })
+
+                cur.execute(
+                    """
+                    select phone, left(coalesce(detail->>'text', ''), 200) as text,
+                           coalesce(detail->>'type', '') as kind, created_at
+                      from query_log
+                     where detail->>'event' = 'inbound'
+                     order by created_at desc
+                     limit %s
+                    """,
+                    (limit * 2,),
+                )
+                for r in cur.fetchall():
+                    out["messages"].append({"phone": r["phone"], "text": r["text"],
+                                            "kind": r["kind"], "at": _iso(r["created_at"])})
+
+                cur.execute(
+                    """
+                    select (select count(*)::int from pastoralists) as herders,
+                           (select count(*)::int from pastoralists
+                             where last_inbound_at > now() - interval '24 hours')
+                             as active_24h,
+                           (select count(*)::int from query_log
+                             where detail->>'event' = 'inbound'
+                               and created_at > now() - interval '24 hours') as messages_24h,
+                           (select count(*)::int from conversation_state) as flows,
+                           (select count(*)::int from pastoralists
+                             where onboarded_at is not null) as onboarded
+                    """
+                )
+                out["totals"] = dict(cur.fetchone())
+    except Exception:  # noqa: BLE001
+        log.exception("whatsapp overview read failed")
+        out["degraded"] = True
+    return out
+
+
+def forecast_board(limit: int = 25) -> dict:
+    """The receipts: what we told him, why, and whether it came true.
+
+    `receipts` is every forecast we issued (newest first) with the rate that
+    produced it and the ring clue it leaned on. `scoreboard` counts the ones
+    scripts/backtest_depletion.py has already judged. `rings` is the latest stored
+    reading per ring, which is what the next forecast will be built from.
+    """
+    out: dict = {"generated_at": _now_iso(), "available": False, "degraded": False,
+                 "detail": "", "receipts": [], "scoreboard": {}, "rings": []}
+    try:
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                if not _table_exists(cur, "depletion_forecasts"):
+                    out["detail"] = "migration 016 (depletion_forecasts) is not applied"
+                    return out
+                out["available"] = True
+
+                cur.execute(
+                    """
+                    select df.id, df.issued_on, df.water_source_id, df.species,
+                           df.interval, df.status, df.usable_pct,
+                           df.slope_pp_week::float8 as slope_pp_week,
+                           df.dry_slope_pp_week::float8 as dry_slope_pp_week,
+                           df.rate_source, df.days_left, df.days_left_lo,
+                           df.days_left_hi, df.samples, df.span_days, df.confidence,
+                           df.cause, df.gap_pp, df.curing, df.snapshot_as_of,
+                           df.outcome, df.runout_on, df.scored_on,
+                           ws.ward, coalesce(ws.name, ws.ward) as water_name
+                      from depletion_forecasts df
+                      left join water_sources ws on ws.id = df.water_source_id
+                     order by df.issued_on desc, df.id desc
+                     limit %s
+                    """,
+                    (limit,),
+                )
+                for r in cur.fetchall():
+                    out["receipts"].append({
+                        "id": r["id"],
+                        "issued_on": _iso(r["issued_on"]),
+                        "water_source_id": str(r["water_source_id"]),
+                        "water_point": r["water_name"],
+                        "ward": r["ward"],
+                        "species": r["species"],
+                        "interval": r["interval"],
+                        "status": r["status"],
+                        "usable_pct": r["usable_pct"],
+                        "slope_pp_week": r["slope_pp_week"],
+                        "dry_slope_pp_week": r["dry_slope_pp_week"],
+                        "rate_source": r["rate_source"],
+                        "days_left": r["days_left"],
+                        "days_left_lo": r["days_left_lo"],
+                        "days_left_hi": r["days_left_hi"],
+                        "samples": r["samples"],
+                        "span_days": r["span_days"],
+                        "confidence": r["confidence"],
+                        "cause": r["cause"],
+                        "gap_pp": r["gap_pp"],
+                        "curing": r["curing"],
+                        "snapshot_as_of": _iso(r["snapshot_as_of"]),
+                        "outcome": r["outcome"],
+                        "runout_on": _iso(r["runout_on"]),
+                        "scored_on": _iso(r["scored_on"]),
+                    })
+
+                cur.execute(
+                    """
+                    select coalesce(outcome, 'unscored') as k, count(*)::int as v
+                      from depletion_forecasts group by 1
+                    """
+                )
+                outcomes = _pairs(cur.fetchall())
+                cur.execute(
+                    """
+                    select coalesce(cause, 'unknown') as k, count(*)::int as v
+                      from depletion_forecasts group by 1
+                    """
+                )
+                causes = _pairs(cur.fetchall())
+                decided = sum(outcomes.get(k, 0) for k in ("hit", "early", "late"))
+                out["scoreboard"] = {
+                    "outcomes": outcomes,
+                    "causes": causes,
+                    "total": sum(outcomes.values()),
+                    "scored": sum(v for k, v in outcomes.items() if k != "unscored"),
+                    # Of the forecasts a real runout followed, how many named it.
+                    # no_collapse/unknown are excluded: a ring that never emptied
+                    # says nothing about the accuracy of the date.
+                    "hit_rate": (round(outcomes.get("hit", 0) / decided, 2)
+                                 if decided else None),
+                }
+
+                cur.execute(
+                    """
+                    select distinct on (rps.water_source_id, rps.species, rps.interval)
+                           rps.water_source_id, rps.species, rps.interval,
+                           rps.sampled_on, rps.snapshot_as_of, rps.usable_pct,
+                           rps.green_pct, rps.dry_pct, rps.bare_pct,
+                           rps.ndmi::float8 as ndmi, rps.vci::float8 as vci,
+                           rps.rain_14d_mm::float8 as rain_14d_mm,
+                           rps.near_usable_pct, rps.far_usable_pct,
+                           rps.patch_pct, rps.patch_count,
+                           ws.ward, coalesce(ws.name, ws.ward) as water_name
+                      from ring_pasture_samples rps
+                      left join water_sources ws on ws.id = rps.water_source_id
+                     order by rps.water_source_id, rps.species, rps.interval,
+                              rps.sampled_on desc
+                    """
+                )
+                for r in cur.fetchall():
+                    near, far = r["near_usable_pct"], r["far_usable_pct"]
+                    out["rings"].append({
+                        "water_source_id": str(r["water_source_id"]),
+                        "water_point": r["water_name"],
+                        "ward": r["ward"],
+                        "species": r["species"],
+                        "interval": r["interval"],
+                        "sampled_on": _iso(r["sampled_on"]),
+                        "snapshot_as_of": _iso(r["snapshot_as_of"]),
+                        "usable_pct": r["usable_pct"],
+                        "green_pct": r["green_pct"],
+                        "dry_pct": r["dry_pct"],
+                        "bare_pct": r["bare_pct"],
+                        "ndmi": r["ndmi"],
+                        "vci": r["vci"],
+                        "rain_14d_mm": r["rain_14d_mm"],
+                        "near_pct": near,
+                        "far_pct": far,
+                        # positive = grass survives better away from the water,
+                        # which is the spatial fingerprint of grazing pressure
+                        "gap_pp": (None if near is None or far is None
+                                   else int(far) - int(near)),
+                        "patch_pct": r["patch_pct"],
+                        "patch_count": r["patch_count"],
+                    })
+    except Exception:  # noqa: BLE001
+        log.exception("forecast board read failed")
+        out["degraded"] = True
+    return out
+
+
 # --- small helpers ------------------------------------------------------------
 
 
@@ -669,4 +950,10 @@ def _iso(v) -> str | None:
         return None
     if isinstance(v, str):
         return v
-    return v.isoformat(timespec="seconds") if hasattr(v, "isoformat") else str(v)
+    if not hasattr(v, "isoformat"):
+        return str(v)
+    try:
+        return v.isoformat(timespec="seconds")
+    except TypeError:
+        # datetime.date has no timespec argument
+        return v.isoformat()

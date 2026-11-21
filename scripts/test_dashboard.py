@@ -5,6 +5,11 @@ import sys
 
 sys.path.insert(0, ".")
 
+try:  # a Windows console is cp1252 and would crash printing the Swahili emoji
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -68,15 +73,49 @@ def main() -> None:
         zid = gj["features"][0]["properties"]["id"]
         r = client.get(f"/dashboard/api/zones/{zid}" + KEY)
         print("zones:", r.status_code, "features:", len(r.json().get("features", [])))
+    # WhatsApp overview: who is talking to us + the exact menu they are offered
+    r = client.get("/dashboard/api/whatsapp" + KEY)
+    wa = r.json()
+    print("whatsapp:", r.status_code, "degraded:", wa.get("degraded"),
+          "totals:", wa.get("totals"))
+    print("  herders:", len(wa.get("herders", [])),
+          "messages:", len(wa.get("messages", [])))
+    menu = wa.get("menu") or {}
+    print("  menu: features:", menu.get("features"), "cap:", menu.get("row_limit"))
+    for lang, info in (menu.get("languages") or {}).items():
+        print(f"  menu {lang}: rows={info.get('count')} sections={info.get('sections')}")
+        for row in (info.get("rows") or [])[:12]:
+            print("    -", row["label"], "->", row["service"])
+        if info.get("count", 99) > (menu.get("row_limit") or 99):
+            raise AssertionError(f"{lang} menu exceeds the row cap")
+    # Forecast receipts: what we said, and whether it came true
+    r = client.get("/dashboard/api/forecasts" + KEY)
+    fb = r.json()
+    print("forecasts:", r.status_code, "available:", fb.get("available"),
+          "detail:", fb.get("detail"))
+    print("  receipts:", len(fb.get("receipts", [])), "rings:", len(fb.get("rings", [])),
+          "scoreboard:", fb.get("scoreboard"))
+    if fb.get("receipts"):
+        first = fb["receipts"][0]
+        print("  newest receipt:", first.get("issued_on"), first.get("water_point"),
+              first.get("days_left"), "days, outcome:", first.get("outcome"))
+    if fb.get("rings"):
+        ring = fb["rings"][0]
+        print("  newest ring:", ring.get("water_point"), ring.get("species"),
+              "usable:", ring.get("usable_pct"), "near/far gap:", ring.get("gap_pp"))
     # Auth: set a token and confirm 401 without it
     prev = get_settings().dashboard_token
     get_settings().dashboard_token = "sekrit"
+    r = client.get("/dashboard")
+    assert r.status_code == 200, r.status_code   # the shell carries no data
     r = client.get("/dashboard/api/summary")
+    assert r.status_code == 401, r.status_code
+    r = client.get("/dashboard/api/whatsapp")
     assert r.status_code == 401, r.status_code
     r = client.get("/dashboard/api/summary?key=sekrit")
     assert r.status_code == 200, r.status_code
     get_settings().dashboard_token = prev
-    print("auth guard OK (401 without token, 200 with token)")
+    print("auth guard OK (page public, data 401 without token, 200 with token)")
     print("\nDashboard smoke test passed.")
 
 

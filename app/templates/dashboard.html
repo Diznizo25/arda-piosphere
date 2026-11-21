@@ -52,6 +52,13 @@
   .flex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .muted { color:var(--muted); font-size:12px; }
   #activity { max-height:420px; overflow:auto; }
+  .scrollbox { max-height:420px; overflow:auto; }
+  .rowoff { display:flex; gap:8px; align-items:baseline; padding:3px 0;
+            border-bottom:1px solid #29374a; }
+  .rowoff .n { color:var(--muted); font-variant-numeric:tabular-nums; min-width:18px; }
+  .t-hit { background:#052e16; color:#4ade80; } .t-early { background:#172554; color:#60a5fa; }
+  .t-late { background:#422006; color:#fbbf24; } .t-miss { background:#450a0a; color:#f87171; }
+  .t-none { background:#334155; color:#cbd5e1; }
   .cogimg { border:1px solid #334155; border-radius:10px; max-width:240px; height:auto; background:#000; }
   .cogstats { overflow:auto; max-height:300px; }
   #toast { position:fixed; bottom:16px; right:16px; background:#7f1d1d; color:#fecaca;
@@ -65,6 +72,7 @@
   <span class="sub" id="uptime"></span>
   <div style="margin-left:auto" class="flex">
     <span class="muted">Auto-refresh 30s</span>
+    <button onclick="askKey(true)">Key</button>
     <button onclick="refreshAll()">Refresh now</button>
   </div>
 </header>
@@ -77,6 +85,38 @@
   <section class="panel">
     <h3>Data freshness · how current is what we tell herders?</h3>
     <div id="freshness"><span class="muted">loading…</span></div>
+  </section>
+
+  <section class="panel">
+    <h3>What a herder is offered right now &middot; the menu, as WhatsApp receives it</h3>
+    <div class="muted" style="margin-bottom:8px">
+      The menu is built per message from the feature switches below and the
+      platform's 10-row cap, so a row can disappear without anything failing.
+      This is the list a herder actually gets, before it is sent.
+    </div>
+    <div id="menuBox"><span class="muted">loading&hellip;</span></div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <h3>Who is talking to us</h3>
+      <div id="waHerders" class="scrollbox"><span class="muted">loading&hellip;</span></div>
+    </div>
+    <div class="panel">
+      <h3>Latest inbound messages</h3>
+      <div id="waMessages" class="scrollbox"><span class="muted">loading&hellip;</span></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Forecast receipts &middot; what we told him, and whether it came true</h3>
+    <div class="muted" style="margin-bottom:8px">
+      Every projection we issue is stored with the rate behind it, so the date can
+      be scored against what the ring actually did. A hit rate of "&mdash;" means
+      no forecast has been judged yet, not that the forecasts were wrong.
+    </div>
+    <div id="fcHead" class="flex" style="margin-bottom:8px"></div>
+    <div id="fcBody"><span class="muted">loading&hellip;</span></div>
   </section>
 
   <section class="grid2">
@@ -128,10 +168,28 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 'use strict';
-const KEY = new URLSearchParams(location.search).get('key') || '';
+const STORE_KEY = 'arda_dashboard_key';
+function storeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function storeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+let KEY = new URLSearchParams(location.search).get('key') || storeGet(STORE_KEY) || '';
+if (KEY) storeSet(STORE_KEY, KEY);
+let askedForKey = false;
+function askKey(force) {
+  if (askedForKey && !force) return;
+  askedForKey = true;
+  const typed = window.prompt(
+    'This dashboard is live. Its data needs the key (DASHBOARD_TOKEN) once; ' +
+    'the browser keeps it after that.\n\nDashboard key:', '');
+  if (typed && typed.trim()) {
+    const k = typed.trim();
+    storeSet(STORE_KEY, k);
+    location.href = location.pathname + '?key=' + encodeURIComponent(k);
+  }
+}
 function api(path) { return path + (KEY ? (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : ''); }
 async function getJSON(path) {
   const r = await fetch(api(path));
+  if (r.status === 401) { askKey(); throw new Error('dashboard key required'); }
   if (!r.ok) throw new Error(path + ' -> ' + r.status);
   return r.json();
 }
@@ -336,12 +394,167 @@ async function loadCog() {
   } catch (e) { toast('COG: ' + e.message); }
 }
 
+function renderMenu(w) {
+  const el = document.getElementById('menuBox');
+  if (!el) return;
+  const m = w.menu || {};
+  if (!m.available) {
+    el.innerHTML = '<span class="err">The menu could not be built on this instance ' +
+      '(the chat stack failed to import). The bot itself is unaffected: this panel only reads.</span>';
+    return;
+  }
+  const chip = (l, v) => `<span class="chip">${esc(l)} <b>${esc(v)}</b></span>`;
+  const top = chip('switch', m.env_var) +
+    chip('source', m.from_env ? 'environment override' : 'built-in defaults') +
+    chip('features on', (m.features || []).join(', ') || 'none') +
+    chip('always listed', (m.always_listed || []).join(', ') || 'none') +
+    chip('row cap', m.row_limit);
+  const langs = Object.entries(m.languages || {}).map(([lang, info]) => {
+    const style = 'background:var(--panel2)';
+    if (info.error) {
+      return `<div class="panel" style="${style}"><h3>${esc(lang)}</h3>` +
+        `<div class="err">${esc(info.error)}</div></div>`;
+    }
+    const rows = (info.rows || []).map((r, i) =>
+      `<div class="rowoff"><span class="n">${i + 1}</span><span>${esc(r.label)}</span>` +
+      `<span class="muted" title="${esc(r.id)}">${esc(r.service)}</span></div>`).join('');
+    return `<div class="panel" style="${style}"><h3>${esc(lang)} &middot; ${info.count} rows` +
+      `<span class="muted"> (${esc((info.sections || []).join(' / '))})</span></h3>` +
+      `${rows || '<span class="muted">no rows</span>'}</div>`;
+  }).join('');
+  el.innerHTML = `<div class="flex" style="margin-bottom:10px">${top}</div>` +
+    `<div class="grid2">${langs}</div>`;
+}
+
+function renderWhatsApp(w) {
+  const t = w.totals || {};
+  const chip = (l, v) => `<span class="chip">${esc(l)} <b>${esc(v ?? 0)}</b></span>`;
+  const herders = (w.herders || []).map(h => {
+    const state = h.state ? `<span class="tag t-query">${esc(h.state)}</span>`
+      : '<span class="muted">menu</span>';
+    return `<tr>` +
+      `<td><b>${esc(h.name || 'unnamed')}</b><div class="muted">${esc(h.phone || '')}</div></td>` +
+      `<td>${esc(h.water_point || '')}<div class="muted">${esc(h.ward || '')}</div></td>` +
+      `<td>${state}<div class="muted">${rel(h.state_since) || ''}</div></td>` +
+      `<td class="muted">${h.last_text ? esc(h.last_text) : '<i>no text logged</i>'}</td>` +
+      `<td>${rel(h.last_inbound_at) || '<span class="muted">never</span>'}` +
+      `<div class="muted">${h.msgs_24h || 0} in 24h</div></td>` +
+      `</tr>`;
+  }).join('');
+  document.getElementById('waHerders').innerHTML =
+    `<div class="flex" style="margin-bottom:8px">` +
+    chip('herders', t.herders) + chip('onboarded', t.onboarded) +
+    chip('active 24h', t.active_24h) + chip('messages 24h', t.messages_24h) +
+    chip('open flows', t.flows) + `</div>` +
+    (w.degraded ? '<div class="err">Database read failed &mdash; figures above are incomplete.</div>' : '') +
+    `<table><thead><tr><th>Herder</th><th>Water point</th><th>Flow state</th>` +
+    `<th>Last thing said</th><th>Heard from</th></tr></thead><tbody>` +
+    `${herders || '<tr><td colspan=5 class="muted">No herders registered yet</td></tr>'}` +
+    `</tbody></table>`;
+
+  const msgs = (w.messages || []).map(m =>
+    `<tr><td class="muted">${rel(m.at) || esc(fmtTime(m.at))}</td>` +
+    `<td>${esc(m.phone || '')}</td>` +
+    `<td>${m.text ? esc(m.text) : '<span class="muted">(' + esc(m.kind || 'non-text') + ')</span>'}</td></tr>`
+  ).join('');
+  document.getElementById('waMessages').innerHTML =
+    `<table><thead><tr><th>When</th><th>From</th><th>Message</th></tr></thead><tbody>` +
+    `${msgs || '<tr><td colspan=3 class="muted">Nothing inbound yet</td></tr>'}</tbody></table>`;
+}
+
+function fcTag(outcome) {
+  const o = outcome || 'unscored';
+  const cls = { hit: 't-hit', early: 't-miss', late: 't-late',
+                no_collapse: 't-none', unknown: 't-none' }[o] || 't-none';
+  return `<span class="tag ${cls}">${esc(o)}</span>`;
+}
+function num(v, unit) {
+  return (v == null || v === '') ? '<span class="muted">&mdash;</span>' : esc(v) + (unit || '');
+}
+function renderForecasts(f) {
+  const head = document.getElementById('fcHead');
+  const body = document.getElementById('fcBody');
+  if (!head || !body) return;
+  if (!f.available) {
+    head.innerHTML = '';
+    body.innerHTML = `<span class="warn">${esc(f.detail || 'Forecast receipts are not available on this instance.')}</span>`;
+    return;
+  }
+  const sb = f.scoreboard || {}, out = sb.outcomes || {}, causes = sb.causes || {};
+  const chip = (l, v, cls) => `<span class="chip">${esc(l)} <b class="${cls || ''}">${esc(v)}</b></span>`;
+  const hr = sb.hit_rate;
+  head.innerHTML = chip('forecasts issued', sb.total ?? 0) +
+    chip('judged', sb.scored ?? 0) +
+    chip('hit rate', hr == null ? 'not enough evidence' : Math.round(hr * 100) + '%',
+         hr == null ? '' : (hr >= 0.6 ? 'ok' : hr >= 0.35 ? 'warn' : 'err')) +
+    Object.entries(out).map(([k, v]) => chip('outcome: ' + k, v)).join('') +
+    Object.entries(causes).map(([k, v]) => chip('cause: ' + k, v)).join('');
+
+  const receipts = (f.receipts || []).map(r => {
+    const band = r.days_left == null ? '<span class="muted">no date given</span>'
+      : `${esc(r.days_left)} d` +
+        (r.days_left_lo != null && r.days_left_hi != null
+          ? `<div class="muted">${esc(r.days_left_lo)}&ndash;${esc(r.days_left_hi)} d</div>` : '');
+    const rate = r.slope_pp_week == null ? '<span class="muted">&mdash;</span>'
+      : `${esc(r.slope_pp_week)} pp/wk` +
+        (r.dry_slope_pp_week != null
+          ? `<div class="muted">dry-season ${esc(r.dry_slope_pp_week)}</div>` : '');
+    return `<tr>` +
+      `<td>${esc((r.issued_on || '').slice(0, 10))}</td>` +
+      `<td>${esc(r.water_point || '')}<div class="muted">${esc(r.species || '')} &middot; ${esc(r.interval || '')}</div></td>` +
+      `<td>${num(r.usable_pct, '%')}</td>` +
+      `<td>${band}</td>` +
+      `<td>${rate}<div class="muted">${esc(r.rate_source || '')}</div></td>` +
+      `<td>${num(r.samples)}<div class="muted">${r.span_days != null ? esc(r.span_days) + ' d' : ''}</div></td>` +
+      `<td class="muted">${esc([r.cause, r.curing ? 'curing' : ''].filter(Boolean).join(' / '))}</td>` +
+      `<td>${fcTag(r.outcome)}${r.runout_on ? `<div class="muted">ran out ${esc(r.runout_on.slice(0, 10))}</div>` : ''}</td>` +
+      `</tr>`;
+  }).join('');
+
+  const rings = (f.rings || []).map(r => {
+    const gap = r.gap_pp;
+    const gapTxt = gap == null ? '<span class="muted">&mdash;</span>'
+      : (gap > 0 ? `<span class="ok">${gap > 0 ? '+' : ''}${esc(gap)} pp</span>`
+        : `<span class="warn">${esc(gap)} pp</span>`) +
+        `<div class="muted">near ${num(r.near_pct, '%')} / far ${num(r.far_pct, '%')}</div>`;
+    return `<tr>` +
+      `<td>${esc(r.water_point || '')}<div class="muted">${esc(r.ward || '')}</div></td>` +
+      `<td>${esc(r.species || '')}<div class="muted">${esc(r.interval || '')}</div></td>` +
+      `<td class="muted">${esc((r.sampled_on || '').slice(0, 10))}</td>` +
+      `<td>${num(r.usable_pct, '%')}<div class="muted">green ${num(r.green_pct, '%')}</div></td>` +
+      `<td>${num(r.ndmi)}<div class="muted">vci ${num(r.vci)}</div></td>` +
+      `<td>${num(r.rain_14d_mm, ' mm')}</td>` +
+      `<td>${gapTxt}</td>` +
+      `<td>${num(r.patch_pct, '%')}<div class="muted">${r.patch_count != null ? esc(r.patch_count) + ' patches' : ''}</div></td>` +
+      `</tr>`;
+  }).join('');
+
+  body.innerHTML =
+    `<h3 style="margin:12px 0 6px">Forecasts we issued, newest first</h3>` +
+    `<div class="scrollbox"><table><thead><tr><th>Issued</th><th>Water point</th>` +
+    `<th>Usable</th><th>We said</th><th>Rate behind it</th><th>Samples</th>` +
+    `<th>Clue</th><th>Verdict</th></tr></thead><tbody>` +
+    (receipts || `<tr><td colspan=8 class="muted">Nothing issued yet: receipts appear the ` +
+      `first time a herder asks about a ring's pasture. This is the record that will ` +
+      `make the dates scoreable.</td></tr>`) +
+    `</tbody></table></div>` +
+    `<h3 style="margin:14px 0 6px">Latest ring reading per water point &middot; ` +
+    `what the next forecast is built from</h3>` +
+    `<div class="scrollbox"><table><thead><tr><th>Water point</th><th>Ring</th>` +
+    `<th>Read</th><th>Usable</th><th>NDMI / VCI</th><th>Rain 14d</th>` +
+    `<th>Near vs far</th><th>Patches</th></tr></thead><tbody>` +
+    (rings || `<tr><td colspan=8 class="muted">No ring readings stored yet.</td></tr>`) +
+    `</tbody></table></div>`;
+}
+
 async function refreshAll() {
   let s = {}, a = {}, ts = {}, h = {}, gj = { features: [] };
   const done = (fn, name) => fn().then(v => (window['_' + name] = v)).catch(e => toast(name + ': ' + e.message));
   await done(() => getJSON('/dashboard/api/health'), 'h');
   await done(() => getJSON('/dashboard/api/summary'), 's');
   await done(() => getJSON('/dashboard/api/freshness'), 'f');
+  await done(() => getJSON('/dashboard/api/whatsapp'), 'wa');
+  await done(() => getJSON('/dashboard/api/forecasts'), 'fc');
   await done(() => getJSON('/dashboard/api/water-sources'), 'w');
   await done(() => getJSON('/dashboard/api/activity'), 'a');
   await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
@@ -349,6 +562,9 @@ async function refreshAll() {
   a = window._a || {}; ts = window._t || {};
   renderHealth(h);
   renderFreshness(window._f || {});
+  renderMenu(window._wa || {});
+  renderWhatsApp(window._wa || {});
+  renderForecasts(window._fc || {});
   renderKPIs(s);
   renderMap(gj);
   renderActivity(a);
