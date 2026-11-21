@@ -120,7 +120,10 @@ def summary() -> dict:
                             "select count(*) as n from herd_estimates"),
                     }
                 if _table_exists(cur, "conversation_state"):
-                    out["active_flows"] = _count(
+                    # One row per phone mid-conversation. Named for what it is: a
+                    # state, not a "flow" - the same rename the WhatsApp panel made,
+                    # so the KPI and the panel cannot disagree about what they count.
+                    out["conversation_states"] = _count(
                         "select count(*) as n from conversation_state")
                 if _table_exists(cur, "query_log"):
                     out["queries"] = {

@@ -273,7 +273,7 @@ function renderKPIs(s) {
          `<div class="muted">${Object.entries(b.by_status || {}).map(([k2, v]) => k2 + ':' + v).join(' · ')}</div>`) +
     card('Feedback', gt.total ?? 0, `<div class="muted">${gt.last_14d ?? 0} in 14d</div>`) +
     card('Weights', w.records ?? 0, `<div class="muted">${w.herd_estimates ?? 0} herd est.</div>`) +
-    card('Active flows', s.active_flows ?? 0) +
+    card('Conversation states', s.conversation_states ?? 0) +
     card('Uptime', Math.round((s.uptime_seconds || 0) / 3600) + 'h');
 }
 
@@ -561,23 +561,28 @@ async function refreshAll() {
   await done(() => getJSON('/dashboard/api/activity'), 'a');
   await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
   h = window._h || {}; s = window._s || {}; gj = window._w || { features: [] };
+  if (!Array.isArray(gj.features)) gj = { features: [] };
   a = window._a || {}; ts = window._t || {};
-  renderHealth(h);
-  renderFreshness(window._f || {});
-  renderMenu(window._wa || {});
-  renderWhatsApp(window._wa || {});
-  renderForecasts(window._fc || {});
-  renderKPIs(s);
-  renderMap(gj);
-  renderActivity(a);
-  renderCharts(s, ts);
+  // One bad payload must not take the page down with it: a render that throws
+  // says so on that card and the rest of the pass still runs. (An ops view that
+  // stops halfway is how you end up trusting a stale number.)
+  const panel = (name, fn) => { try { fn(); } catch (e) { toast(name + ': ' + e.message); } };
+  panel('Health', () => renderHealth(h));
+  panel('Freshness', () => renderFreshness(window._f || {}));
+  panel('Menu', () => renderMenu(window._wa || {}));
+  panel('Conversations', () => renderWhatsApp(window._wa || {}));
+  panel('Forecasts', () => renderForecasts(window._fc || {}));
+  panel('KPIs', () => renderKPIs(s));
+  panel('Map', () => renderMap(gj));
+  panel('Activity', () => renderActivity(a));
+  panel('Charts', () => renderCharts(s, ts));
   if (!cogList.length && gj.features.length) {
-    cogList = gj.features.filter(f => f.properties.has_cog);
+    cogList = gj.features.filter(f => f.properties && f.properties.has_cog);
     const sel = document.getElementById('cogSource');
     sel.innerHTML = cogList.map(f =>
       `<option value="${esc(f.properties.id)}">${esc(f.properties.name || f.properties.ward || '?')} (${esc(f.properties.source_type)})</option>`).join('') ||
       '<option value="">No built COGs</option>';
-    if (cogList.length) loadCog();
+    if (cogList.length) panel('COG', () => loadCog());
   }
   document.getElementById('uptime').textContent = 'updated ' + new Date().toLocaleTimeString();
 }

@@ -27,10 +27,21 @@ def main() -> None:
     r = client.get("/dashboard" + KEY)
     assert r.status_code == 200 and "Ops Dashboard" in r.text
     print("page:", r.status_code, len(r.text), "bytes")
+    page = r.text
+    # The panels that answer "what does a herder see?" and "what did we promise?"
+    for wanted in ("What a herder is offered", "Forecast receipts",
+                   "Conversation state", "states stored"):
+        assert wanted in page, wanted
+    # A stored state is not a "flow": the KPI and the panel must not disagree.
+    assert "Active flows" not in page, "stale 'Active flows' label came back"
+    # One bad payload must not blank the rest of the page.
+    assert "const panel = (name, fn)" in page, "panels are no longer isolated"
     # Summary
     r = client.get("/dashboard/api/summary" + KEY)
     print("summary:", r.status_code)
     s = r.json()
+    assert "active_flows" not in s, "summary still calls conversation states flows"
+    assert "conversation_states" in s, sorted(s)
     print("  water_sources:", s.get("water_sources", {}).get("total"),
           "pastoralists:", s.get("pastoralists", {}).get("total"),
           "cogs:", s.get("cogs"))
