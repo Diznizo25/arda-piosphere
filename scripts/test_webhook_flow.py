@@ -106,6 +106,33 @@ def main() -> None:
     assert adv and any("advisory-msg" in s[1] for s in SENT), SENT
     print("confirmed herder gets advisory: OK")
 
+    # --- inbound logging: a tap must record WHAT was tapped ---
+    # Without the row title the dashboard (and the ops feed) reads "interactive"
+    # for every tap, which is exactly the state where nobody can tell whether a
+    # silent herder pressed the wrong row or none at all.
+    from app.services import query_log as ql
+
+    logged: list[dict] = []
+    orig_log = ql.log_query
+    ql.log_query = lambda **kw: logged.append(kw)
+    try:
+        whatsapp._log_inbound({"from": "254700000009", "type": "interactive",
+                               "interactive": {"list_reply": {"id": "svc:rain",
+                                                              "title": "Drought and rain"}}})
+        whatsapp._log_inbound({"from": "254700000009", "type": "text",
+                               "text": {"body": "habari yako"}})
+        whatsapp._log_inbound({"from": "254700000009", "type": "image",
+                               "image": {"id": "media-1"}})
+    finally:
+        ql.log_query = orig_log
+    got = [(entry["detail"]["type"], entry["detail"]["text"]) for entry in logged]
+    assert got[0] == ("interactive", "Drought and rain"), got[0]
+    assert got[1] == ("text", "habari yako"), got[1]
+    assert got[2] == ("image", "image"), got[2]
+    assert all(entry["detail"]["event"] == "inbound" for entry in logged)
+    assert all(entry["phone"] == "254700000009" for entry in logged)
+    print("inbound log: a tap records the row that was tapped: OK")
+
     print("\nWebhook dedup + confirm-first flow OK.")
 
 

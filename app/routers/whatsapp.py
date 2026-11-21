@@ -724,7 +724,12 @@ def _handle_message_guarded(message: dict) -> None:
 
 def _log_inbound(message: dict) -> None:
     """Record every inbound message in query_log so the ops dashboard shows live
-    WhatsApp traffic (and we can diagnose 'not replying' instantly). Fail-open."""
+    WhatsApp traffic (and we can diagnose 'not replying' instantly). Fail-open.
+
+    A tap carries no words of its own, so the row it opened IS the message: the
+    title goes into the log. Without that the dashboard reads "interactive" and
+    nobody can tell which of six rows a silent herder actually pressed.
+    """
     try:
         from app.services import query_log
 
@@ -735,9 +740,14 @@ def _log_inbound(message: dict) -> None:
         elif msg_type == "location":
             snippet = "location"
         elif msg_type == "interactive":
-            snippet = "interactive"
+            reply = message.get("interactive") or {}
+            pick = reply.get("button_reply") or reply.get("list_reply") or {}
+            snippet = (pick.get("title") or pick.get("id") or "interactive")[:80]
         elif msg_type == "audio":
             snippet = "audio"
+        elif msg_type:
+            # Never a blank line in the feed: an image or a sticker says what it is.
+            snippet = msg_type
         query_log.log_query(
             kind="other",
             phone=message.get("from"),

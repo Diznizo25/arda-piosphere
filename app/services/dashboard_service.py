@@ -763,7 +763,7 @@ def whatsapp_overview(limit: int = 20) -> dict:
                            (select count(*)::int from query_log
                              where detail->>'event' = 'inbound'
                                and created_at > now() - interval '24 hours') as messages_24h,
-                           (select count(*)::int from conversation_state) as flows,
+                           (select count(*)::int from conversation_state) as states,
                            (select count(*)::int from pastoralists
                              where onboarded_at is not null) as onboarded
                     """

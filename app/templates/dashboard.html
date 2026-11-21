@@ -445,18 +445,20 @@ function renderWhatsApp(w) {
     `<div class="flex" style="margin-bottom:8px">` +
     chip('herders', t.herders) + chip('onboarded', t.onboarded) +
     chip('active 24h', t.active_24h) + chip('messages 24h', t.messages_24h) +
-    chip('open flows', t.flows) + `</div>` +
+    chip('states stored', t.states) + `</div>` +
     (w.degraded ? '<div class="err">Database read failed &mdash; figures above are incomplete.</div>' : '') +
-    `<table><thead><tr><th>Herder</th><th>Water point</th><th>Flow state</th>` +
+    `<table><thead><tr><th>Herder</th><th>Water point</th><th>Conversation state</th>` +
     `<th>Last thing said</th><th>Heard from</th></tr></thead><tbody>` +
     `${herders || '<tr><td colspan=5 class="muted">No herders registered yet</td></tr>'}` +
     `</tbody></table>`;
 
-  const msgs = (w.messages || []).map(m =>
-    `<tr><td class="muted">${rel(m.at) || esc(fmtTime(m.at))}</td>` +
-    `<td>${esc(m.phone || '')}</td>` +
-    `<td>${m.text ? esc(m.text) : '<span class="muted">(' + esc(m.kind || 'non-text') + ')</span>'}</td></tr>`
-  ).join('');
+  const msgs = (w.messages || []).map(m => {
+    const isTap = (m.kind || '') === 'interactive';
+    const body = m.text ? esc(m.text) : '<span class="muted">(' + esc(m.kind || 'non-text') + ')</span>';
+    return `<tr><td class="muted">${rel(m.at) || esc(fmtTime(m.at))}</td>` +
+      `<td>${esc(m.phone || '')}</td>` +
+      `<td>${isTap ? '<span class="tag t-query">tapped</span> ' : ''}${body}</td></tr>`;
+  }).join('');
   document.getElementById('waMessages').innerHTML =
     `<table><thead><tr><th>When</th><th>From</th><th>Message</th></tr></thead><tbody>` +
     `${msgs || '<tr><td colspan=3 class="muted">Nothing inbound yet</td></tr>'}</tbody></table>`;

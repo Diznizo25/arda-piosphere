@@ -80,6 +80,7 @@ def main() -> None:
           "totals:", wa.get("totals"))
     print("  herders:", len(wa.get("herders", [])),
           "messages:", len(wa.get("messages", [])))
+    assert "states" in (wa.get("totals") or {}), wa.get("totals")
     menu = wa.get("menu") or {}
     print("  menu: features:", menu.get("features"), "cap:", menu.get("row_limit"))
     for lang, info in (menu.get("languages") or {}).items():
