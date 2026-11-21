@@ -13,6 +13,9 @@ strength of a number we made up:
   5. Rain is a separate sentence about uncertainty, never folded into the date.
   6. No message may claim certainty, and none may name a drug or a dose (same rule
      as the grazing ledger: we advise on grass, never on animal health).
+  7. The predictors (migration 016: dry-period rate, near/far ring shape, NDMI
+     curing) may refine the answer and explain it — never invent a number, and
+     never speak while the reading they rest on is missing.
 
 Synthetic seasons only: no database, no network, any month of the year.
 """
@@ -119,6 +122,96 @@ for word in ("dawa", "sindano", "dose", "injection"):
     assert word not in alert.lower(), (word, alert)
 print("hygiene: duplicates collapse, junk is ignored, non-alerts produce no push")
 
-print("\nDEPLETION FORECAST OK")
-
+# --- 7) an honest start: not enough history is a STATUS, not a number ----
+thin = depletion.forecast(series([44, 42]), today=TODAY)   # 2 samples, 7 days apart
+assert thin.status == "no_history" and thin.days_left is None, thin
+assert thin.usable_pct == 42, thin
+close = [depletion.Sample(TODAY - timedelta(days=4), 44),
+         depletion.Sample(TODAY - timedelta(days=2), 41),
+         depletion.Sample(TODAY, 39)]
+short = depletion.forecast(close, today=TODAY)             # 3 samples, 4-day span
+assert short.status == "no_history", short
+assert "tunaanza kupima" in depletion.line(thin), depletion.line(thin)
+assert "still measuring" in depletion.line(short, "english")
+# ... and with no measurement at all, not even that: silence.
+assert depletion.line(depletion.forecast([], today=TODAY)) == ""
 print("history: <3 samples or <12 days of span -> 'still measuring', never a number")
+
+# --- 8) the predictors must LEAD the line, and never fake a number --------
+# Everything migration 016 stores is optional; these seasons pin what each one is
+# allowed to change - and what it is not.
+def season(values, rain=None, ndmi=None, near=None, far=None, start=None):
+    """Weekly samples (oldest first) carrying the 016 context (None = not measured)."""
+    start = start or TODAY - timedelta(days=7 * (len(values) - 1))
+
+    def pick(seq, i):
+        return None if not seq else seq[i]
+
+    return [depletion.Sample(day=start + timedelta(days=7 * i), usable_pct=v,
+                             rain_14d_mm=pick(rain, i), ndmi=pick(ndmi, i),
+                             near_pct=pick(near, i), far_pct=pick(far, i))
+            for i, v in enumerate(values)]
+
+
+# A green-up month then a dry slide: fitted as one line the ring reads FLAT ("it
+# lasts"), which is the bug the dry-period rate exists to fix. The dry readings
+# alone describe the collapse that is actually happening.
+wet_then_dry = season([30, 40, 46, 44, 38, 32], rain=[45, 45, 45, 0, 0, 0])
+flat_line = depletion.forecast(
+    [depletion.Sample(day=s.day, usable_pct=s.usable_pct) for s in wet_then_dry],
+    today=TODAY)
+dry_line = depletion.forecast(wet_then_dry, today=TODAY)
+assert flat_line.status == "stable" and flat_line.days_left is None, flat_line
+assert dry_line.status == "projected" and dry_line.rate_source == "dry", dry_line
+assert dry_line.slope_pp_week == dry_line.dry_slope_pp_week == -6.0, dry_line
+assert dry_line.days_left_lo < dry_line.days_left_hi, dry_line
+assert depletion.line(dry_line, "english") != depletion.line(flat_line, "english")
+
+# ...but only while the ring is IN a dry spell. One wet reading and the dry rate
+# is history: it is reported, never used to date anything.
+still_wet = season([30, 40, 46, 44, 38, 32], rain=[45, 45, 0, 0, 0, 20])
+wet_now = depletion.forecast(still_wet, today=TODAY)
+assert wet_now.rate_source == "all" and wet_now.dry_slope_pp_week == -4.0, wet_now
+assert wet_now.status == "stable" and wet_now.days_left is None, wet_now
+
+# A GENTLER dry rate never replaces a steeper long-run one: when the fall happened
+# during the wet readings, the dry stretch is the quiet part, not the collapse.
+steep_then_calm = season([60, 40, 26, 24, 22], rain=[40, 40, 0, 0, 0])
+calm = depletion.forecast(steep_then_calm, today=TODAY)
+assert calm.rate_source == "all" and calm.dry_slope_pp_week == -2.0, calm
+assert calm.days_left is not None and calm.days_left < 20, calm
+
+# The SHAPE of the ring: near-water vs outer ring, and whether the gap is widening.
+assert depletion.pressure(season([40, 41, 40, 41], near=[40, 40, 39, 40],
+                                 far=[41, 41, 40, 41])).label == "even"
+one_read = depletion.pressure(season([40], near=[18], far=[44]))
+assert one_read.label == "grazing_legacy", one_read     # one image cannot show widening
+scar = depletion.pressure(season([40, 39, 40, 38], near=[18, 18, 18, 18],
+                                 far=[44, 44, 44, 44]))
+assert scar.label == "grazing_legacy" and scar.gap_pp == 26.0, scar
+eating = depletion.pressure(season([46, 42, 38, 34], near=[18, 16, 12, 8],
+                                  far=[44, 44, 44, 44]))
+assert eating.label == "grazing_recent" and eating.gap_change_pp == 10.0, eating
+assert depletion.cause_of(eating) == "grazing"
+assert depletion.cause_of(scar) == "grazing"
+assert depletion.cause_of(depletion.Pressure()) == "unknown"   # nothing measured
+assert depletion.forecast(season([58, 52, 46, 40, 34]), today=TODAY).cause == "unknown"
+
+# The cause reaches the push, and the stable branch still carries the context.
+grazed = depletion.forecast(season([46, 42, 38, 34], near=[18, 16, 12, 8],
+                                   far=[44, 44, 44, 44]), today=TODAY)
+assert grazed.cause == "grazing" and grazed.gap_pp == 36.0, grazed
+assert grazed.is_alert and "near the water" in depletion.alert_message(grazed, "english")
+assert not grazed.curing, grazed          # the share is already falling: no extra alarm
+
+# CURING: grass losing water while the shares have not moved - a sentence, no date.
+curing = depletion.forecast(season([40, 39, 40, 41], ndmi=[-0.10, -0.13, -0.17, -0.21]),
+                            today=TODAY)
+assert curing.status == "stable" and curing.days_left is None and curing.curing, curing
+assert "kukauka" in depletion.line(curing, "swahili"), depletion.line(curing, "swahili")
+assert "dry out" in depletion.line(curing, "english"), depletion.line(curing, "english")
+assert not depletion.is_curing(series([60, 50, 40, 30]), -10.0), \
+    "a share that is already falling needs no smoke alarm"
+print("predictors: dry-period rate, ring shape and curing each say only what they measured")
+
+print("\nDEPLETION FORECAST OK")

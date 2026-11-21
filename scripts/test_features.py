@@ -18,6 +18,9 @@ What this pins (all of it product decisions, so all of it belongs in a test):
      default menu, never an empty one).
   5. The service catalogue the AI may quote is filtered by the same switch, so the
      model can never advertise a service the router would refuse.
+  6. The catalogue may hold more rows than WhatsApp carries: a list message allows
+     10 rows, so the menu builder caps the SENT rows — and the cap never drops the
+     language row, even when ARDA_FEATURES switches every other section on.
 
 Runs without a database, without WhatsApp credentials and without network.
 """
@@ -87,7 +90,49 @@ for bad, expected in (("", features.DEFAULT_FEATURES),
         os.environ.pop(features.ENV_VAR, None)
 
 
-# --- 4) the dispatcher refuses a hidden service (no menu required) ----------
+print("override: ARDA_FEATURES switches features; an unreadable value keeps the default menu")
+
+
+# --- 4) WhatsApp's 10-row cap: the menu can never become unsendable ----------
+# The catalogue in the router holds every service so the ids, numbers and words keep
+# working; a WhatsApp list carries at most 10 rows across all sections. The cap must
+# therefore be applied to what is SENT, and it must never cost the language row —
+# switching a hidden section back on is meant to cost a row, not the way he hears us.
+_alias = {f"svc:r{i}": "rain" for i in range(1, 11)}   # any listed service will do
+_alias["svc:lang"] = "language"
+
+
+def _ids(sections):
+    return [row[0] for _, rows in sections for row in rows]
+
+
+def _section(title, rows):
+    return (title, [(f"svc:{r}", str(r), None) for r in rows])
+
+
+eleven = [_section("Ukame na malisho", ["r1", "r2", "r3", "r4"]),
+          _section("Kuanza", ["r5"]),
+          _section("Mifugo", ["r6", "r7", "r8"]),
+          _section("Mipangilio", ["r9", "r10"]),
+          _section("Lugha", ["lang"])]
+assert len(_ids(eleven)) == 11
+capped = features.filter_sections(eleven, _alias, limit=features.MENU_ROW_LIMIT)
+assert _ids(capped) == [f"svc:r{i}" for i in range(1, 10)] + ["svc:lang"], _ids(capped)
+assert len(_ids(capped)) == features.MENU_ROW_LIMIT == 10
+# The same rows, language row FIRST: the cap must still keep it (it is not a tail
+# row that happens to survive because nothing else was left).
+lang_first = [_section("Lugha", ["lang"])] + eleven[:-1]
+assert "svc:lang" in _ids(features.filter_sections(lang_first, _alias, limit=10))
+assert len(_ids(features.filter_sections(lang_first, _alias, limit=10))) == 10
+# Under the cap nothing is touched — no reordering, no dropped row.
+assert _ids(features.filter_sections(eleven[:2], _alias, limit=10)) == \
+    [f"svc:r{i}" for i in range(1, 6)]
+# No limit means no cap (the menu builder is the one place that asks for it).
+assert len(_ids(features.filter_sections(eleven, _alias))) == 11
+print("row cap: the sent menu never exceeds 10 rows and always keeps the language row")
+
+
+# --- 5) the dispatcher refuses a hidden service (no menu required) ----------
 def _router_checks() -> None:
     from app.routers import whatsapp as wa
 
@@ -172,5 +217,3 @@ except ImportError as exc:
     print(f"router checks skipped ({type(exc).__name__}: {exc})")
 
 print("\nFEATURE GATE OK")
-
-print("override: ARDA_FEATURES switches features; an unreadable value keeps the default menu")

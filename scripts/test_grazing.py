@@ -306,12 +306,23 @@ import inspect  # noqa: E402
 
 assert wa.MENU_NUMBERS["11"] == "graze", wa.MENU_NUMBERS
 assert wa.SERVICE_ALIASES["svc:graze"] == "graze"
-for sections in (wa.MENU_SECTIONS, wa.MENU_SECTIONS_EN):
-    ids = [row[0] for _, rows in sections for row in rows]
-    assert "svc:graze" in ids, ids
-    assert len(ids) <= 10, f"{len(ids)} rows is over WhatsApp's list limit"
+# The ledger is a CATALOGUE row, not necessarily a row a herder sees today: commit
+# 1a85082 hid livestock behind ARDA_FEATURES (and sentence-cased the labels) while
+# keeping every id, number and word working. So the catalogue still offers '11' and
+# svc:graze, and what WhatsApp limits is the list we SEND (10 rows across all
+# sections) — that is what is measured, in both languages, from the real payload.
 for lang in ("swahili", "english"):
-    assert "11." in wa.MENU_MSG[lang], f"11 missing from the {lang} fallback menu"
+    catalogue = [row[0] for _, rows in
+                 (wa.MENU_SECTIONS_EN if lang == "english" else wa.MENU_SECTIONS)
+                 for row in rows]
+    assert "svc:graze" in catalogue, catalogue
+    sent = [row["id"]
+            for section in wa.menu_payload("x", lang)["interactive"]["action"]["sections"]
+            for row in section["rows"]]
+    assert len(sent) <= 10, f"{lang}: {len(sent)} rows is over WhatsApp's list limit"
+    # ...and a row hidden from the list is not advertised in the numbered fallback
+    # either (the herder who learned '11' keeps it; nobody new is asked to type it).
+    assert "11." not in wa.MENU_MSG[lang], f"hidden row 11 advertised in {lang}"
 body = inspect.getsource(wa._run_service)
 assert '"graze"' in body, "_run_service has no graze branch"
 assert "grazing_flow" in inspect.getsource(wa._handle_graze_location)

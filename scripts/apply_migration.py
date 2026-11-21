@@ -51,6 +51,19 @@ CHECKS = {
         ("table", "ring_pasture_samples", None),
         ("table", "depletion_alerts", None),
     ],
+    # Both keys gained `interval` in 016 (a daily ring and a every-2-days ring are
+    # different footprints), and both tables gained the predictor columns.
+    "016": [
+        ("column", "ring_pasture_samples", "interval"),
+        ("column", "ring_pasture_samples", "ndmi"),
+        ("column", "ring_pasture_samples", "vci"),
+        ("column", "ring_pasture_samples", "near_usable_pct"),
+        ("column", "ring_pasture_samples", "patch_pct"),
+        ("column", "ring_pasture_samples", "rain_14d_mm"),
+        ("column", "depletion_forecasts", "interval"),
+        ("column", "depletion_forecasts", "rate_source"),
+        ("column", "depletion_forecasts", "snapshot_as_of"),
+    ],
 }
 
 

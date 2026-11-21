@@ -326,7 +326,8 @@ print("no-data wording: three causes, three explanations, all recorded OK")
 # the number pad, the location path AND the map, it may as well not exist.
 root = pathlib.Path(__file__).resolve().parents[1]
 wa = io.open(root / "app/routers/whatsapp.py", encoding="utf-8").read()
-assert "🌿 MALISHO YA LEO" in wa and "🌿 GRAZING TODAY" in wa, "not in the menu"
+assert '"svc:graze", "🌿 Malisho ya leo"' in wa and \
+    '"svc:graze", "🌿 Grazing today"' in wa, "not in the menu"
 assert '"11": "graze"' in wa, "menu number 11 must resolve to the grazing service"
 assert '"svc:graze": "graze"' in wa, "the clickable row has no service behind it"
 assert 'elif service == "graze":' in wa

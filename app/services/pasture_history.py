@@ -2,9 +2,18 @@
 
 Three small jobs, kept out of the renderer and out of the router:
 
-    record_sample()   one row per point/species/day — history accumulates from the
-                      weekly snapshot job (and from any advisory that already paid
-                      for a blocking satellite read), never twice per day.
+    record_sample()   one row per point/species/interval/day — history accumulates
+                      from the weekly snapshot job (and from any advisory that
+                      already paid for a blocking satellite read), never twice per
+                      day. It keeps EVERYTHING the read produced: the class mix, the
+                      index means (NDMI curing, VCI season), the near/far contrast,
+                      the patch structure and how dry the fortnight was — the
+                      predictors migration 016 added, which is what lets a forecast
+                      be predicted rather than merely fitted.
+    record_forecast() the answer we issued, in depletion_forecasts, so it can be
+                      scored against what the ring actually did
+                      (scripts/backtest_depletion.py). An unscored forecast is
+                      folklore.
     forecast_for()    the Depletion for a point/species, with the rain forecast
                       attached as uncertainty (never as arithmetic).
     line_for()        the one-sentence form a WhatsApp reply can append, fail-open.
@@ -31,28 +40,87 @@ log = logging.getLogger(__name__)
 RECORD_SQL = """
 insert into ring_pasture_samples
     (water_source_id, species, interval, sampled_on,
-     usable_pct, green_pct, dry_pct, bare_pct, blank_pct)
+     usable_pct, green_pct, dry_pct, bare_pct, blank_pct,
+     ndvi, satvi, bsi, ndmi, vci,
+     near_usable_pct, far_usable_pct, patch_pct, patch_count,
+     rain_14d_mm, soil_moisture, snapshot_as_of)
 values
     (%(water_source_id)s, %(species)s, %(interval)s, %(sampled_on)s,
-     %(usable_pct)s, %(green_pct)s, %(dry_pct)s, %(bare_pct)s, %(blank_pct)s)
-on conflict (water_source_id, species, sampled_on) do update
-set interval   = excluded.interval,
-    usable_pct = excluded.usable_pct,
-    green_pct  = excluded.green_pct,
-    dry_pct    = excluded.dry_pct,
-    bare_pct   = excluded.bare_pct,
-    blank_pct  = excluded.blank_pct,
+     %(usable_pct)s, %(green_pct)s, %(dry_pct)s, %(bare_pct)s, %(blank_pct)s,
+     %(ndvi)s, %(satvi)s, %(bsi)s, %(ndmi)s, %(vci)s,
+     %(near_usable_pct)s, %(far_usable_pct)s, %(patch_pct)s, %(patch_count)s,
+     %(rain_14d_mm)s, %(soil_moisture)s,
+     coalesce(%(snapshot_as_of)s::date,
+              (select indices_as_of from water_sources where id = %(water_source_id)s)))
+on conflict (water_source_id, species, interval, sampled_on) do update
+set usable_pct      = excluded.usable_pct,
+    green_pct       = excluded.green_pct,
+    dry_pct         = excluded.dry_pct,
+    bare_pct        = excluded.bare_pct,
+    blank_pct       = excluded.blank_pct,
+    -- The predictors themselves, so tomorrow's fit can use the curing signal and
+    -- the near/far contrast instead of re-deriving them from a share.
+    ndvi            = coalesce(excluded.ndvi, ring_pasture_samples.ndvi),
+    satvi           = coalesce(excluded.satvi, ring_pasture_samples.satvi),
+    bsi             = coalesce(excluded.bsi, ring_pasture_samples.bsi),
+    ndmi            = coalesce(excluded.ndmi, ring_pasture_samples.ndmi),
+    vci             = coalesce(excluded.vci, ring_pasture_samples.vci),
+    near_usable_pct = coalesce(excluded.near_usable_pct,
+                               ring_pasture_samples.near_usable_pct),
+    far_usable_pct  = coalesce(excluded.far_usable_pct,
+                               ring_pasture_samples.far_usable_pct),
+    patch_pct       = coalesce(excluded.patch_pct, ring_pasture_samples.patch_pct),
+    patch_count     = coalesce(excluded.patch_count, ring_pasture_samples.patch_count),
+    rain_14d_mm     = coalesce(excluded.rain_14d_mm, ring_pasture_samples.rain_14d_mm),
+    soil_moisture   = coalesce(excluded.soil_moisture,
+                               ring_pasture_samples.soil_moisture),
+    snapshot_as_of  = coalesce(excluded.snapshot_as_of,
+                               ring_pasture_samples.snapshot_as_of),
     created_at = now()
 """
 
 SAMPLES_SQL = """
-select sampled_on, usable_pct
+select sampled_on, usable_pct, ndmi, vci, near_usable_pct, far_usable_pct,
+       patch_pct, rain_14d_mm
 from ring_pasture_samples
 where water_source_id = %(water_source_id)s
   and species = %(species)s
+  and interval = %(interval)s
   and sampled_on >= %(since)s
   and usable_pct is not null
 order by sampled_on
+"""
+
+FORECAST_SQL = """
+insert into depletion_forecasts
+    (water_source_id, species, interval, issued_on, status, usable_pct,
+     slope_pp_week, dry_slope_pp_week, rate_source, days_left, days_left_lo,
+     days_left_hi, samples, span_days, confidence, cause, gap_pp, curing,
+     snapshot_as_of)
+values
+    (%(water_source_id)s, %(species)s, %(interval)s, %(issued_on)s, %(status)s,
+     %(usable_pct)s, %(slope_pp_week)s, %(dry_slope_pp_week)s, %(rate_source)s,
+     %(days_left)s, %(days_left_lo)s, %(days_left_hi)s, %(samples)s,
+     %(span_days)s, %(confidence)s, %(cause)s, %(gap_pp)s, %(curing)s,
+     coalesce(%(snapshot_as_of)s::date,
+              (select indices_as_of from water_sources where id = %(water_source_id)s)))
+on conflict (water_source_id, species, interval, issued_on) do update
+set status            = excluded.status,
+    usable_pct        = excluded.usable_pct,
+    slope_pp_week     = excluded.slope_pp_week,
+    dry_slope_pp_week = excluded.dry_slope_pp_week,
+    rate_source       = excluded.rate_source,
+    days_left         = excluded.days_left,
+    days_left_lo      = excluded.days_left_lo,
+    days_left_hi      = excluded.days_left_hi,
+    samples           = excluded.samples,
+    span_days         = excluded.span_days,
+    confidence        = excluded.confidence,
+    cause             = excluded.cause,
+    gap_pp            = excluded.gap_pp,
+    curing            = excluded.curing,
+    snapshot_as_of    = coalesce(excluded.snapshot_as_of,
+                                 depletion_forecasts.snapshot_as_of)
 """
 
 ALERT_SQL = """
@@ -73,15 +141,52 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
+def _num(value) -> float | None:
+    """A numeric that survived the row, or None - never a string in the DB."""
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rain_context(water_source_id: str) -> tuple[float | None, float | None]:
+    """(rain in the previous 14 days, latest soil moisture) from STORED data only.
+
+    Never a live API call: this runs inside a WhatsApp reply's budget, and the
+    question it answers - "was this reading taken in a dry spell?" - is about the
+    last two weeks, which are already stored (migration 010).
+    """
+    try:
+        from app.services import environment
+
+        rain, soil = environment.recent_rain(water_source_id, days=14)
+    except Exception:  # noqa: BLE001
+        log.debug("rain context unavailable for %s (non-fatal)", water_source_id,
+                  exc_info=True)
+        return None, None
+    if not rain:
+        return None, _num(soil)
+    return round(sum(rain), 2), _num(soil)
+
+
 def record_sample(water_source_id: str, species: str, status: dict | None,
                   interval: str = "daily", on: date | None = None) -> bool:
-    """Store one day's read. False when there was nothing measured to store."""
+    """Store one day's read. False when there was nothing measured to store.
+
+    Everything the status offers beyond the class mix is kept: the index means,
+    the near/far contrast, the patch structure and the rain context. Those are
+    what make a projection possible later; the mix alone is one scalar.
+    """
     if not water_source_id or not species or not status:
         return False
     usable = status.get("usable_pct")
     if usable is None:
         return False
     frac = status.get("frac") or {}
+    idx = status.get("indices") or {}
+    rain_14d, soil = _rain_context(water_source_id)
     row = {
         "water_source_id": water_source_id,
         "species": species,
@@ -92,6 +197,19 @@ def record_sample(water_source_id: str, species: str, status: dict | None,
         "dry_pct": frac.get("dry"),
         "bare_pct": frac.get("bare"),
         "blank_pct": status.get("blank_pct"),
+        # --- predictors (migration 016): stored as measured, or not at all ------
+        "ndvi": _num(idx.get("ndvi")),
+        "satvi": _num(idx.get("satvi")),
+        "bsi": _num(idx.get("bsi")),
+        "ndmi": _num(idx.get("ndmi")),
+        "vci": _num(idx.get("vci")),
+        "near_usable_pct": status.get("near_pct"),
+        "far_usable_pct": status.get("far_pct"),
+        "patch_pct": status.get("patch_pct"),
+        "patch_count": status.get("patch_count"),
+        "rain_14d_mm": rain_14d,
+        "soil_moisture": soil,
+        "snapshot_as_of": status.get("snapshot_as_of"),
     }
     try:
         with get_pg_connection() as conn:
@@ -105,14 +223,20 @@ def record_sample(water_source_id: str, species: str, status: dict | None,
 
 
 def samples_for(water_source_id: str, species: str,
-                days: int = 180) -> list[depletion.Sample]:
-    """The stored history for one ring, oldest first. Empty on any failure."""
+                days: int = 180, interval: str = "daily") -> list[depletion.Sample]:
+    """The stored history for one ring, oldest first. Empty on any failure.
+
+    `interval` filters the series on purpose: a daily ring and a every-2-days ring
+    are different footprints (migration 016), and welding them into one trend line
+    mixes a shrinking pasture with a growing one.
+    """
     try:
         with get_pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(SAMPLES_SQL, {
                     "water_source_id": water_source_id,
                     "species": species,
+                    "interval": interval or "daily",
                     "since": _today() - timedelta(days=max(1, days)),
                 })
                 rows = cur.fetchall()
@@ -122,14 +246,75 @@ def samples_for(water_source_id: str, species: str,
         return []
     out: list[depletion.Sample] = []
     for row in rows:
-        day = row["sampled_on"] if isinstance(row, dict) else row[0]
-        usable = row["usable_pct"] if isinstance(row, dict) else row[1]
+        def field(name: str, index: int):
+            return row[name] if isinstance(row, dict) else row[index]
+
+        day = field("sampled_on", 0)
+        usable = field("usable_pct", 1)
         if isinstance(day, datetime):
             day = day.date()
         if day is None or usable is None:
             continue
-        out.append(depletion.Sample(day=day, usable_pct=float(usable)))
+        out.append(depletion.Sample(
+            day=day,
+            usable_pct=float(usable),
+            ndmi=_num(field("ndmi", 2)),
+            vci=_num(field("vci", 3)),
+            near_pct=_num(field("near_usable_pct", 4)),
+            far_pct=_num(field("far_usable_pct", 5)),
+            patch_pct=_num(field("patch_pct", 6)),
+            rain_14d_mm=_num(field("rain_14d_mm", 7)),
+        ))
     return out
+
+
+def record_forecast(water_source_id: str, species: str, dep: depletion.Depletion | None,
+                    interval: str = "daily", on: date | None = None,
+                    snapshot_as_of: str | None = None) -> bool:
+    """Keep what we TOLD him, so the forecast can be scored later.
+
+    Why this table exists at all: without it a projection of "18-25 days" becomes
+    folklore. Nobody can tell whether the dry-period rate beat the long-run rate,
+    whether the ±25% band was wide enough, or whether the curing signal fired
+    before the collapse - because the numbers that were said out loud were never
+    stored anywhere. scripts/backtest_depletion.py fills outcome/runout_on in.
+
+    Same-day re-issues overwrite (the last answer of the day is the one he could
+    have read), but outcome/scored_on/runout_on are NEVER touched here: they are
+    the backtest's record of what actually happened.
+    """
+    if not water_source_id or not species or dep is None:
+        return False
+    row = {
+        "water_source_id": water_source_id,
+        "species": species,
+        "interval": interval or "daily",
+        "issued_on": on or _today(),
+        "status": dep.status,
+        "usable_pct": None if dep.usable_pct is None else int(round(dep.usable_pct)),
+        "slope_pp_week": dep.slope_pp_week,
+        "dry_slope_pp_week": dep.dry_slope_pp_week,
+        "rate_source": dep.rate_source,
+        "days_left": dep.days_left,
+        "days_left_lo": dep.days_left_lo,
+        "days_left_hi": dep.days_left_hi,
+        "samples": dep.samples,
+        "span_days": dep.span_days,
+        "confidence": dep.confidence,
+        "cause": dep.cause,
+        "gap_pp": None if dep.gap_pp is None else int(round(dep.gap_pp)),
+        "curing": bool(dep.curing),
+        "snapshot_as_of": snapshot_as_of,
+    }
+    try:
+        with get_pg_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(FORECAST_SQL, row)
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("forecast not stored for %s/%s (non-fatal)",
+                      water_source_id, species)
+        return False
 
 
 def _rain_window(water_source_id: str, today: date) -> tuple[float | None, date | None]:
@@ -170,9 +355,16 @@ def forecast_for(water_source_id: str, species: str, interval: str = "daily",
     on = today or _today()
     if record:
         record_sample(water_source_id, species, status, interval=interval or "daily", on=on)
-    history = samples_for(water_source_id, species, days=history_days)
+    history = samples_for(water_source_id, species, days=history_days,
+                          interval=interval or "daily")
     rain_mm, rain_onset = _rain_window(water_source_id, on)
-    return depletion.forecast(history, today=on, rain_mm=rain_mm, rain_onset=rain_onset)
+    dep = depletion.forecast(history, today=on, rain_mm=rain_mm, rain_onset=rain_onset)
+    if record:
+        # What was said out loud, kept: the only way this forecast can ever be
+        # scored against what the ring actually did (scripts/backtest_depletion.py).
+        record_forecast(water_source_id, species, dep, interval=interval or "daily",
+                        on=on, snapshot_as_of=status.get("snapshot_as_of"))
+    return dep
 
 
 def line_for(water_source_id: str, species: str, interval: str = "daily",
@@ -195,7 +387,8 @@ def line_from_history(water_source_id: str, species: str, interval: str = "daily
     the reading, and the trend comes from the rest. Empty when nothing is stored.
     """
     try:
-        history = samples_for(water_source_id, species, days=history_days)
+        history = samples_for(water_source_id, species, days=history_days,
+                              interval=interval or "daily")
         if not history:
             return ""
         today = _today()
@@ -247,6 +440,6 @@ def record_alert(water_source_id: str, species: str, week: date) -> bool:
 
 
 __all__ = [
-    "record_sample", "samples_for", "forecast_for", "line_for", "line_from_history",
-    "runout_week", "already_alerted", "record_alert",
+    "record_sample", "samples_for", "record_forecast", "forecast_for", "line_for",
+    "line_from_history", "runout_week", "already_alerted", "record_alert",
 ]

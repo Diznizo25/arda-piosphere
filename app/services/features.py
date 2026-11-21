@@ -83,6 +83,14 @@ UNLISTED_FEATURES: frozenset[str] = frozenset({"settings"})
 # section, so it is reachable without competing with the one job the menu serves.
 ALWAYS_LISTED: frozenset[str] = frozenset({"language"})
 
+# WhatsApp rejects a list message carrying more than 10 rows across all sections
+# (and rejects an empty section), so the cap is applied HERE as well as at the wire
+# (whatsapp_client.send_menu_list): a rejected payload means the herder receives
+# NOTHING. The catalogue in the router may hold more rows than a menu may carry —
+# that is the point of keeping hidden rows — so the cap belongs to the menu builder,
+# not to the catalogue.
+MENU_ROW_LIMIT = 10
+
 ENV_VAR = "ARDA_FEATURES"
 
 
@@ -128,6 +136,11 @@ def is_listed(service: str | None) -> bool:
     return feature in enabled_features()
 
 
+def _service_of(row_id: str, alias_lookup=None) -> str:
+    """The service a menu row id runs ('svc:rain' -> 'rain', via the router's map)."""
+    return (alias_lookup or {}).get(row_id, row_id.replace("svc:", ""))
+
+
 def filter_rows(rows, alias_lookup=None):
     """Keep the menu rows whose id resolves to a listed service.
 
@@ -136,24 +149,61 @@ def filter_rows(rows, alias_lookup=None):
     """
     out = []
     for row in rows:
-        rid = row[0]
-        service = (alias_lookup or {}).get(rid, rid.replace("svc:", ""))
-        if is_listed(service):
+        if is_listed(_service_of(row[0], alias_lookup)):
             out.append(row)
     return out
 
 
-def filter_sections(sections, alias_lookup=None):
+def cap_sections(sections, limit: int = MENU_ROW_LIMIT, alias_lookup=None):
+    """Trim a menu to WhatsApp's row limit WITHOUT losing an ALWAYS_LISTED row.
+
+    The menu is ordered by importance — the drought/pasture rows first, the language
+    row last in its own section — so the rows to lose are the least important ones,
+    i.e. the optional ones latest in the order. But trimming from the tail alone
+    would drop the language row first: it IS the tail, and it is the one row
+    ARDA_FEATURES may not take away (a herder who cannot read our replies has no
+    other way to say so). So the always-listed rows are counted first, kept wherever
+    they sit, and the remaining budget goes to the optional rows in menu order.
+
+    With every feature switched on the menu is 11 rows; this is what brings it back
+    to 10 without ever costing the language switch.
+    """
+    total = sum(len(rows) for _, rows in sections)
+    if total <= limit:
+        return list(sections)
+    fixed = sum(1 for _, rows in sections for row in rows
+                if _service_of(row[0], alias_lookup) in ALWAYS_LISTED)
+    budget = max(limit - fixed, 0)
+    out = []
+    for title, rows in sections:
+        kept = []
+        for row in rows:
+            if _service_of(row[0], alias_lookup) in ALWAYS_LISTED:
+                kept.append(row)
+            elif budget > 0:
+                kept.append(row)
+                budget -= 1
+        if kept:
+            out.append((title, kept))
+    return out
+
+
+def filter_sections(sections, alias_lookup=None, limit: int | None = None):
     """Filter a menu's sections, dropping any section that ends up empty.
 
     An empty WhatsApp list section is rejected by the API, so this is not
     cosmetic: an empty section would turn the whole menu into an error.
+
+    `limit` optionally caps the surviving rows (WhatsApp: 10) via cap_sections,
+    which keeps the ALWAYS_LISTED rows whatever the cap is.
     """
     out = []
     for title, rows in sections:
         kept = filter_rows(rows, alias_lookup)
         if kept:
             out.append((title, kept))
+    if limit is not None:
+        out = cap_sections(out, limit, alias_lookup)
     return out
 
 
@@ -186,11 +236,13 @@ __all__ = [
     "DEFAULT_FEATURES",
     "UNLISTED_FEATURES",
     "ALWAYS_LISTED",
+    "MENU_ROW_LIMIT",
     "ENV_VAR",
     "enabled_features",
     "is_enabled",
     "is_listed",
     "filter_rows",
+    "cap_sections",
     "filter_sections",
     "hidden_service_reply",
 ]

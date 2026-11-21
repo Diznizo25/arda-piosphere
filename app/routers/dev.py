@@ -566,10 +566,22 @@ async def depletion_probe(request: Request, x_debug_key: str = Header(default=""
         "samples": getattr(dep, "samples", None),
         "span_days": getattr(dep, "span_days", None),
         "rain_may_recover": getattr(dep, "rain_may_recover", None),
+        # what the forecast leaned on (migration 016): the dry-period rate it used,
+        # and the two readings that explain WHY the ring is going
+        "rate_source": getattr(dep, "rate_source", None),
+        "dry_slope_pp_week": getattr(dep, "dry_slope_pp_week", None),
+        "cause": getattr(dep, "cause", None),
+        "gap_pp": getattr(dep, "gap_pp", None),
+        "curing": getattr(dep, "curing", None),
         "line": depletion_service.line(dep, lang),
         "alert": depletion_service.alert_message(dep, lang),
-        "stored_samples": [{"day": str(s.day), "usable_pct": s.usable_pct}
-                           for s in pasture_history.samples_for(point_id, species)],
+        # the series the fit actually saw - the SAME interval, or the line above
+        # would have been fitted on a different footprint than the one shown
+        "stored_samples": [
+            {"day": str(s.day), "usable_pct": s.usable_pct, "ndmi": s.ndmi,
+             "near_pct": s.near_pct, "far_pct": s.far_pct,
+             "patch_pct": s.patch_pct, "rain_14d_mm": s.rain_14d_mm}
+            for s in pasture_history.samples_for(point_id, species, interval=interval)],
     }
 
 

@@ -15,12 +15,14 @@ The router import needs the full app (rasterio etc.), which some Windows hosts b
 that import fails the suite still checks the pure parts and says so.
 """
 import inspect
+import os
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.services import chat  # noqa: E402
+from app.services import features  # noqa: E402
 from app.services import whatsapp_client  # noqa: E402
 
 # --- 1) greetings ---------------------------------------------------------
@@ -161,6 +163,22 @@ try:
     assert sw_ids == en_ids, (sw_ids, en_ids)
     hidden = {"svc:pest", "svc:animals", "svc:graze", "svc:status", "svc:voice"}
     assert not hidden & set(sw_ids), f"hidden rows are still offered: {hidden & set(sw_ids)}"
+
+    # With EVERY feature switched on the catalogue holds 11 rows; 'voice' is unlisted,
+    # so today that lands on exactly the 10 rows a WhatsApp list carries. One more row
+    # and features.cap_sections has to bite — and when it does it must cost an
+    # optional row, never the Lugha row (features.ALWAYS_LISTED), because a herder
+    # who cannot read our replies has no other way to say so.
+    os.environ[features.ENV_VAR] = "drought,pasture,register,livestock,settings"
+    try:
+        payload = wa.menu_payload("x", "swahili")
+        sections = payload["interactive"]["action"]["sections"]
+        all_ids = [row["id"] for s in sections for row in s["rows"]]
+        assert len(all_ids) <= 10, all_ids
+        assert all_ids[-1] == "svc:lang", all_ids
+        assert all(s["rows"] for s in sections), "an empty section would be rejected"
+    finally:
+        os.environ.pop(features.ENV_VAR, None)
 
     # The language row is ALWAYS offered (features.ALWAYS_LISTED) — a herder who
     # cannot read our replies has no other way to say so — and it sits last, in its

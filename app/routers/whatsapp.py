@@ -476,9 +476,16 @@ def _menu_sections(lang: str):
     Filtered by app/services/features.py, which is also what gates the dispatcher,
     so the menu can never offer a service the router would refuse (or hide one it
     would happily run).
+
+    The catalogue above holds more rows than a WhatsApp list may carry (10 across
+    all sections), so the result is capped here — by features.cap_sections, which
+    keeps the language row whatever ARDA_FEATURES says. Switching a hidden section
+    back on can therefore never make the menu unsendable, and never silently costs
+    him the language switch.
     """
     sections = MENU_SECTIONS_EN if lang == "english" else MENU_SECTIONS
-    return features.filter_sections(sections, SERVICE_ALIASES)
+    return features.filter_sections(sections, SERVICE_ALIASES,
+                                    limit=features.MENU_ROW_LIMIT)
 
 
 # Interactive id -> the service name the numbered menu dispatches to, so both paths

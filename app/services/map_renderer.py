@@ -1125,6 +1125,27 @@ def _draw_direction_arrow(draw: ImageDraw.ImageDraw, x1: float, y1: float, x2: f
 # --- pasture overlay ---------------------------------------------------------
 
 
+def _classify(arr):
+    """Forage class per pixel: 1 green | 2 dry forage | 3 bare | 4 unclear | 0 nodata.
+
+    Split out of _nearest_good_patch so the pasture stats, the predictors and the
+    painted layer all classify from ONE place: a threshold change must move every
+    answer at once, or the legend and the percentage start disagreeing.
+    """
+    t = get_advisory_thresholds().vegetation
+    ndvi, satvi, bsi = arr[0], arr[1], arr[2]
+
+    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
+    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
+    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
+    classes[good & (ndvi < t["ndvi_green_threshold"])
+            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2
+    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
+    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
+    classes[good & (classes == 0)] = 4  # uncertain
+    return classes
+
+
 def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     """Classify the overview stack and return the best usable pasture patch.
 
@@ -1134,18 +1155,7 @@ def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     far-away global centroid. Falls back to the global weighted centroid when
     no herder position is supplied. score = 3 (grass) or 2 (dry forage).
     """
-    t = get_advisory_thresholds().vegetation
-    ndvi, satvi, bsi = arr[0], arr[1], arr[2]
-
-    good = np.isfinite(ndvi) & np.isfinite(satvi) & np.isfinite(bsi)
-    classes = np.full(ndvi.shape, 0, dtype=np.uint8)  # 0 = nodata
-    # 1 green | 2 dry forage | 3 bare | 4 uncertain
-    classes[good & (ndvi >= t["ndvi_green_threshold"])] = 1
-    classes[good & (ndvi < t["ndvi_green_threshold"])
-            & (satvi >= t["satvi_dry_forage_threshold"]) & (bsi < t["bsi_high_threshold"])] = 2
-    classes[good & (satvi < t["satvi_bare_threshold"])] = 3
-    classes[good & (bsi >= t["bsi_high_threshold"])] = 3
-    classes[good & (classes == 0)] = 4  # uncertain
+    classes = _classify(arr)
 
     score = np.where(classes == 1, 3.0, np.where(classes == 2, 2.0, 0.0))
     good_px = score > 0
@@ -1315,6 +1325,14 @@ def _overlay_view(water_source_id: str, species: str | None,
     return ws.lat, ws.lon, zoom, mpp, cx - half, cy + half, radius_km
 
 
+# The bands one overview read gives us: NDVI, SATVI, BSI (what we classify with)
+# plus NDMI (grass moisture - the curing signal) and VCI (poor FOR THE SEASON?).
+# Asking for all five costs ONE decode, not five, and the two extra bands are the
+# earliest warnings in the whole system (see depletion.py). Band order is
+# raster_read.BAND_NAMES: 1 NDVI, 3 SATVI, 4 BSI, 5 NDMI, 7 VCI.
+PREDICTOR_BANDS = [1, 3, 4, 5, 7]
+
+
 def _read_classes(water_source_id: str, warm: bool = False):
     """(classes, transform) from the overview COG, or None when unavailable.
 
@@ -1326,24 +1344,38 @@ def _read_classes(water_source_id: str, warm: bool = False):
     already started instead of fetching the same bytes a second time
     (raster_read.read_overview_array_blocking).
     """
+    res = _read_stack(water_source_id, PREDICTOR_BANDS, warm=warm)
+    if res is None:
+        return None
+    arr, transform = res
+    return _classify(arr), transform
+
+
+def _read_stack(water_source_id: str, bands, warm: bool = False):
+    """(array, transform) for the asked-for bands, or None when unavailable.
+
+    ONE reader for every map path, so the page, the PNG and the advisory share a
+    single decode of the same bytes. `warm=True` never waits for a cold download
+    (see raster_read.read_overview_array_warm); `warm=False` joins a download the
+    page already started instead of fetching the same 8 MB a second time.
+    """
     from app.services import raster_read
 
     try:
         if warm:
             res = raster_read.read_overview_array_warm(
-                water_source_id, bands=[1, 3, 4], max_dim=512)
+                water_source_id, bands=list(bands), max_dim=512)
         else:
             res = raster_read.read_overview_array_blocking(
-                water_source_id, bands=[1, 3, 4], max_dim=512)
+                water_source_id, bands=list(bands), max_dim=512)
     except Exception:  # noqa: BLE001
         return None
     if res is None:
         return None
-    arr, transform = res
-    if arr.shape[0] < 3:
+    arr = res[0]
+    if arr is None or arr.shape[0] < 3:
         return None
-    _, classes = _nearest_good_patch(arr, transform, None, None)
-    return classes, transform
+    return res
 
 
 def _class_mask_within(classes, transform, lon_c: float, lat_c: float,
@@ -1362,6 +1394,155 @@ def _class_mask_within(classes, transform, lon_c: float, lat_c: float,
     km_x = 111.32 * math.cos(math.radians(lat_c))
     km = np.sqrt((dlon * km_x) ** 2 + (dlat * 110.57) ** 2)
     return km <= radius_km
+
+
+# --- the predictors: what the NEXT weeks will do, from the same bytes ---------
+# The inner share of the ring is the ground a herd walks over on an ordinary day;
+# beyond it, only the trips that cost real energy.
+NEAR_FRAC = 0.4
+# Fewer readable pixels than this in a zone, and we say nothing about that zone.
+MIN_ZONE_PX = 20
+# Patch structure is counted on a coarse grid: the question is "one block of grass,
+# or scattered specks?", which survives decimation by 3-4.
+PATCH_GRID = 120
+# Blobs of a single decimated cell are resampling artefacts, not forage.
+MIN_PATCH_CELLS = 2
+
+
+def _zone_usable_pct(classes, mask) -> float | None:
+    """Usable% among the PAINTED classes inside a mask (None when unreadable).
+
+    Same arithmetic as the ring percentage the map shows, so the near/far contrast
+    and the headline number can never disagree about what counts as valid.
+    """
+    painted = mask & ((classes == 1) | (classes == 2) | (classes == 3))
+    valid = int(painted.sum())
+    if valid < MIN_ZONE_PX:
+        return None
+    usable = int((mask & ((classes == 1) | (classes == 2))).sum())
+    return 100.0 * usable / valid
+
+
+def _patch_stats(usable, zone):
+    """(largest patch as % of the ring, number of patches), or None.
+
+    WHY NOT JUST THE SHARE: a ring can hold 25% usable forage as one block a herd
+    can walk into, or as 200 specks between bare ground it cannot. The share is
+    identical; the grazing is not. Fragmentation gets its own number, and it moves
+    WEEKS before the total share does.
+
+    scipy is not a dependency, so the components are labelled here: the mask is
+    decimated to at most PATCH_GRID cells across and joined with a union-find.
+    Decimation drops whole cells, so a block of grass stays a block - only specks
+    smaller than a cell can vanish, which is the resolution the answer needs.
+    """
+    if usable is None or zone is None or not zone.any():
+        return None
+    rows = np.flatnonzero(zone.any(axis=1))
+    cols = np.flatnonzero(zone.any(axis=0))
+    window = (slice(int(rows[0]), int(rows[-1]) + 1),
+              slice(int(cols[0]), int(cols[-1]) + 1))
+    inside = zone[window]
+    sub = usable[window]
+    step = max(1, int(math.ceil(max(sub.shape) / PATCH_GRID)))
+    inside = inside[::step, ::step]
+    sub = sub[::step, ::step] & inside
+    ring_cells = int(inside.sum())
+    if ring_cells == 0:
+        return None
+    h, w = sub.shape
+    label = -np.ones((h, w), dtype=np.int32)
+    cells = int(sub.sum())
+    if cells == 0:
+        return None
+    label[sub] = np.arange(cells, dtype=np.int32)
+    parent = list(range(cells))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def join(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for r in range(h):
+        for c in range(w):
+            i = int(label[r, c])
+            if i < 0:
+                continue
+            if c + 1 < w:
+                j = int(label[r, c + 1])
+                if j >= 0:
+                    join(i, j)
+            if r + 1 < h:
+                j = int(label[r + 1, c])
+                if j >= 0:
+                    join(i, j)
+    sizes: dict[int, int] = {}
+    for i in range(cells):
+        root = find(i)
+        sizes[root] = sizes.get(root, 0) + 1
+    largest = round(100.0 * max(sizes.values()) / ring_cells, 1)
+    # A one-cell blob on the decimated grid is an artefact of the resampling, not
+    # a place a herd can spend a day; anything bigger is a real block of forage.
+    patches = sum(1 for size in sizes.values() if size >= MIN_PATCH_CELLS)
+    return largest, patches
+
+
+def _ring_predictors(arr, transform, lon_c: float, lat_c: float,
+                     radius_km: float, classes=None) -> dict:
+    """The numbers that LEAD the class mix, from the overview already in memory.
+
+    Returns only what it could actually read: a missing band (an older 3-band COG)
+    or a zone with too few clean pixels simply omits that key, so the caller stores
+    nothing instead of a zero that would look like a measurement.
+
+    `classes` is passed in by the status call, which has already classified the
+    same array: one decode, one classification, several answers.
+    """
+    out: dict = {}
+    if arr is None or arr.shape[0] < 3:
+        return out
+    if classes is None:
+        classes = _classify(arr)
+    ring = _class_mask_within(classes, transform, lon_c, lat_c, radius_km)
+    if not ring.any():
+        return out
+
+    means: dict[str, float] = {}
+    for index, name in ((0, "ndvi"), (1, "satvi"), (2, "bsi"),
+                        (3, "ndmi"), (4, "vci")):
+        if arr.shape[0] <= index:
+            continue
+        band = arr[index][ring]
+        vals = band[np.isfinite(band)]
+        if vals.size >= MIN_ZONE_PX:
+            means[name] = round(float(vals.mean()), 3)
+    if means:
+        out["indices"] = means
+
+    near = _class_mask_within(classes, transform, lon_c, lat_c, radius_km * NEAR_FRAC)
+    near_pct = _zone_usable_pct(classes, near)
+    far_pct = _zone_usable_pct(classes, ring & ~near)
+    if near_pct is not None and far_pct is not None:
+        out["near_pct"] = round(near_pct)
+        out["far_pct"] = round(far_pct)
+        # Positive = more to eat away from the water: the piosphere's signature of
+        # grazing pressure, measured without a single head count.
+        out["gap_pp"] = round(far_pct - near_pct)
+
+    usable = ring & ((classes == 1) | (classes == 2))
+    try:
+        patch = _patch_stats(usable, ring)
+    except Exception:  # noqa: BLE001  (a missing patch number must not cost the page)
+        patch = None
+    if patch is not None:
+        out["patch_pct"], out["patch_count"] = patch
+    return out
 
 
 def _rgba_classes(classes, transform, west: float, north: float, mpp: float,
@@ -1491,7 +1672,7 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
         "usable_pct": None,
         "frac": None,
     }
-    res = _read_classes(water_source_id, warm=warm)
+    res = _read_stack(water_source_id, PREDICTOR_BANDS, warm=warm)
     if res is None:
         if warm:
             # THE RINGS MUST NOT WAIT FOR THE SATELLITE. A cold overview fetch
@@ -1502,7 +1683,8 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
 
             out["available"] = raster_read.overview_exists(water_source_id)
         return out
-    classes, transform = res
+    arr, transform = res
+    classes = _classify(arr)
     mask = _class_mask_within(classes, transform, lon, lat, radius_km)
     inside = classes * mask
     # Only the three PAINTED classes count (unclear is left transparent on the
@@ -1524,6 +1706,14 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
         }
         usable = frac["green"] + frac["dry"]
         out.update({"available": True, "usable_pct": usable, "frac": frac})
+    # THE PREDICTORS THAT LEAD THAT NUMBER (migration 016): index means, the
+    # near-water vs outer-ring contrast and the patch structure. Additive only, so
+    # an older caller ignores them - and nothing is invented when a band or a zone
+    # is unreadable (see _ring_predictors).
+    try:
+        out.update(_ring_predictors(arr, transform, lon, lat, radius_km, classes))
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 

@@ -137,7 +137,8 @@ print("voice: '22 mm' is spoken as milimita OK")
 # A herder does not read release notes: if the pest check is not in the menu, it may
 # as well not exist. This is the check that it is actually wired into WhatsApp.
 wa = io.open("app/routers/whatsapp.py", encoding="utf-8").read()
-assert "🔍 KUPE NA MINYOO" in wa and "🔍 TICKS AND WORMS" in wa, \
+assert '"svc:pest", "🔍 Kupe na minyoo"' in wa and \
+    '"svc:pest", "🔍 Ticks and worms"' in wa, \
     "the pest service is not in the menu"
 assert "WADUDU" not in wa, "the generic word for bugs must not be the menu label"
 assert '"10": "pest"' in wa, "menu number 10 must resolve to the pest service"
