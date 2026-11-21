@@ -391,6 +391,44 @@ reason: an alert that fires on 7-day rain signals should not point at a 14-day-o
 picture. If GEE export or Actions minutes ever bite, split it into two alternating
 half-batches (same total work, still weekly per point).
 
+## The dated forecast (what we said, and whether it happened)
+
+*"Malisho yataisha lini?"* is answered with a date, so the date has to be
+checkable. `app/services/depletion.py` fits a line through the usable share of the
+herd's own ring (`ring_pasture_samples`, migration 015) and projects when it
+reaches `RUNOUT_PCT`. The rules that keep it honest:
+
+- **No number without a history.** Fewer than 3 samples or a span under 12 days is
+  `no_history` ("still measuring"), never a guess — two points make a line through
+  noise. A date past 60 days is `beyond_horizon`: we date weeks, not seasons.
+- **The rate that matters is the rate dry.** A second slope is fitted only over
+  samples taken in dry spells (`rain_14d_mm` under `DRY_WINDOW_MM`), and when it
+  exists it wins, because mixing green-up with collapse is what made a collapsing
+  ring read as "stable". The answer says which rate it used (`rate_source`).
+- **Three clues, each speaking only for itself.** Near-vs-far usable contrast
+  (grazing pressure from the water outward), patch share and count
+  (fragmentation: a ring of specks is unusable to a herd while its average still
+  looks fine), and NDMI falling while the class mix is unchanged (curing, 2–4
+  weeks before the mix moves). Curing is reported as *a chance of recovery*, never
+  as a date.
+- **The band is the answer's shape**, and confidence is declared (`low` until the
+  fit clears an R² floor).
+
+**The receipts.** Migration 016 (`migrations/016_pasture_predictors.sql`) keeps
+every forecast we issue in `depletion_forecasts` — the date, the band, the rate,
+the sample count and span, the clues — because a projection that is only ever said
+out loud can never be scored. `scripts/backtest_depletion.py` is the other half:
+it finds the day the ring really ran out and stores `hit` / `early` / `late` /
+`no_collapse` / `unknown`, refusing to score while the future has not arrived and
+refusing to call `no_history` a hit. The dashboard's **forecast receipts** panel
+shows the issued list, the ring readings the next forecast is built from, and the
+hit rate — which reads *"not enough evidence"* rather than a flattering 0%.
+
+Files: `app/services/depletion.py`, `app/services/pasture_history.py` (the single
+classification pass that produces all of the above), `scripts/backtest_depletion.py`.
+Tests: `scripts/test_depletion.py`, `scripts/test_backtest_depletion.py`,
+`scripts/test_pasture_predictors.py`.
+
 ## The conversational layer (a grounded assistant, not a free chatbot)
 
 A herder can just type a question. `app/services/chat.py` answers it — and the
@@ -834,7 +872,13 @@ Checks & debugging:
   verdict, free-first offsets, the no-drug / no-body-weight boundary),
   `test_grazing.py` (the flow: empty states, dedupe, ask-the-manyatta-once,
   two-messages-max, token-only map endpoint), `test_conversation_flows.py`
-  (end-to-end WhatsApp flows)
+  (end-to-end WhatsApp flows), `test_depletion.py` (when a date is allowed, the
+  dry-season rate, curing as a chance not a date), `test_backtest_depletion.py`
+  (hit / early / late / no_collapse / unscored — never a guess about the future),
+  `test_pasture_predictors.py` (near/far contrast, patches, a 3-band stack),
+  `test_features.py` (the menu switch and its 10-row cap), `test_dashboard.py`
+  (every dashboard endpoint, both menus, and the token guard), and
+  `backtest_depletion.py` (scores the forecasts we already issued)
 
 Deployment & scheduling:
 - `trigger_render_deploy.py`, `trigger_build_workflow.py`,
@@ -842,13 +886,15 @@ Deployment & scheduling:
 
 ## Live ops dashboard
 
-`/dashboard` (protected by `DASHBOARD_TOKEN`, pass `?key=<token>`) gives a live
-view of the whole system:
+`/dashboard` answers the questions an operator actually asks. The HTML shell is
+public (it ships no data); every `/dashboard/api/*` call requires
+`DASHBOARD_TOKEN`, which the page asks for once and remembers
+(`?key=<token>` still works for scripts and bookmarks):
 
 - **Health chips** — DB + R2 reachability, deploy commit, uptime, last build &
   last query timestamps.
 - **KPI cards** — water points, COGs built, herders, queries in 24h (+ avg
-  latency, errors), builds by status, feedback, weights, active flows.
+  latency, errors), builds by status, feedback, weights, conversation states.
 - **Live water-point map** (Leaflet) — every registered water point colored by
   build status (built/running/pending/failed/seed), with popups and a toggle
   that draws the species rings.
@@ -856,8 +902,28 @@ view of the whole system:
   status, herder feedback.
 - **Recent activity** — advisory/map queries, build events, ground-truth
   reports (auto-refreshes every 30s).
+- **Data freshness** — each source against the cadence it is supposed to have
+  (see above).
+- **What a herder is offered** — the exact WhatsApp list, both languages, row
+  by row, with the switch that decided it (`ARDA_FEATURES`, the built-in
+  defaults, the 10-row cap, the always-listed language row). Rows are built per
+  message, so a row can go missing without anything failing; this panel is how
+  that becomes visible.
+- **Who is talking to us** — one row per herder (water point, conversation
+  state, last words, messages in 24h) plus the raw inbound feed. A tap is shown
+  as the row that was tapped, not as the word "interactive", so a herder who
+  only ever presses buttons is legible — and an unknown phone shows up instead
+  of hiding.
+- **Forecast receipts** — every forecast we issued (the date, the rate and
+  sample count behind it, the clue, and the backtest's verdict), next to the
+  latest ring reading per water point that the next forecast will be built from.
 - **COG explorer** — per water point: all 8 index-band stats (mean/min/max/std)
   and color-mapped preview images read straight from R2.
+
+Every panel degrades on its own: a dead dependency blanks one card instead of the
+page, because an ops view that fails as a whole is useless exactly when it is
+needed. `scripts/test_dashboard.py` walks every endpoint, asserts the row cap on
+both language menus, and checks that the shell is public while the data is not.
 
 Query/activity data lives in `query_log` (migration 004); the advisory and map
 paths write to it fail-open so logging never breaks the herder experience.
