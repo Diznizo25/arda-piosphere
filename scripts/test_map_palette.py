@@ -17,6 +17,7 @@ the two can never disagree about what a colour means.
 """
 import io
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -94,16 +95,35 @@ assert "comfortable: '#ffffff'" in mv and "far: '#ffffff'" in mv, \
     "live-map zone limits must be neutral too"
 # No green may appear outside the pasture palette in either file.
 for label, text in (("map_renderer.py", src), ("mapview.py", mv)):
-    green_hexes = [h for h in ("#16a34a", "#059669", "#10b981", "#22c55e", "#065f46")
+    green_hexes = [h for h in ("#15803d", "#16a34a", "#059669", "#10b981", "#22c55e",
+                               "#065f46")
                    if h in text]
-    allowed = {"#16a34a"} if label == "mapview.py" else set()
+    allowed = {"#15803d"} if label == "mapview.py" else set()
     stray = set(green_hexes) - allowed
     assert not stray, f"{label} uses green for something other than pasture: {stray}"
 # Green is a ROLE, not a decoration: in the live map the pasture hex may appear exactly
 # once — as the pasture colour map. A green button or banner tells a herder "this is good
 # grass" while asking him for input. (This rule caught the map's own Send button.)
-assert mv.count("#16a34a") == 1, \
-    f"mapview.py uses the pasture green {mv.count('#16a34a')} times; green is pasture only"
-print("live map: same palette, no stray green")
+assert mv.count("#15803d") == 1, \
+    f"mapview.py uses the pasture green {mv.count('#15803d')} times; green is pasture only"
+
+# --- 5) the KEY must be the PAINT ------------------------------------------
+# A swatch that is a different green from every pixel of the layer teaches the wrong
+# colour. The live key used #16a34a while the layer painted #15803d, so it is now
+# parsed out of the page and compared with the renderer's own constants.
+m = re.search(r"const pastureCols = \{ green:'(#[0-9a-f]{6})', dry:'(#[0-9a-f]{6})', "
+              r"bare:'(#[0-9a-f]{6})' \};", mv)
+assert m, "the live map's pasture colour key is gone"
+hexed = lambda c: "#%02x%02x%02x" % (c[0], c[1], c[2])  # noqa: E731
+want = (hexed(mr.PASTURE_GREEN), hexed(mr.PASTURE_DRY), hexed(mr.PASTURE_BARE))
+assert tuple(m.groups()) == want, f"the key ({tuple(m.groups())}) is not the paint ({want})"
+
+# The static PNG key is drawn from the constants themselves, so it cannot drift; what
+# can drift is WHERE the colour goes. Two rules, pinned in the source:
+assert "fill = style[0] if (active and not pasture_available) else None" in src, \
+    "the active ring's tint is painting over the pasture classes again"
+assert "sampled[km > radius_km] = 0" in src, \
+    "the PNG's pasture colour is no longer clipped to the rings its key names"
+print("live map: same palette, no stray green, key == paint")
 
 print("\nMAP PALETTE OK")

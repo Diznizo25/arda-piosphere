@@ -61,11 +61,15 @@ assert "grazing pin: plot radius" in gr, \
     "and log it, because it is not stored per event yet (a column is a separate step)"
 
 # --- 5) no green chrome was introduced (the palette rule lives in test_map_palette) --
-assert "background:#16a34a" not in mv, "a green button reads as 'this is good grass'"
+assert "background:#16a34a" not in mv and "background:#15803d" not in mv, \
+    "a green button reads as 'this is good grass'"
 
 # --- 6) what he sees as he zooms: the colour steps aside, the names arrive -----
-assert "const DEEP_ZOOM = 16" in mv and "if (z > 15 && !overlayForced)" in mv, \
-    "the pasture colour must leave when he is close enough to look for his own plot"
+# "Steps aside", not "leaves": removing the layer above z15 is the bug test_mapview
+# pins (he loses the pasture exactly where he looks for his own plot). Deep in, it
+# fades to a light wash; one tap on the toggle restores it at full strength.
+assert "const DEEP_ZOOM = 16" in mv and "z > DEEP_ZOOM ? 0.55" in mv, \
+    "the pasture colour must fade at depth, not disappear"
 assert "overlayForced" in mv, "...and one tap on the toggle must still bring it back"
 assert "map.on('zoomend'" in mv and "applyOverlayStyle(); applyLabels();" in mv, \
     "both depth rules must run when he zooms"

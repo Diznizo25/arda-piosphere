@@ -73,11 +73,30 @@ def main() -> None:
 
     # 3) confirm the overlay actually classified (green patch present) by
     #    checking the best-pasture output is not None
-    img, best, note = map_renderer._build_pasture_overlay("x", 37.30 * 20037508.34 / 180.0,
-                                                          map_renderer._mercator_y(0.55), 100.0)
+    west = 37.30 * 20037508.34 / 180.0
+    north = map_renderer._mercator_y(0.55)
+    img, best, pct = map_renderer._build_pasture_overlay("x", west, north, 100.0)
     assert img is not None
     assert best is not None, "expected a best-pasture patch"
-    print(f"pasture overlay OK best={best} note={note!r}")
+    print(f"pasture overlay OK best={best} usable={pct}%")
+
+    # 3b) the colour is CLIPPED to the ring the legend talks about, and the share
+    #     is counted from the painted classes only. A ring centred 200 km away must
+    #     paint NOTHING — that is what stops the PNG colouring the corners of a map
+    #     where no ring is drawn (the same clip the live layer has).
+    def painted(im):
+        return int((np.asarray(im)[:, :, 3] > 0).sum())
+
+    far, _, _ = map_renderer._build_pasture_overlay(
+        "x", west, north, 100.0, center_lon=37.40 + 2.0, center_lat=0.45, radius_km=5.0)
+    near, _, _ = map_renderer._build_pasture_overlay(
+        "x", west, north, 100.0, center_lon=37.40, center_lat=0.45, radius_km=1000.0)
+    assert painted(img) > 0, "nothing was painted at all"
+    assert painted(far) == 0, "colour is painted outside the ring the key names"
+    assert painted(near) == painted(img), "a 1000 km ring must clip nothing"
+    assert pct is not None and 0 <= pct <= 100, f"usable share is not a percentage: {pct}"
+    print(f"ring clip OK (unclipped {painted(img)} px, far ring {painted(far)} px, "
+          f"usable {pct}%)")
 
     # 4) numbered confirmation markers + confirmed-water highlight render
     numbered = [

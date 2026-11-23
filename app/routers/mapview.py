@@ -434,7 +434,11 @@ const typeName = { river:'River/Mto', borehole:'Borehole', well:'Well/Kisima',
 // colours used to fight the rings, the pasture layer and each other.
 const WATER_HEX = '#2563eb';
 const ringHex = { cattle:'#7c3aed', shoat:'#db2777', camel:'#ea580c' };
-const pastureCols = { green:'#16a34a', dry:'#8a4d17', bare:'#78716c' };
+// The KEY must be the PAINT. These three hexes are map_renderer.PASTURE_GREEN /
+// PASTURE_DRY / PASTURE_BARE byte for byte (21,128,61 / 138,77,23 / 120,113,108);
+// the green swatch used to be TWO STEPS brighter than the layer, so the key taught
+// a colour no pixel on the map had (scripts/test_map_palette.py pins key == paint).
+const pastureCols = { green:'#15803d', dry:'#8a4d17', bare:'#78716c' };
 // Herder-reported water status: blue = confirmed water now, amber = seasonal,
 // red = reported dry/broken/gone, grey = never confirmed.
 const statusCols = { functional:'#0ea5e9', flowing:'#0ea5e9', intermittent:'#f59e0b',

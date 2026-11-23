@@ -460,15 +460,22 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
 
     # Pasture-quality overlay (satellite forage classification) under the rings.
     best_pasture: tuple[float, float, int] | None = None
-    pasture_note: str | None = None
+    pasture_pct: int | None = None
+    pasture_km: float | None = None
     pasture_available = False
     if pasture and not fit_points:
-        pasture_img, best_pasture, pasture_note = _build_pasture_overlay(
-            water_source_id, west, north, mpp, herder_lon, herder_lat
+        # Clip to the SAME radius as the interactive layer, so the PNG legend and
+        # the /mapview key quote one number instead of two.
+        pasture_km = _zone_radius_km(ws, zones, species, water_interval)
+        pasture_img, best_pasture, pasture_pct = _build_pasture_overlay(
+            water_source_id, west, north, mpp, herder_lon, herder_lat,
+            center_lon=lon, center_lat=lat, radius_km=pasture_km,
         )
         if pasture_img is not None:
             img = Image.alpha_composite(img.convert("RGBA"), pasture_img)
             pasture_available = True
+        else:
+            pasture_km = None
 
     overlay = Image.new("RGBA", (IMG_SIZE, IMG_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -513,11 +520,20 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
                                  "circular — re-run generate_piosphere_zones.py",
                                  zone["species"], water_source_id, len(coords))
                 pts = [_lonlat_to_px(px, py, west, north, mpp) for px, py in coords]
-                # Fill ONLY the herder's own species ring. Three translucent fills
+                # Fill ONLY the herder's own species ring — three translucent fills
                 # stacked on top of each other turn the middle of the map into one
                 # muddy colour, which is a large part of why the map read as unclear.
+                #
+                # AND NEVER FILL OVER THE PASTURE LAYER. The fill is a tint laid on
+                # the whole ring interior, so with pasture on it painted a lavender
+                # (cattle) or pink (shoat) wash across every colour class: the grass
+                # and dry-forage codes came out as shades of the ring, and the herder
+                # saw exactly what he reported — "rings with no pasture colour".
+                # When the satellite layer is painted, that IS the fill; the outline
+                # and the legend row still say which ring is his.
+                fill = style[0] if (active and not pasture_available) else None
                 draw.polygon(pts,
-                             fill=style[0] if active else None,
+                             fill=fill,
                              outline=style[1],
                              width=3 if active else 2)
                 if zone["species"] == species and zone_fracs:
@@ -598,7 +614,8 @@ def render_rings_png(water_source_id: str, herder_lon: float | None = None,
     _draw_legend(draw, [] if fit_points else zones,
                  ward=None if fit_points else (ws.name or ws.ward),
                  county=None if fit_points else ws.county,
-                 pasture_note=None if fit_points else pasture_note,
+                 pasture_pct=None if fit_points else pasture_pct,
+                 pasture_km=None if fit_points else pasture_km,
                  lang=lang,
                  active_species=None if fit_points else species,
                  effective_km=eff_radius_km if (not fit_points and eff_radius_km) else None)
@@ -1017,9 +1034,10 @@ def _draw_confirmed_source(draw: ImageDraw.ImageDraw, west: float, north: float,
 
 
 def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None = None,
-                 county: str | None = None, pasture_note: str | None = None,
+                 county: str | None = None, pasture_pct: int | None = None,
                  lang: str = "swa", active_species: str | None = None,
-                 effective_km: float | None = None) -> None:
+                 effective_km: float | None = None,
+                 pasture_km: float | None = None) -> None:
     font = _get_font(15)
     small = _get_font(13)
     line_h = 20
@@ -1041,22 +1059,32 @@ def _draw_legend(draw: ImageDraw.ImageDraw, zones: list[dict], ward: str | None 
                          ("  beyond = far — head back", (60, 60, 60))]
 
     pasture_rows = []
-    if pasture_note:
+    if pasture_pct is not None:
+        # The percentage is WORDED in the map's language and measured on the same
+        # pixels the colours come from, over the SAME radius the colour is clipped to
+        # (the widest ring). Naming the radius matters: on a cattle map the 25 km
+        # outer ring can be off-canvas, so "inside the ring" would be a claim the
+        # picture cannot support, while "up to km 25" is exactly what is drawn.
+        km_txt = f"{pasture_km:g}" if pasture_km else ""
         if lang == "swa":
+            head = (f"Rangi ya malisho (hadi km {km_txt}):" if km_txt
+                    else "Rangi ya malisho:")
             pasture_rows = [
-                ("Rangi ya malisho (ndani ya duara):", None),
+                (head, None),
                 ("  kijani = nyasi", PASTURE_GREEN),
                 ("  kahawia = nyasi kavu", PASTURE_DRY),
                 ("  kijivu = tupu (wazi halipakwi rangi)", PASTURE_BARE),
-                (f"  {pasture_note}", None),
+                (f"  {pasture_pct}% = malisho yanayoweza kuliwa", None),
             ]
         else:
+            head = (f"Pasture colours (up to {km_txt} km):" if km_txt
+                    else "Pasture colours:")
             pasture_rows = [
-                ("Pasture colours (inside rings):", None),
+                (head, None),
                 ("  green = grass", PASTURE_GREEN),
                 ("  brown = dry forage", PASTURE_DRY),
                 ("  grey = bare (unclear areas are left uncoloured)", PASTURE_BARE),
-                (f"  {pasture_note}", None),
+                (f"  {pasture_pct}% = usable forage", None),
             ]
 
     # Water is ONE colour now: the marker's LABEL says which kind it is ("Kisima",
@@ -1189,10 +1217,18 @@ def _nearest_good_patch(arr, transform, herder_lon=None, herder_lat=None):
     return best, classes
 
 
-def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, herder_lat=None):
+def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None,
+                           herder_lat=None, center_lon=None, center_lat=None,
+                           radius_km=None):
     """Classify each COG pixel into a forage class and build an RGBA overlay.
 
-    Returns (overlay_image_or_None, best_pasture_(lon,lat,score), note).
+    Returns (overlay_image_or_None, best_pasture_(lon,lat,score), usable_pct).
+
+    `center_lon/center_lat/radius_km` clip the colour to the same radius the
+    interactive layer uses (`_zone_radius_km`: the widest stored ring). The legend
+    says "malisho rangi ndani ya duara" — colours inside the rings — so painting
+    the whole viewport contradicted the key: on a 25 km map the corners were
+    coloured a wash of bare ground that belongs to no ring at all.
     """
     from app.services.raster_read import read_overview_array_blocking
 
@@ -1210,13 +1246,6 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
     import numpy as np
 
     best, classes = _nearest_good_patch(arr, transform, herder_lon, herder_lat)
-
-    # Fraction of valid pixels that are usable forage (for the legend note).
-    usable = int((classes == 1).sum()) + int((classes == 2).sum())
-    valid_px = int((classes > 0).sum())
-    note = None
-    if valid_px:
-        note = f"{100 * usable / valid_px:.0f}% usable pasture"
 
     # Sample the classification into the IMG_SIZE viewport with an accurate
     # per-pixel geolocation (inverse Mercator), then build the RGBA overlay.
@@ -1244,11 +1273,38 @@ def _build_pasture_overlay(water_source_id, west, north, mpp, herder_lon=None, h
                  & ((lats[:, None] - f0) / e_ >= 0) & ((lats[:, None] - f0) / e_ <= h - 1))
     sampled = classes[row_i, col_i]
     sampled[~in_bounds] = 0
+    # Clip to the ring stack, exactly like the interactive layer (_rgba_classes),
+    # so the colour never appears outside the circles the key talks about.
+    if center_lon is not None and center_lat is not None and radius_km:
+        dlon = lons[None, :] - center_lon
+        dlat = lats[:, None] - center_lat
+        km_x = 111.32 * math.cos(math.radians(center_lat))
+        km = np.sqrt((dlon * km_x) ** 2 + (dlat * 110.57) ** 2)
+        sampled[km > radius_km] = 0
+
+    # The percentage is the share of the WHOLE ring, measured on the raster with the
+    # same helper the live layer uses — not a count of the visible pixels. Nearest-
+    # neighbour sampling into a 1024 px viewport aliases with the zoom, so counting
+    # the picture made the number change as the map zoomed and disagree with
+    # /mapview (31% vs 22% for Hassan Plot). The COLOUR is still clipped to what is
+    # visible; the NUMBER is a property of the ring.
+    usable_pct: int | None = None
+    if center_lon is not None and center_lat is not None and radius_km:
+        shares = _class_shares(classes, _class_mask_within(
+            classes, transform, center_lon, center_lat, radius_km))
+        if shares:
+            usable_pct = shares["green"] + shares["dry"]
+    else:
+        # No ring given (the mocked renderer path): fall back to the painted pixels
+        # in view, still excluding class 4 so "unclear" is never counted as ground.
+        usable_px = int((sampled == 1).sum()) + int((sampled == 2).sum())
+        painted_px = usable_px + int((sampled == 3).sum())
+        usable_pct = round(100 * usable_px / painted_px) if painted_px else None
 
     out_rgba = np.zeros((IMG_SIZE, IMG_SIZE, 4), dtype=np.uint8)
     for k, color in color_map.items():
         out_rgba[sampled == k] = color
-    return Image.fromarray(out_rgba, "RGBA"), best, note
+    return Image.fromarray(out_rgba, "RGBA"), best, usable_pct
 
 
 def pasture_guidance(water_source_id: str, herder_lon: float, herder_lat: float):
@@ -1407,6 +1463,26 @@ MIN_ZONE_PX = 20
 PATCH_GRID = 120
 # Blobs of a single decimated cell are resampling artefacts, not forage.
 MIN_PATCH_CELLS = 2
+
+
+def _class_shares(classes, mask) -> dict | None:
+    """{green, dry, bare} percentages of the PAINTED pixels inside a mask, or None
+    when too few pixels are readable.
+
+    THE one place this arithmetic lives. The live key, the PNG legend and the
+    near/far contrast all ask the same question about the same ring, so the ring
+    cannot be 22% on one screen and 31% on the other (it was: the PNG counted the
+    whole raster including class 4 "unclear", which is deliberately not painted).
+    """
+    painted = mask & ((classes == 1) | (classes == 2) | (classes == 3))
+    valid = int(painted.sum())
+    if valid < MIN_ZONE_PX:
+        return None
+    return {
+        "green": round(100.0 * int((mask & (classes == 1)).sum()) / valid),
+        "dry": round(100.0 * int((mask & (classes == 2)).sum()) / valid),
+        "bare": round(100.0 * int((mask & (classes == 3)).sum()) / valid),
+    }
 
 
 def _zone_usable_pct(classes, mask) -> float | None:
@@ -1686,10 +1762,9 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     arr, transform = res
     classes = _classify(arr)
     mask = _class_mask_within(classes, transform, lon, lat, radius_km)
-    inside = classes * mask
     # Only the three PAINTED classes count (unclear is left transparent on the
     # map, so it must not inflate the legend percentages).
-    painted = (inside == 1) | (inside == 2) | (inside == 3)
+    painted = mask & ((classes == 1) | (classes == 2) | (classes == 3))
     valid = int(painted.sum())
     # How much of HIS reach we could not read at all: cloud, shadow, mosaic edge or
     # no clean pass. Reported as a share of the ring so a herder sees "a few gaps
@@ -1698,14 +1773,12 @@ def pasture_overlay_status(water_source_id: str, species: str | None = None,
     in_ring = int(mask.sum())
     if in_ring:
         out["blank_pct"] = round(100.0 * (in_ring - valid) / in_ring)
-    if valid:
-        frac = {
-            "green": round(100.0 * int((inside == 1).sum()) / valid),
-            "dry": round(100.0 * int((inside == 2).sum()) / valid),
-            "bare": round(100.0 * int((inside == 3).sum()) / valid),
-        }
-        usable = frac["green"] + frac["dry"]
-        out.update({"available": True, "usable_pct": usable, "frac": frac})
+    # ONE arithmetic for every screen: this is the same call the WhatsApp PNG's
+    # legend makes, so the ring reads the same percentage on both.
+    frac = _class_shares(classes, mask)
+    if frac:
+        out.update({"available": True, "usable_pct": frac["green"] + frac["dry"],
+                    "frac": frac})
     # THE PREDICTORS THAT LEAD THAT NUMBER (migration 016): index means, the
     # near-water vs outer-ring contrast and the patch structure. Additive only, so
     # an older caller ignores them - and nothing is invented when a band or a zone
