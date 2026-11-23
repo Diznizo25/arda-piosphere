@@ -32,6 +32,21 @@
   .panel { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:12px 14px; }
   .panel h3 { margin:0 0 8px; font-size:14px; }
   #map { height:460px; border-radius:10px; background:#223; }
+  .mapwrap { position:relative; }
+  /* The map had rings but no key, so a dashed circle said nothing about which herd it
+     belonged to. The key floats over the map, like the herder's /mapview key. */
+  #mapLegend { position:absolute; z-index:600; top:10px; left:10px; max-width:270px;
+               background:rgba(15,23,42,.88); border:1px solid #334155; border-radius:10px;
+               padding:8px 10px; font-size:12px; line-height:1.35; }
+  #mapLegend .lgt { color:var(--muted); font-size:11px; text-transform:uppercase;
+                    letter-spacing:.05em; margin-bottom:4px; }
+  #mapLegend .lgrow { display:flex; gap:8px; align-items:center; margin-top:3px; }
+  #mapLegend .sw { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
+  #mapLegend .sw.ring { background:transparent; border:2px dashed; border-radius:50%;
+                        width:13px; height:13px; }
+  #mapLegend .sw.dot { border-radius:50%; }
+  #mapLegend .lgnote { color:var(--muted); font-size:11px; margin-top:6px; }
+  #mapLegend a { color:#93c5fd; }
   .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
   .chartbox { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:10px 12px; }
   .chartbox h3 { margin:0 0 6px; font-size:13px; }
@@ -63,6 +78,18 @@
   .cogstats { overflow:auto; max-height:300px; }
   #toast { position:fixed; bottom:16px; right:16px; background:#7f1d1d; color:#fecaca;
            padding:10px 16px; border-radius:10px; display:none; font-size:13px; }
+  /* THE KEY IS A ONE-LINE BAR, NEVER A MODAL. It used to be a blocking browser
+     prompt on the
+     first 401: cancelling it left every panel empty and the page looking dead, with
+     nothing on screen saying why — which is exactly how "the dashboard isn't
+     loading" gets reported. The shell renders first; this bar only appears when the
+     server actually refuses, and it can be dismissed. */
+  #keybar { display:none; gap:8px; align-items:center; flex-wrap:wrap;
+            background:#422006; border:1px solid #a16207; color:#fde68a;
+            padding:8px 14px; font-size:13px; }
+  #keybar.show { display:flex; }
+  #keybar input { background:var(--panel2); color:var(--text); border:1px solid #475569;
+                  border-radius:8px; padding:6px 10px; font-size:13px; min-width:220px; }
 </style>
 
 <body>
@@ -76,6 +103,16 @@
     <button onclick="refreshAll()">Refresh now</button>
   </div>
 </header>
+
+<div id="keybar">
+  <span>This deployment keeps its data behind <b>DASHBOARD_TOKEN</b>. Paste the key
+    once (the browser remembers it) — or unset that variable on the service and the
+    dashboard opens with no key at all.</span>
+  <input id="keyinput" type="password" placeholder="dashboard key" autocomplete="off"
+         onkeydown="if (event.key === 'Enter') useKey()">
+  <button onclick="useKey()">Use key</button>
+  <button onclick="document.getElementById('keybar').classList.remove('show')">Later</button>
+</div>
 
 <div id="chips"></div>
 
@@ -122,7 +159,10 @@
   <section class="grid2">
     <div class="panel">
       <h3>Water points (live) · click a pin for details &amp; species rings</h3>
-      <div id="map"></div>
+      <div class="mapwrap">
+        <div id="map"></div>
+        <div id="mapLegend"><span class="muted">loading&hellip;</span></div>
+      </div>
     </div>
     <div class="panel">
       <h3>Recent activity</h3>
@@ -175,21 +215,31 @@ let KEY = new URLSearchParams(location.search).get('key') || storeGet(STORE_KEY)
 if (KEY) storeSet(STORE_KEY, KEY);
 let askedForKey = false;
 function askKey(force) {
-  if (askedForKey && !force) return;
-  askedForKey = true;
-  const typed = window.prompt(
-    'This dashboard is live. Its data needs the key (DASHBOARD_TOKEN) once; ' +
-    'the browser keeps it after that.\n\nDashboard key:', '');
-  if (typed && typed.trim()) {
-    const k = typed.trim();
-    storeSet(STORE_KEY, k);
-    location.href = location.pathname + '?key=' + encodeURIComponent(k);
-  }
+  // No modal, no reload, no dead end. Cancelling the old blocking browser prompt left nine
+  // empty panels and no sentence explaining the page was fine — only refused. The
+  // bar is shown once, and the key is applied in place (localStorage + a refresh).
+  const bar = document.getElementById('keybar');
+  if (!bar) return;
+  if (!askedForKey || force) { bar.classList.add('show'); askedForKey = true; }
+  const input = document.getElementById('keyinput');
+  if (input && !input.value) input.focus();
+}
+function useKey() {
+  const input = document.getElementById('keyinput');
+  const typed = input ? String(input.value || '').trim() : '';
+  if (!typed) { askKey(true); return; }
+  KEY = typed;
+  storeSet(STORE_KEY, typed);
+  const bar = document.getElementById('keybar');
+  if (bar) bar.classList.remove('show');
+  refreshAll();
 }
 function api(path) { return path + (KEY ? (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) : ''); }
 async function getJSON(path) {
   const r = await fetch(api(path));
-  if (r.status === 401) { askKey(); throw new Error('dashboard key required'); }
+  // 401 means the DEPLOYMENT is closed (DASHBOARD_TOKEN set), not that the app is
+  // broken — say that, in the place he is already looking, and let the shell stand.
+  if (r.status === 401) { askKey(); throw new Error('data is behind DASHBOARD_TOKEN'); }
   if (!r.ok) throw new Error(path + ' -> ' + r.status);
   return r.json();
 }
@@ -206,14 +256,49 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 5000); }
 
 let map = null, ringsLayer = null, charts = {};
-const STATUS_COLORS = { built:'#22c55e', done:'#22c55e', running:'#f59e0b', pending:'#f59e0b',
-                        failed:'#ef4444', seed:'#64748b' };
+let legendZones = null;   // the zones last drawn, so a refresh cannot wipe the key
+// ONE HUE = ONE MEANING, the same rule the herder's map follows (pinned there by
+// scripts/test_map_palette.py): the three species rings keep the purple / magenta /
+// orange they have on /mapview, and every water pin is one blue. The rings used to be
+// blue / green / orange here, so blue meant a ring AND water and green meant a ring AND
+// grass — on the very screen where an operator decides what a herder is looking at.
+const RING_COLORS = { cattle:'#7c3aed', shoat:'#db2777', camel:'#ea580c' };
+const WATER_HEX = '#2563eb';
+
+function ringLegendRows(zones) {
+  // Species -> the widest stored ring of that species (the GeoJSON carries radius_km).
+  const km = {};
+  (zones || []).forEach(f => {
+    const p = (f && f.properties) || {};
+    if (!p.species) return;
+    if (km[p.species] == null || Number(p.radius_km) > km[p.species]) km[p.species] = Number(p.radius_km);
+  });
+  return Object.keys(km).sort((a, b) => km[a] - km[b]).map(sp =>
+    `<div class="lgrow"><span class="sw ring" style="border-color:${RING_COLORS[sp] || '#64748b'}"></span>` +
+    `<span>${esc(sp)} ring <b>${km[sp]} km</b></span></div>`).join('');
+}
+
+function renderMapLegend(zones) {
+  // THE CODES COME FIRST AND ARE ALWAYS HERE: before this the map drew rings with no
+  // key at all, so a dashed circle said nothing — which colour is which herd, how far
+  // it reaches, and where the pasture colours are.
+  const el = document.getElementById('mapLegend');
+  if (!el) return;
+  el.innerHTML = '<div class="lgt">Colour key</div>' +
+    `<div class="lgrow"><span class="sw dot" style="background:${WATER_HEX}"></span>` +
+    '<span>Water point <span class="muted">(type in the popup)</span></span></div>' +
+    (ringLegendRows(zones) ||
+      '<div class="lgrow muted">Click a pin: its species rings are drawn on the map</div>') +
+    '<div class="lgnote">Pasture colours — green = grass, brown = dry forage, grey = bare — ' +
+    'are on the herder\'s live map: <a href="/mapview" target="_blank" rel="noopener">/mapview</a>.</div>';
+}
 
 function initMap() {
   if (!window.L) { document.getElementById('map').textContent = 'Leaflet CDN unavailable — map disabled.'; return; }
   map = L.map('map').setView([0.35, 37.7], 9);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
     { attribution: '© OpenStreetMap', maxZoom: 17 }).addTo(map);
+  renderMapLegend(legendZones);
 }
 
 function renderHealth(h) {
@@ -286,13 +371,14 @@ function renderMap(gj) {
                      'ilri':'Water (ILRI)', 'ground_truth':'Pinned by herder' };
   const byType = { 'river':'River', 'borehole':'Borehole', 'well':'Well', 'spring':'Spring',
                    'pan':'Water pan', 'dam':'Dam', 'lake':'Lake', 'tap':'Tap' };
-  const WTYPE_COLORS = { 'river':'#2563eb', 'borehole':'#ea580c', 'well':'#059669', 'spring':'#16a34a',
-                         'pan':'#06b6d4', 'dam':'#0891b2', 'lake':'#0891b2', 'tap':'#9333ea' };
   gj.features.forEach(f => {
     const p = f.properties, [lon, lat] = f.geometry.coordinates;
-    const color = WTYPE_COLORS[p.water_type] || STATUS_COLORS[p.build_status] || '#3b82f6';
+    // ONE BLUE FOR WATER, like the herder's map: the pin's label (and its popup tag)
+    // names the type. Eight per-type colours no key could ever explain is how a water
+    // map stops being readable — and green meant "spring" here while it means "grass"
+    // everywhere else in the product.
     const m = L.circleMarker([lat, lon], { radius: 7, color: '#0f172a', weight: 1,
-      fillColor: color, fillOpacity: 0.95 });
+      fillColor: WATER_HEX, fillOpacity: 0.95 });
     m.bindPopup(
       `<b>${esc(p.name || p.ward || 'Unknown')}</b>` +
       (p.name && p.ward ? ` <span class="muted">(${esc(p.ward)})</span>` : '') +
@@ -310,15 +396,18 @@ function renderMap(gj) {
     m.addTo(map);
     map._markers.push(m);
   });
+  // A 30-second refresh rebuilds the pins; the key must not disappear with them.
+  renderMapLegend(legendZones);
 }
 
 async function showRings(id) {
   try {
     const z = await getJSON('/dashboard/api/zones/' + id);
     if (ringsLayer) map.removeLayer(ringsLayer);
-    const style = { cattle: { color: '#3b82f6' }, shoat: { color: '#10b981' }, camel: { color: '#f97316' } };
-    ringsLayer = L.geoJSON(z, { style: f => ({ color: (style[f.properties.species] || {}).color,
+    ringsLayer = L.geoJSON(z, { style: f => ({ color: RING_COLORS[f.properties.species] || '#64748b',
       weight: 2, fillOpacity: 0.08, dashArray: '4 4' }) }).addTo(map);
+    legendZones = z.features || [];
+    renderMapLegend(legendZones);
     map.fitBounds(ringsLayer.getBounds(), { padding: [20, 20] });
   } catch (e) { toast('Rings: ' + e.message); }
 }
@@ -549,6 +638,19 @@ function renderForecasts(f) {
     `</tbody></table></div>`;
 }
 
+function renderNoData() {
+  // Nine refusals used to look like nine broken panels. One sentence, where the KPIs
+  // belong, saying which of the two things is true: the key is missing, or the server
+  // is down. Silence is the one answer an ops screen must never give.
+  const el = document.getElementById('kpis');
+  if (!el) return;
+  el.innerHTML = '<div class="kpi" style="grid-column:1/-1">' +
+    '<div class="l">no data</div><div class="n">–</div>' +
+    '<div class="muted">Nothing came back from /dashboard/api/*. If this deployment ' +
+    'sets <b>DASHBOARD_TOKEN</b>, paste it in the bar above; unset it and the dashboard ' +
+    'opens with no key. If the bar did not appear, the server itself is unreachable.</div></div>';
+}
+
 async function refreshAll() {
   let s = {}, a = {}, ts = {}, h = {}, gj = { features: [] };
   const done = (fn, name) => fn().then(v => (window['_' + name] = v)).catch(e => toast(name + ': ' + e.message));
@@ -562,6 +664,12 @@ async function refreshAll() {
   await done(() => getJSON('/dashboard/api/timeseries?days=14'), 't');
   h = window._h || {}; s = window._s || {}; gj = window._w || { features: [] };
   if (!Array.isArray(gj.features)) gj = { features: [] };
+  if (!window._h && !window._s) {
+    // Every call refused or failed: say it once, in the KPI row, and stop pretending
+    // the refresh ran (the "updated <time>" stamp is what made a dead page look live).
+    try { renderNoData(); } catch (e) { /* the note is not worth throwing over */ }
+    return;
+  }
   a = window._a || {}; ts = window._t || {};
   // One bad payload must not take the page down with it: a render that throws
   // says so on that card and the rest of the pass still runs. (An ops view that

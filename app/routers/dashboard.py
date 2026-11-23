@@ -2,10 +2,11 @@
 WhatsApp conversation and the forecast receipts.
 
 The HTML shell is public (it contains no data, only the code that asks for it), so
-the link can be shared and the key typed in once; every data endpoint is behind
-DASHBOARD_TOKEN (pass ?key=<token> or Authorization: Bearer <token>). Every data
-endpoint is fail-open (returns partial JSON rather than 500ing) so the dashboard
-stays up even when a dependency is degraded.
+the link can be shared. With DASHBOARD_TOKEN unset the whole dashboard is open —
+no key to type at all; with it set, every data endpoint needs it (?key=<token> or
+Authorization: Bearer <token>) and the shell shows a one-line key bar instead of
+blocking the page. Every data endpoint is fail-open (returns partial JSON rather
+than 500ing) so the dashboard stays up even when a dependency is degraded.
 """
 from __future__ import annotations
 

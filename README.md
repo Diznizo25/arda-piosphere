@@ -725,9 +725,17 @@ PIL + stdlib math (Web Mercator is closed-form; no projection library):
   ring fits.
 - **Centered on the herder**, with blue "Wewe hapa" / red water pins, a line and
   distance badge between them, and the ward direction.
-- Satellite pasture overlay: **green = grass, brown = dry forage, red = bare**
-  (areas the satellite can't read reliably are left uncoloured), with
-  "% usable pasture" in the legend.
+- Satellite pasture overlay: **green = grass, brown = dry forage, grey = bare**
+  (areas the satellite can't read reliably are left uncoloured), clipped to the
+  ring stack — the same radius the live layer uses — with the share of the ring
+  that is usable forage in the legend, worded in the map's language. Two things
+  were wrong here: the colour was painted across the whole picture (a 25 km map
+  had coloured corners outside every ring, under a key that says "inside the
+  rings"), and the active ring's translucent fill was laid over it, so cattle maps
+  came out lavender and the forage codes were invisible. **The ring fill is now
+  dropped when the pasture layer is painted** — the outline still identifies the
+  ring — and the percentage counts only the painted classes inside the ring, so
+  the PNG and `/mapview` quote the same number for the same water point.
 - **Rivers are mapped as water** (`config/rivers.geojson`, 180 OSM segments):
   a river is a LONG water body, so its grazing zones are distance **ribbons
   along the river line** (comfortable ≤0.5 R, edge ≤0.8 R, far limit = R)
@@ -887,17 +895,22 @@ Deployment & scheduling:
 ## Live ops dashboard
 
 `/dashboard` answers the questions an operator actually asks. The HTML shell is
-public (it ships no data); every `/dashboard/api/*` call requires
-`DASHBOARD_TOKEN`, which the page asks for once and remembers
-(`?key=<token>` still works for scripts and bookmarks):
+public (it ships no data). **With `DASHBOARD_TOKEN` unset the dashboard is open —
+no key to type, it just loads.** With it set, every `/dashboard/api/*` call needs
+the token and the page shows a one-line *key bar* (never a modal: a cancelled
+prompt used to leave nine empty panels and a page that looked dead); `?key=<token>`
+still works for scripts and bookmarks, and the browser remembers it.
 
 - **Health chips** — DB + R2 reachability, deploy commit, uptime, last build &
   last query timestamps.
 - **KPI cards** — water points, COGs built, herders, queries in 24h (+ avg
   latency, errors), builds by status, feedback, weights, conversation states.
-- **Live water-point map** (Leaflet) — every registered water point colored by
-  build status (built/running/pending/failed/seed), with popups and a toggle
-  that draws the species rings.
+- **Live water-point map** (Leaflet) — every registered water point as one blue
+  pin (blue is water, everywhere in the product; the type and build status are in
+  the popup), a **colour key** that is always on the map — water, plus each
+  species ring in the purple / magenta / orange the herder's own map uses and
+  how far it reaches — and a toggle that draws those rings. The key survives the
+  30-second refresh and links to `/mapview` for the pasture colours.
 - **Charts** — queries per day by kind, water points by source, builds by
   status, herder feedback.
 - **Recent activity** — advisory/map queries, build events, ground-truth

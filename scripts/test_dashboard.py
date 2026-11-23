@@ -36,6 +36,26 @@ def main() -> None:
     assert "Active flows" not in page, "stale 'Active flows' label came back"
     # One bad payload must not blank the rest of the page.
     assert "const panel = (name, fn)" in page, "panels are no longer isolated"
+    # THE MAP MUST SAY WHAT ITS COLOURS MEAN. The rings were drawn in blue / green /
+    # orange with no key at all — blue meant a ring and water, green meant a ring and
+    # grass — on the screen an operator reads the pasture advice from. The rings now
+    # keep the herder map's purple / magenta / orange, every pin is one blue, and the
+    # key is always on the map (and survives the 30-second rebuild).
+    assert "const RING_COLORS = { cattle:'#7c3aed', shoat:'#db2777', camel:'#ea580c' };" \
+        in page, "the ring colours no longer match the herder's map"
+    assert "const WATER_HEX = '#2563eb'" in page, "water is not one blue"
+    assert "fillColor: WATER_HEX" in page, "a pin is painted with something other than water blue"
+    assert "const WTYPE_COLORS" not in page, "the eight water-type colours are back"
+    assert "cattle: { color: '#3b82f6' }" not in page, "the old ring palette is back"
+    assert 'id="mapLegend"' in page and "function renderMapLegend" in page, \
+        "the map has no colour key"
+    assert "ringLegendRows" in page and " km</b>" in page, \
+        "the key must name each ring's species and reach"
+    assert page.count("renderMapLegend(legendZones)") >= 2, \
+        "the key is drawn once and then lost on the next refresh"
+    assert "green = grass, brown = dry forage, grey = bare" in page, \
+        "the key must send the operator to the pasture colour codes"
+    assert 'href="/mapview"' in page, "the pasture colour codes need a way in"
     # Summary
     r = client.get("/dashboard/api/summary" + KEY)
     print("summary:", r.status_code)
@@ -128,6 +148,21 @@ def main() -> None:
     assert r.status_code == 200, r.status_code
     get_settings().dashboard_token = prev
     print("auth guard OK (page public, data 401 without token, 200 with token)")
+    # THE PAGE MUST NEVER BE A DEAD END BEHIND A KEY. It used to call window.prompt()
+    # from getJSON's 401 branch: cancelling it left nine empty panels, no explanation
+    # and no "updated" stamp change — which is how a working server gets reported as
+    # "the dashboard isn't loading". Pinned here because the failure looked like an
+    # outage, not a missing key.
+    page = client.get("/dashboard").text
+    assert "window.prompt" not in page, "the key must be a bar, not a modal"
+    assert 'id="keybar"' in page and "function useKey" in page, "key bar missing"
+    assert "function renderNoData" in page, "a refused refresh must say so"
+    # ...and a deployment with no token is OPEN: nothing to type, nothing to prompt.
+    get_settings().dashboard_token = ""
+    r = client.get("/dashboard/api/summary")
+    assert r.status_code == 200, r.status_code
+    get_settings().dashboard_token = prev
+    print("keyless dashboard OK (no token = open, key bar instead of a prompt)")
     print("\nDashboard smoke test passed.")
 
 
