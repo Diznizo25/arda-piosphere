@@ -48,7 +48,12 @@ KEYS = [
 OVERRIDES = {
     "ENVIRONMENT": "production",
     "APP_PUBLIC_BASE_URL": "https://arda-piosphere.onrender.com",
-    "DASHBOARD_TOKEN": os.getenv("DASHBOARD_TOKEN", ""),
+    # The dashboard ships OPEN (no key to type, see app/routers/dashboard.py): an empty
+    # DASHBOARD_TOKEN is what makes _auth_ok() allow the page. Restoring a token here
+    # would close it again behind a key nobody asked for, so it is opt-in — set
+    # RESTORE_DASHBOARD_TOKEN=1 when you actually want the 401 guard back.
+    "DASHBOARD_TOKEN": (os.getenv("DASHBOARD_TOKEN", "")
+                        if os.getenv("RESTORE_DASHBOARD_TOKEN") == "1" else ""),
     "AZURE_OPENAI_MODEL": "gpt-5-mini",
     "AZURE_SPEECH_REGION": "southafricanorth",
     "AWS_ACCESS_KEY_ID": local.get("R2_ACCESS_KEY_ID", ""),
